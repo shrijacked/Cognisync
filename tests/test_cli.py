@@ -28,6 +28,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue((root / "prompts" / "compile-plan.md").exists())
             self.assertTrue((root / "prompts" / "query-how-should-a-team-build-an-llm-maintained-research-garden.md").exists())
             self.assertIn("Demo workspace ready", stdout.getvalue())
+            self.assertEqual(main(["doctor", "--workspace", str(root), "--strict"]), 0)
             self.assertEqual(main(["lint", "--workspace", str(root), "--strict"]), 0)
 
     def test_demo_command_refuses_to_overwrite_non_empty_directory_without_force(self) -> None:
