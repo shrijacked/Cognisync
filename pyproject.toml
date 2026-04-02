@@ -23,6 +23,11 @@ classifiers = [
   "Topic :: Text Processing :: Markup",
 ]
 
+[project.urls]
+Homepage = "https://github.com/shrijacked/Cognisync"
+Repository = "https://github.com/shrijacked/Cognisync"
+Issues = "https://github.com/shrijacked/Cognisync/issues"
+
 [project.scripts]
 cognisync = "cognisync.cli:run"
 

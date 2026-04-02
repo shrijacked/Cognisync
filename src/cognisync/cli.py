@@ -4,7 +4,13 @@ import argparse
 from pathlib import Path
 import sys
 
-from cognisync.adapters import AdapterError, adapter_from_config
+from cognisync.adapters import (
+    AdapterError,
+    adapter_from_config,
+    builtin_adapter_presets,
+    install_builtin_adapter,
+)
+from cognisync.config import save_config
 from cognisync.linter import lint_snapshot
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
@@ -91,12 +97,49 @@ def cmd_run_packet(args: argparse.Namespace) -> int:
 
     prompt_file = Path(args.prompt_file).resolve()
     output_file = Path(args.output_file).resolve() if args.output_file else None
+    if output_file is not None:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
     result = adapter.run(prompt_file=prompt_file, workspace_root=workspace.root, output_file=output_file)
+    if output_file and not adapter.output_file_flag and result.stdout:
+        output_file.write_text(result.stdout, encoding="utf-8")
+        print(f"Wrote output to {output_file}")
     if result.stdout:
         print(result.stdout.rstrip())
     if result.stderr:
         print(result.stderr.rstrip(), file=sys.stderr)
+    if output_file and adapter.output_file_flag and output_file.exists():
+        print(f"Wrote output to {output_file}")
     return result.returncode
+
+
+def cmd_adapter_list(args: argparse.Namespace) -> int:
+    presets = builtin_adapter_presets()
+    for name in sorted(presets):
+        preset = presets[name]
+        print(f"{name}: {preset.summary}")
+    return 0
+
+
+def cmd_adapter_install(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    config = workspace.load_config()
+    try:
+        profile = install_builtin_adapter(
+            config=config,
+            preset_name=args.name,
+            profile_name=args.profile,
+            force=args.force,
+        )
+    except AdapterError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    save_config(workspace.config_path, config)
+    installed_name = args.profile or args.name
+    print(f"Installed builtin adapter '{args.name}' as profile '{installed_name}' in {workspace.config_path}")
+    if profile.description:
+        print(profile.description)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -135,6 +178,19 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--profile", default="default")
     run_parser.add_argument("--output-file", default=None)
     run_parser.set_defaults(func=cmd_run_packet)
+
+    adapter_parser = subparsers.add_parser("adapter", help="Manage builtin adapter presets")
+    adapter_subparsers = adapter_parser.add_subparsers(dest="adapter_command", required=True)
+
+    adapter_list_parser = adapter_subparsers.add_parser("list", help="List builtin adapter presets")
+    adapter_list_parser.set_defaults(func=cmd_adapter_list)
+
+    adapter_install_parser = adapter_subparsers.add_parser("install", help="Install a builtin adapter preset")
+    adapter_install_parser.add_argument("name")
+    adapter_install_parser.add_argument("--workspace", default=".")
+    adapter_install_parser.add_argument("--profile", default=None)
+    adapter_install_parser.add_argument("--force", action="store_true")
+    adapter_install_parser.set_defaults(func=cmd_adapter_install)
 
     return parser
 

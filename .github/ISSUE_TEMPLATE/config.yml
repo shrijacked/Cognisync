@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contribution guide
+    url: https://github.com/shrijacked/Cognisync/blob/main/CONTRIBUTING.md
+    about: Start here for development setup and contribution expectations.

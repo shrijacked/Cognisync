@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -11,6 +11,9 @@ class LLMProfile:
     command: List[str]
     working_directory: str = "."
     environment: Dict[str, str] = field(default_factory=dict)
+    stdin_source: str = "none"
+    output_file_flag: Optional[str] = None
+    description: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -21,6 +24,11 @@ class LLMProfile:
             command=list(data.get("command", [])),
             working_directory=str(data.get("working_directory", ".")),
             environment={str(key): str(value) for key, value in dict(data.get("environment", {})).items()},
+            stdin_source=str(data.get("stdin_source", "none")),
+            output_file_flag=(
+                str(data["output_file_flag"]) if data.get("output_file_flag") is not None else None
+            ),
+            description=str(data.get("description", "")),
         )
 
 

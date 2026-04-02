@@ -1,5 +1,7 @@
 # Cognisync
 
+[![CI](https://github.com/shrijacked/Cognisync/actions/workflows/ci.yml/badge.svg)](https://github.com/shrijacked/Cognisync/actions/workflows/ci.yml)
+
 Cognisync is a filesystem-first framework for building LLM-maintained knowledge bases.
 
 It turns the workflow described by Andrej Karpathy into a reusable open source system:
@@ -57,11 +59,34 @@ workspace/
 ```bash
 python3 -m pip install -e .
 cognisync init .
+cognisync adapter list
+cognisync adapter install codex --profile codex
 cognisync scan
 cognisync plan
 cognisync lint
 cognisync query "What are the main themes in this workspace?" --slides
 ```
+
+## Built-In Adapter Example
+
+Cognisync now ships with a real Codex CLI preset so users do not have to guess at the adapter shape:
+
+```bash
+cognisync adapter install codex --profile codex
+cognisync run-packet prompts/compile-plan.md --profile codex --output-file outputs/reports/compile-pass.md
+```
+
+The built-in `codex` preset does three things:
+
+- streams the prompt packet to `codex exec` over stdin
+- runs Codex in the current workspace root
+- uses `--output-last-message` when you pass `--output-file`
+
+## Release Strategy
+
+`v0.1.0` is intentionally a GitHub-first source release.
+
+The package metadata is already in place, but the project is staying repo-first for now so the adapter contract, CLI surface, and contributor workflow can stabilize before a PyPI push. The current release policy is documented in [Open Source Operations](docs/open-source-operations.md).
 
 ## Design Philosophy
 
@@ -80,8 +105,15 @@ This makes the system easy to automate, easy to audit, and easy to publish.
 
 The implementation is documented in:
 
-- [Architecture](/Users/owlxshri/Desktop/Cognisync/docs/architecture.md)
-- [Execution Plan](/Users/owlxshri/Desktop/Cognisync/docs/execution-plan.md)
+- [Architecture](docs/architecture.md)
+- [Execution Plan](docs/execution-plan.md)
+- [Open Source Operations](docs/open-source-operations.md)
+
+## Community
+
+- [Contributing Guide](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Changelog](CHANGELOG.md)
 
 ## Roadmap
 
