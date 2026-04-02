@@ -5,6 +5,7 @@
 - added a built-in Claude Code CLI adapter preset for headless prompt-packet execution
 - extended adapter command templating with `{prompt_text}` so CLIs can consume full prompt packets as command arguments
 - documented the expanded built-in adapter surface and adapter templating contract
+- fixed GitHub Actions smoke checks to generate a fresh demo workspace before running `doctor` and `lint`
 
 ## v0.1.2 - 2026-04-03
 
