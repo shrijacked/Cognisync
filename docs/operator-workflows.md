@@ -48,8 +48,9 @@ Supported paths in this release:
 
 The richer ingest pass extracts more structure up front so later compile and query steps have better substrate:
 
-- URL ingest records description, canonical URL, headings, discovered links, and content stats
-- repo ingest records repository stats, language signals, recent commits, and a richer README-backed manifest
+- PDF ingest preserves the source file and writes a Markdown sidecar with extracted text plus ingest metadata
+- URL ingest records description, canonical URL, headings, discovered links, content stats, and local image captures
+- repo ingest records repository stats, language signals, recent commits, and a nested tree snapshot in the manifest
 
 ### `compile`
 

@@ -101,8 +101,9 @@ The operator-facing workflow is documented in [Operator Workflows](docs/operator
 
 The richer ingest layer now makes the loop more useful before an LLM even runs:
 
-- `ingest url` captures page metadata such as description, canonical URL, headings, discovered links, and content stats
-- `ingest repo` captures repository stats, language signals, recent commits, and a richer README-backed manifest
+- `ingest pdf` preserves the source PDF and writes a sidecar Markdown file with extracted text and metadata
+- `ingest url` captures page metadata such as description, canonical URL, headings, discovered links, content stats, and local image captures
+- `ingest repo` captures repository stats, language signals, recent commits, and a nested tree snapshot in the repo manifest
 
 ## Built-In Adapter Example
 
