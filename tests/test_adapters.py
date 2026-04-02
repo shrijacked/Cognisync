@@ -21,6 +21,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("codex:", stdout.getvalue())
         self.assertIn("gemini:", stdout.getvalue())
+        self.assertIn("claude:", stdout.getvalue())
 
     def test_run_packet_executes_configured_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +94,42 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("hello from stdin packet", stdout.getvalue())
 
+    def test_run_packet_can_render_prompt_text_into_command_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Prompt Text Adapter Test")
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["argv-echo"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; print(sys.argv[1])",
+                    "{prompt_text}",
+                ]
+            )
+            save_config(workspace.config_path, config)
+
+            prompt_path = workspace.prompts_dir / "argv-packet.md"
+            prompt_path.write_text("hello from argv packet", encoding="utf-8")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run-packet",
+                        str(prompt_path),
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "argv-echo",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("hello from argv packet", stdout.getvalue())
+
     def test_adapter_install_writes_builtin_codex_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -154,6 +191,39 @@ class AdapterTests(unittest.TestCase):
             self.assertIn("--yolo", profile.command)
             self.assertIsNone(profile.output_file_flag)
             self.assertIn("Installed builtin adapter 'gemini'", stdout.getvalue())
+
+    def test_adapter_install_writes_builtin_claude_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Claude Adapter Test")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "adapter",
+                        "install",
+                        "claude",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "claude",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            config = load_config(workspace.config_path)
+            self.assertIn("claude", config.llm_profiles)
+
+            profile = config.llm_profiles["claude"]
+            self.assertEqual(profile.stdin_source, "prompt_file")
+            self.assertEqual(profile.command[0], "claude")
+            self.assertIn("--print", profile.command)
+            self.assertIn("--output-format", profile.command)
+            self.assertIn("--input-format", profile.command)
+            self.assertIsNone(profile.output_file_flag)
+            self.assertIn("Installed builtin adapter 'claude'", stdout.getvalue())
 
     def test_run_packet_writes_stdout_to_output_file_when_adapter_has_no_output_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

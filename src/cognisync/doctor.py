@@ -100,7 +100,7 @@ def _profile_checks(config: CognisyncConfig) -> List[DoctorCheck]:
                 name="llm_profiles",
                 status="warn",
                 detail="No LLM profiles configured.",
-                remedy="Install a builtin profile with `cognisync adapter install codex` or `gemini`.",
+                remedy="Install a builtin profile with `cognisync adapter install codex`, `gemini`, or `claude`.",
             )
         ]
 

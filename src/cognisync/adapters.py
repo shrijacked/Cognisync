@@ -27,8 +27,10 @@ class CommandAdapter:
     description: str = ""
 
     def render_command(self, prompt_file: Path, workspace_root: Path, output_file: Optional[Path] = None) -> List[str]:
+        prompt_text = prompt_file.read_text(encoding="utf-8")
         mapping = {
             "prompt_file": str(prompt_file),
+            "prompt_text": prompt_text,
             "workspace_root": str(workspace_root),
             "output_file": str(output_file) if output_file else "",
         }
@@ -113,6 +115,29 @@ def builtin_adapter_presets() -> Dict[str, BuiltinAdapterPreset]:
                 description=(
                     "Runs prompt packets through Gemini CLI in non-interactive mode by streaming the "
                     "packet over stdin and capturing the model response from stdout."
+                ),
+            ),
+        ),
+        "claude": BuiltinAdapterPreset(
+            name="claude",
+            summary="Anthropic Claude Code profile for headless prompt-packet execution.",
+            profile=LLMProfile(
+                command=[
+                    "claude",
+                    "--print",
+                    "Use the full instruction packet provided on stdin as the task context and return only the final answer.",
+                    "--output-format",
+                    "text",
+                    "--input-format",
+                    "text",
+                    "--dangerously-skip-permissions",
+                    "--cwd",
+                    "{workspace_root}",
+                ],
+                stdin_source="prompt_file",
+                description=(
+                    "Runs prompt packets through Claude Code headless mode by pairing a fixed print-mode "
+                    "instruction with the full packet on stdin and capturing the final text response from stdout."
                 ),
             ),
         ),
