@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- added a built-in Claude Code CLI adapter preset for headless prompt-packet execution
+- extended adapter command templating with `{prompt_text}` so CLIs can consume full prompt packets as command arguments
+- documented the expanded built-in adapter surface and adapter templating contract
+
 ## v0.1.2 - 2026-04-03
 
 - enriched `ingest url` with page metadata, heading inventories, discovered links, and content stats

@@ -106,14 +106,16 @@ The richer ingest layer now makes the loop more useful before an LLM even runs:
 
 ## Built-In Adapter Example
 
-Cognisync now ships with real Codex and Gemini CLI presets so users do not have to guess at the adapter shape:
+Cognisync now ships with real Codex, Gemini, and Claude CLI presets so users do not have to guess at the adapter shape:
 
 ```bash
 cognisync adapter install codex --profile codex
 cognisync adapter install gemini --profile gemini
+cognisync adapter install claude --profile claude
 
 cognisync run-packet prompts/compile-plan.md --profile codex --output-file outputs/reports/compile-pass.md
 cognisync run-packet prompts/query-what-are-the-main-themes-in-this-workspace.md --profile gemini --output-file outputs/reports/gemini-brief.md
+cognisync run-packet prompts/query-map-the-open-questions.md --profile claude --output-file outputs/reports/claude-brief.md
 ```
 
 The built-in `codex` preset:
@@ -127,6 +129,18 @@ The built-in `gemini` preset:
 - streams the prompt packet to Gemini CLI over stdin
 - runs Gemini in non-interactive mode using `--prompt`
 - captures stdout into `--output-file` through Cognisync when you request a file output
+
+The built-in `claude` preset:
+
+- runs Claude Code in headless print mode
+- streams the full prompt packet over stdin and captures the final text response from stdout
+- sets `--output-format text` and `--input-format text` so the adapter stays script-friendly
+
+Custom adapter commands can template three useful values into the configured command list:
+
+- `{workspace_root}` for the current Cognisync workspace
+- `{prompt_file}` for the packet path on disk
+- `{prompt_text}` for CLIs that want the full packet injected as an argument instead of stdin
 
 ## Release Strategy
 
