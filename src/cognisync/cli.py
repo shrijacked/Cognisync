@@ -10,8 +10,11 @@ from cognisync.adapters import (
     builtin_adapter_presets,
     install_builtin_adapter,
 )
+from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import save_config
 from cognisync.demo import DemoError, create_demo_workspace
+from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
+from cognisync.ingest import IngestError, ingest_file, ingest_pdf, ingest_repo, ingest_url
 from cognisync.linter import lint_snapshot
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
@@ -76,6 +79,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    checks = run_doctor(workspace)
+    print(render_doctor_report(checks))
+    return doctor_exit_code(checks, strict=args.strict)
+
+
 def cmd_lint(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     snapshot = _ensure_snapshot(workspace)
@@ -85,6 +95,64 @@ def cmd_lint(args: argparse.Namespace) -> int:
     if issues:
         return 1 if args.strict else 0
     print("No lint issues found.")
+    return 0
+
+
+def cmd_ingest_file(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = ingest_file(
+            workspace,
+            source=Path(args.source),
+            category="files",
+            name=args.name,
+            force=args.force,
+        )
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    print(f"Ingested file into {result.path}")
+    return 0
+
+
+def cmd_ingest_pdf(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = ingest_pdf(workspace, source=Path(args.source), name=args.name, force=args.force)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    print(f"Ingested pdf into {result.path}")
+    return 0
+
+
+def cmd_ingest_url(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = ingest_url(workspace, url=args.url, name=args.name, force=args.force)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    print(f"Ingested url into {result.path}")
+    return 0
+
+
+def cmd_ingest_repo(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = ingest_repo(workspace, repo_path=Path(args.source), name=args.name, force=args.force)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    print(f"Ingested repo manifest into {result.path}")
     return 0
 
 
@@ -100,6 +168,30 @@ def cmd_query(args: argparse.Namespace) -> int:
     if args.slides:
         slide_path = render_marp_slides(workspace, args.question, hits)
         print(f"Wrote slide deck to {slide_path}")
+    return 0
+
+
+def cmd_compile(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_file = Path(args.output_file).resolve() if args.output_file else None
+    try:
+        result = run_compile_cycle(workspace, profile_name=args.profile, output_file=output_file)
+    except CompileError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    print(f"Wrote plan to {result.plan_path}")
+    print(f"Wrote prompt packet to {result.packet_path}")
+    if result.ran_profile and result.output_file:
+        print(f"Wrote compile output to {result.output_file}")
+    elif not result.ran_profile:
+        print("No profile provided. Compile packet generated but not executed.")
+
+    if result.issue_count:
+        print(f"Compile finished with {result.issue_count} lint issue(s).")
+        return 1 if args.strict else 0
+
+    print("Compile finished with no lint issues.")
     return 0
 
 
@@ -178,9 +270,52 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument("--force", action="store_true")
     demo_parser.set_defaults(func=cmd_demo)
 
+    doctor_parser = subparsers.add_parser("doctor", help="Validate workspace and adapter readiness")
+    doctor_parser.add_argument("--workspace", default=".")
+    doctor_parser.add_argument("--strict", action="store_true")
+    doctor_parser.set_defaults(func=cmd_doctor)
+
+    ingest_parser = subparsers.add_parser("ingest", help="Bring source material into raw/")
+    ingest_subparsers = ingest_parser.add_subparsers(dest="ingest_command", required=True)
+
+    ingest_file_parser = ingest_subparsers.add_parser("file", help="Copy a local file into raw/files")
+    ingest_file_parser.add_argument("source")
+    ingest_file_parser.add_argument("--workspace", default=".")
+    ingest_file_parser.add_argument("--name", default=None)
+    ingest_file_parser.add_argument("--force", action="store_true")
+    ingest_file_parser.set_defaults(func=cmd_ingest_file)
+
+    ingest_pdf_parser = ingest_subparsers.add_parser("pdf", help="Copy a local PDF into raw/pdfs")
+    ingest_pdf_parser.add_argument("source")
+    ingest_pdf_parser.add_argument("--workspace", default=".")
+    ingest_pdf_parser.add_argument("--name", default=None)
+    ingest_pdf_parser.add_argument("--force", action="store_true")
+    ingest_pdf_parser.set_defaults(func=cmd_ingest_pdf)
+
+    ingest_url_parser = ingest_subparsers.add_parser("url", help="Fetch a URL into raw/urls as Markdown")
+    ingest_url_parser.add_argument("url")
+    ingest_url_parser.add_argument("--workspace", default=".")
+    ingest_url_parser.add_argument("--name", default=None)
+    ingest_url_parser.add_argument("--force", action="store_true")
+    ingest_url_parser.set_defaults(func=cmd_ingest_url)
+
+    ingest_repo_parser = ingest_subparsers.add_parser("repo", help="Create a repository manifest in raw/repos")
+    ingest_repo_parser.add_argument("source")
+    ingest_repo_parser.add_argument("--workspace", default=".")
+    ingest_repo_parser.add_argument("--name", default=None)
+    ingest_repo_parser.add_argument("--force", action="store_true")
+    ingest_repo_parser.set_defaults(func=cmd_ingest_repo)
+
     plan_parser = subparsers.add_parser("plan", help="Build a compile plan from the current workspace")
     plan_parser.add_argument("--workspace", default=".")
     plan_parser.set_defaults(func=cmd_plan)
+
+    compile_parser = subparsers.add_parser("compile", help="Run scan, plan, packet execution, and lint as one loop")
+    compile_parser.add_argument("--workspace", default=".")
+    compile_parser.add_argument("--profile", default=None)
+    compile_parser.add_argument("--output-file", default=None)
+    compile_parser.add_argument("--strict", action="store_true")
+    compile_parser.set_defaults(func=cmd_compile)
 
     lint_parser = subparsers.add_parser("lint", help="Lint workspace integrity")
     lint_parser.add_argument("--workspace", default=".")
