@@ -16,6 +16,7 @@ from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
 from cognisync.ingest import IngestError, ingest_batch, ingest_file, ingest_pdf, ingest_repo, ingest_url
 from cognisync.linter import lint_snapshot
+from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.research import ResearchError, run_research_cycle
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
@@ -30,9 +31,12 @@ def _workspace_from_arg(path_arg: str) -> Workspace:
 
 def _ensure_snapshot(workspace: Workspace):
     if workspace.index_path.exists():
-        return workspace.read_index()
+        snapshot = workspace.read_index()
+        write_workspace_manifests(workspace, snapshot)
+        return snapshot
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
     return snapshot
 
 
@@ -47,6 +51,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
     print(f"Scanned {len(snapshot.artifacts)} artifacts into {workspace.index_path}")
     return 0
 
@@ -114,6 +119,7 @@ def cmd_ingest_file(args: argparse.Namespace) -> int:
         return 2
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
     print(f"Ingested file into {result.path}")
     return 0
 
@@ -127,6 +133,7 @@ def cmd_ingest_pdf(args: argparse.Namespace) -> int:
         return 2
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
     print(f"Ingested pdf into {result.path}")
     return 0
 
@@ -140,6 +147,7 @@ def cmd_ingest_url(args: argparse.Namespace) -> int:
         return 2
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
     print(f"Ingested url into {result.path}")
     return 0
 
@@ -153,6 +161,7 @@ def cmd_ingest_repo(args: argparse.Namespace) -> int:
         return 2
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
     print(f"Ingested repo manifest into {result.path}")
     return 0
 
@@ -166,6 +175,7 @@ def cmd_ingest_batch(args: argparse.Namespace) -> int:
         return 2
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
     print(f"Batch ingested {len(results)} source(s).")
     for result in results:
         print(f"- {result.kind}: {result.path}")
@@ -198,6 +208,7 @@ def cmd_research(args: argparse.Namespace) -> int:
             profile_name=args.profile,
             output_file=output_file,
             slides=args.slides,
+            mode=args.mode,
         )
     except ResearchError as error:
         print(str(error), file=sys.stderr)
@@ -381,6 +392,12 @@ def build_parser() -> argparse.ArgumentParser:
     research_parser = subparsers.add_parser("research", help="Run search, packet generation, and optional answer filing")
     research_parser.add_argument("--workspace", default=".")
     research_parser.add_argument("--slides", action="store_true")
+    research_parser.add_argument(
+        "--mode",
+        default="wiki",
+        choices=["brief", "memo", "report", "slides", "wiki"],
+        help="Shape the filed answer artifact.",
+    )
     research_parser.add_argument("--limit", type=int, default=5)
     research_parser.add_argument("--profile", default=None)
     research_parser.add_argument("--output-file", default=None)

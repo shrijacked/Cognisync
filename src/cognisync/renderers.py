@@ -10,6 +10,13 @@ from cognisync.workspace import Workspace
 
 
 TEXTUAL_KINDS = {"markdown", "text", "data", "code"}
+RESEARCH_MODE_INSTRUCTIONS = {
+    "brief": "Write the final answer as a concise research brief with crisp findings and cited bullets.",
+    "memo": "Write the final answer as a research memo with sections for findings, evidence, and follow-up work.",
+    "report": "Write the final answer as a polished research report with clear sections and explicit inline citations.",
+    "slides": "Write the final answer as a Marp slide deck with inline citations in slide bullets or notes.",
+    "wiki": "Write the final answer as a reusable wiki page that can be filed back into `wiki/queries/`.",
+}
 
 
 def _literalize_snippet(text: str) -> str:
@@ -111,10 +118,13 @@ def render_query_report(
                     f"### [{citation}] {hit.title}",
                     "",
                     f"- Source: [{hit.path}]({relative_markdown_path(output_path, target)})",
+                    f"- Source kind: `{hit.source_kind}`",
                     f"- Score: `{hit.score}`",
                     f"- Snippet: {_literalize_snippet(hit.snippet)}",
                 ]
             )
+            if hit.retrieval_reason:
+                lines.append(f"- Retrieval: {hit.retrieval_reason}")
             if artifact is not None and artifact.tags:
                 lines.append(f"- Tags: {', '.join(f'`#{tag}`' for tag in artifact.tags)}")
             if artifact is not None and artifact.images:
@@ -187,20 +197,24 @@ def render_query_packet(
     question: str,
     hits: Iterable[SearchHit],
     snapshot: Optional[IndexSnapshot] = None,
+    mode: str = "wiki",
 ) -> Path:
     output_path = workspace.prompts_dir / f"query-{slugify(question)}.md"
     hit_list = list(hits)
     artifact_map = _artifact_map(snapshot)
+    mode_instruction = RESEARCH_MODE_INSTRUCTIONS.get(mode, RESEARCH_MODE_INSTRUCTIONS["wiki"])
     lines = [
         "# Query Packet",
         "",
         f"Question: {question}",
+        f"Output mode: {mode}",
         "",
         "## Instructions",
         "",
         "Answer the question using the listed workspace sources.",
-        "Write the final answer as Markdown that can be filed back into the knowledge base.",
+        mode_instruction,
         "Cite evidence inline as [S1], [S2], and suggest follow-up pages or concepts when useful.",
+        "Do not invent citations. Every citation must map to one of the listed sources.",
         "",
         "## Source Context",
         "",
@@ -216,10 +230,13 @@ def render_query_packet(
                     f"### [S{index}] {hit.title}",
                     "",
                     f"- Source: [{hit.path}]({relative_markdown_path(output_path, target)})",
+                    f"- Source kind: `{hit.source_kind}`",
                     f"- Score: `{hit.score}`",
                     f"- Snippet: {_literalize_snippet(hit.snippet)}",
                 ]
             )
+            if hit.retrieval_reason:
+                lines.append(f"- Retrieval: {hit.retrieval_reason}")
             if artifact is not None and artifact.images:
                 lines.append(f"- Embedded images: {', '.join(f'`{image}`' for image in artifact.images[:5])}")
             lines.append("")

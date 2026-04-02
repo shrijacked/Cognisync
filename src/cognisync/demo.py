@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict
 
+from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
@@ -28,6 +29,7 @@ def create_demo_workspace(workspace: Workspace, force: bool = False) -> Dict[str
     _write_demo_files(workspace, force=True)
 
     seeded_snapshot = scan_workspace(workspace)
+    write_workspace_manifests(workspace, seeded_snapshot)
     engine = SearchEngine.from_workspace(workspace, seeded_snapshot)
     hits = engine.search(DEMO_QUESTION, limit=5)
     report_path = render_query_report(workspace, DEMO_QUESTION, hits)
@@ -63,6 +65,7 @@ def create_demo_workspace(workspace: Workspace, force: bool = False) -> Dict[str
 
     final_snapshot = scan_workspace(workspace)
     workspace.write_index(final_snapshot)
+    write_workspace_manifests(workspace, final_snapshot)
 
     return {
         "report": report_path,

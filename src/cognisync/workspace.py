@@ -44,6 +44,18 @@ class Workspace:
     def plans_dir(self) -> Path:
         return self.state_dir / "plans"
 
+    @property
+    def runs_dir(self) -> Path:
+        return self.state_dir / "runs"
+
+    @property
+    def sources_manifest_path(self) -> Path:
+        return self.state_dir / "sources.json"
+
+    @property
+    def graph_manifest_path(self) -> Path:
+        return self.state_dir / "graph.json"
+
     def initialize(self, name: Optional[str] = None, force: bool = False) -> None:
         directories = [
             self.raw_dir,
@@ -55,6 +67,7 @@ class Workspace:
             self.prompts_dir,
             self.state_dir,
             self.plans_dir,
+            self.runs_dir,
         ]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
@@ -96,7 +109,11 @@ class Workspace:
         return load_config(self.config_path)
 
     def relative_path(self, path: Path) -> str:
-        return path.resolve().relative_to(self.root).as_posix()
+        resolved = path.resolve()
+        try:
+            return resolved.relative_to(self.root).as_posix()
+        except ValueError:
+            return resolved.as_posix()
 
     def write_index(self, snapshot: IndexSnapshot) -> None:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)

@@ -171,6 +171,8 @@ class SearchHit:
     title: str
     score: float
     snippet: str
+    source_kind: str = "artifact"
+    retrieval_reason: str = ""
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

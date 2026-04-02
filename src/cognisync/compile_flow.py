@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from cognisync.adapters import AdapterError, adapter_from_config
 from cognisync.linter import lint_snapshot
+from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.renderers import render_compile_packet
 from cognisync.workspace import Workspace
@@ -21,6 +22,7 @@ class CompileRunResult:
     plan_path: Path
     packet_path: Path
     output_file: Optional[Path]
+    run_manifest_path: Path
     issue_count: int
     task_count: int
     ran_profile: bool
@@ -33,6 +35,7 @@ def run_compile_cycle(
 ) -> CompileRunResult:
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
 
     plan = build_compile_plan(snapshot)
     workspace.write_plan_json("compile-plan", plan)
@@ -61,11 +64,27 @@ def run_compile_cycle(
 
     final_snapshot = scan_workspace(workspace)
     workspace.write_index(final_snapshot)
+    write_workspace_manifests(workspace, final_snapshot)
     issues = lint_snapshot(final_snapshot)
+    run_manifest_path = write_run_manifest(
+        workspace,
+        "compile",
+        {
+            "run_label": "compile-plan",
+            "profile": profile_name,
+            "plan_path": workspace.relative_path(plan_path),
+            "packet_path": workspace.relative_path(packet_path),
+            "output_file": workspace.relative_path(resolved_output) if resolved_output else None,
+            "issue_count": len(issues),
+            "task_count": len(plan.tasks),
+            "status": "completed" if not issues else "completed_with_issues",
+        },
+    )
     return CompileRunResult(
         plan_path=plan_path,
         packet_path=packet_path,
         output_file=resolved_output,
+        run_manifest_path=run_manifest_path,
         issue_count=len(issues),
         task_count=len(plan.tasks),
         ran_profile=ran_profile,

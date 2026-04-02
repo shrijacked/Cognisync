@@ -5,6 +5,7 @@ import math
 import re
 from typing import Dict, List
 
+from cognisync.corpus import classify_source_kind, source_kind_boost
 from cognisync.types import IndexSnapshot, SearchHit
 from cognisync.workspace import Workspace
 
@@ -22,6 +23,8 @@ class _Document:
     title: str
     text: str
     term_frequencies: Dict[str, int]
+    source_kind: str
+    image_count: int
 
 
 class SearchEngine:
@@ -47,7 +50,16 @@ class SearchEngine:
             frequencies: Dict[str, int] = {}
             for token in tokens:
                 frequencies[token] = frequencies.get(token, 0) + 1
-            documents.append(_Document(path=artifact.path, title=artifact.title, text=text, term_frequencies=frequencies))
+            documents.append(
+                _Document(
+                    path=artifact.path,
+                    title=artifact.title,
+                    text=text,
+                    term_frequencies=frequencies,
+                    source_kind=classify_source_kind(artifact.path, artifact.tags),
+                    image_count=len(artifact.images),
+                )
+            )
         return cls(documents)
 
     def search(self, query: str, limit: int = 5) -> List[SearchHit]:
@@ -67,12 +79,16 @@ class SearchEngine:
                 score += (1.0 + math.log(tf)) * idf
             if score <= 0:
                 continue
+            boost = source_kind_boost(document.source_kind, query_tokens, image_count=document.image_count)
+            weighted_score = score * boost
             hits.append(
                 SearchHit(
                     path=document.path,
                     title=document.title,
-                    score=round(score, 4),
+                    score=round(weighted_score, 4),
                     snippet=_build_snippet(document.text, query_tokens),
+                    source_kind=document.source_kind,
+                    retrieval_reason=_retrieval_reason(document.source_kind, boost),
                 )
             )
         hits.sort(key=lambda hit: (-hit.score, hit.title.lower(), hit.path))
@@ -89,3 +105,9 @@ def _build_snippet(text: str, query_tokens: List[str], width: int = 200) -> str:
             snippet = text[start:end].strip().replace("\n", " ")
             return snippet
     return text[:width].strip().replace("\n", " ")
+
+
+def _retrieval_reason(source_kind: str, boost: float) -> str:
+    if boost <= 1.0:
+        return "lexical match"
+    return f"lexical match with {source_kind}-aware boost"
