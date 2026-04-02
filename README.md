@@ -60,12 +60,11 @@ workspace/
 python3 -m pip install -e .
 cognisync init .
 cognisync doctor --strict
-cognisync ingest file /path/to/notes.md
+cognisync ingest batch sources.json
 cognisync adapter list
 cognisync adapter install codex --profile codex
-cognisync scan
 cognisync compile --profile codex --strict
-cognisync query "what are the main themes in this workspace?" --slides
+cognisync research "what are the main themes in this workspace?" --profile codex --slides
 ```
 
 ## Try The Demo
@@ -91,10 +90,9 @@ Cognisync is strongest when you use it as a loop, not a bag of separate commands
 
 ```bash
 cognisync doctor --strict
-cognisync ingest url "https://example.com/article"
-cognisync scan
+cognisync ingest batch sources.json
 cognisync compile --profile codex --strict
-cognisync query "what changed in this corpus?" --slides
+cognisync research "what changed in this corpus?" --profile codex --slides
 ```
 
 The operator-facing workflow is documented in [Operator Workflows](docs/operator-workflows.md).
@@ -104,6 +102,35 @@ The richer ingest layer now makes the loop more useful before an LLM even runs:
 - `ingest pdf` preserves the source PDF and writes a sidecar Markdown file with extracted text and metadata
 - `ingest url` captures page metadata such as description, canonical URL, headings, discovered links, content stats, and local image captures
 - `ingest repo` captures repository stats, language signals, recent commits, and a nested tree snapshot in the repo manifest
+- `ingest batch` processes a JSON manifest so larger source sets can land in one deterministic pass
+
+Batch ingest accepts a JSON list or an object with an `items` list:
+
+```json
+{
+  "items": [
+    {"kind": "url", "source": "https://example.com/article"},
+    {"kind": "pdf", "source": "/path/to/paper.pdf"},
+    {"kind": "repo", "source": "/path/to/local/repo"}
+  ]
+}
+```
+
+The query and research outputs are now more citation-friendly by default:
+
+- reports render an evidence summary with inline source ids like `[S1]`
+- source blocks include path, score, snippet, and embedded-image hints
+- compile packets include input-context excerpts so external agents see richer raw context up front
+
+## Research Command
+
+`cognisync research` is the opinionated operator surface for question-driven work:
+
+```bash
+cognisync research "how do agent loops use memory?" --profile claude --slides
+```
+
+It scans the workspace, searches the corpus, renders a cited report, builds a prompt packet, optionally runs the packet through an adapter profile, and files the resulting answer back into `wiki/queries/`.
 
 ## Built-In Adapter Example
 
@@ -145,7 +172,7 @@ Custom adapter commands can template three useful values into the configured com
 
 ## Release Strategy
 
-`v0.1.0` is intentionally a GitHub-first source release.
+`v0.1.3` remains a GitHub-first source release.
 
 The package metadata is already in place, but the project is staying repo-first for now so the adapter contract, CLI surface, and contributor workflow can stabilize before a PyPI push. The current release policy is documented in [Open Source Operations](docs/open-source-operations.md).
 

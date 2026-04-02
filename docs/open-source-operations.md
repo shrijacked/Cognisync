@@ -2,14 +2,14 @@
 
 ## Purpose
 
-This document defines how Cognisync operates as an open source project in its initial public phase.
+This document defines how Cognisync operates as an open source project in its current GitHub-first phase.
 
 It covers:
 
 - contributor workflow
 - automated verification
 - release packaging strategy
-- the rationale for a GitHub-first `v0.1.0`
+- the rationale for a GitHub-first release strategy through `v0.1.3`
 
 ## Delivery Flow
 
@@ -26,7 +26,7 @@ flowchart TD
 
 ## Release Decision
 
-For `v0.1.0`, Cognisync ships as a repository-first release on GitHub.
+Through `v0.1.3`, Cognisync ships as a repository-first release on GitHub.
 
 ### Why GitHub first
 

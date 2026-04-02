@@ -1,12 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.1.3 - 2026-04-03
 
 - added a built-in Claude Code CLI adapter preset for headless prompt-packet execution
 - extended adapter command templating with `{prompt_text}` so CLIs can consume full prompt packets as command arguments
-- documented the expanded built-in adapter surface and adapter templating contract
 - fixed GitHub Actions smoke checks to generate a fresh demo workspace before running `doctor` and `lint`
-- deepened ingest with PDF text sidecars, URL image capture, and repository tree snapshots
+- deepened ingest with PDF text sidecars, URL image capture, repository tree snapshots, and manifest-driven batch ingest
+- taught compile packets to include richer input-context excerpts from raw artifacts
+- upgraded query reports with inline source ids and source blocks
+- added `cognisync research` as an opinionated question-to-artifact orchestration surface
 
 ## v0.1.2 - 2026-04-03
 
