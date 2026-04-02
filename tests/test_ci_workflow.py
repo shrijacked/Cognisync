@@ -9,6 +9,7 @@ class CiWorkflowTests(unittest.TestCase):
         demo_index = workflow.index("Smoke test demo workspace generation")
         doctor_index = workflow.index("Smoke test doctor on demo workspace")
         lint_index = workflow.index("Smoke test lint on demo workspace")
+        research_index = workflow.index("Smoke test research command")
 
         self.assertLess(
             demo_index,
@@ -20,9 +21,15 @@ class CiWorkflowTests(unittest.TestCase):
             lint_index,
             "CI should generate the demo workspace before running lint.",
         )
+        self.assertLess(
+            demo_index,
+            research_index,
+            "CI should generate the demo workspace before running research.",
+        )
         self.assertIn("python -m cognisync demo /tmp/cognisync-demo", workflow)
         self.assertIn("python -m cognisync doctor --workspace /tmp/cognisync-demo --strict", workflow)
         self.assertIn("python -m cognisync lint --workspace /tmp/cognisync-demo --strict", workflow)
+        self.assertIn('python -m cognisync research --workspace /tmp/cognisync-demo "knowledge garden loop"', workflow)
 
 
 if __name__ == "__main__":

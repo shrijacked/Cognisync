@@ -41,3 +41,6 @@ jobs:
 
       - name: Smoke test lint on demo workspace
         run: python -m cognisync lint --workspace /tmp/cognisync-demo --strict
+
+      - name: Smoke test research command
+        run: python -m cognisync research --workspace /tmp/cognisync-demo "knowledge garden loop"
