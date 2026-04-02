@@ -46,6 +46,11 @@ Supported paths in this release:
 - `cognisync ingest url ...`
 - `cognisync ingest repo ...`
 
+The richer ingest pass extracts more structure up front so later compile and query steps have better substrate:
+
+- URL ingest records description, canonical URL, headings, discovered links, and content stats
+- repo ingest records repository stats, language signals, recent commits, and a richer README-backed manifest
+
 ### `compile`
 
 Use `compile` when you want one command to drive the main maintenance loop.
@@ -63,5 +68,5 @@ The command:
 | Task | Command Surface | Output |
 | --- | --- | --- |
 | O6 | `doctor` | readiness report |
-| O7 | `ingest` | raw source artifacts plus updated index |
+| O7 | `ingest` | richer raw source artifacts plus updated index |
 | O8 | `compile` | compile plan, prompt packet, optional model output, fresh lint state |

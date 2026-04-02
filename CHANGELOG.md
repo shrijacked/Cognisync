@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.2 - 2026-04-03
+
+- enriched `ingest url` with page metadata, heading inventories, discovered links, and content stats
+- enriched `ingest repo` with repository stats, language signals, recent commits, and richer manifests
+
 ## v0.1.1 - 2026-04-03
 
 - added `cognisync doctor` for workspace and adapter readiness checks

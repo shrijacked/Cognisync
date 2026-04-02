@@ -99,6 +99,11 @@ cognisync query "what changed in this corpus?" --slides
 
 The operator-facing workflow is documented in [Operator Workflows](docs/operator-workflows.md).
 
+The richer ingest layer now makes the loop more useful before an LLM even runs:
+
+- `ingest url` captures page metadata such as description, canonical URL, headings, discovered links, and content stats
+- `ingest repo` captures repository stats, language signals, recent commits, and a richer README-backed manifest
+
 ## Built-In Adapter Example
 
 Cognisync now ships with real Codex and Gemini CLI presets so users do not have to guess at the adapter shape:
