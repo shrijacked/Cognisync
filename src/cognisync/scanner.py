@@ -107,7 +107,7 @@ def _scan_file(
         word_count = len(re.findall(r"\b\w+\b", body))
 
     summary_target = None
-    if collection == "raw" and kind != "image":
+    if collection == "raw" and kind in {"markdown", "text", "data", "code"}:
         summary_target = f"wiki/sources/{slugify(abs_path.stem)}.md"
 
     return ArtifactRecord(
