@@ -59,12 +59,13 @@ workspace/
 ```bash
 python3 -m pip install -e .
 cognisync init .
+cognisync doctor --strict
+cognisync ingest file /path/to/notes.md
 cognisync adapter list
 cognisync adapter install codex --profile codex
 cognisync scan
-cognisync plan
-cognisync lint
-cognisync query "What are the main themes in this workspace?" --slides
+cognisync compile --profile codex --strict
+cognisync query "what are the main themes in this workspace?" --slides
 ```
 
 ## Try The Demo
@@ -83,6 +84,20 @@ By default this writes a browsable example into `examples/research-garden/`. The
 - generated reports, slides, and prompt packets
 
 You can inspect the checked-in example in [examples/research-garden](examples/research-garden) or follow the walkthrough in [Demo Walkthrough](docs/demo-walkthrough.md).
+
+## Operator Workflow
+
+Cognisync is strongest when you use it as a loop, not a bag of separate commands:
+
+```bash
+cognisync doctor --strict
+cognisync ingest url "https://example.com/article"
+cognisync scan
+cognisync compile --profile codex --strict
+cognisync query "what changed in this corpus?" --slides
+```
+
+The operator-facing workflow is documented in [Operator Workflows](docs/operator-workflows.md).
 
 ## Built-In Adapter Example
 
@@ -134,6 +149,7 @@ The implementation is documented in:
 - [Architecture](docs/architecture.md)
 - [Demo Walkthrough](docs/demo-walkthrough.md)
 - [Execution Plan](docs/execution-plan.md)
+- [Operator Workflows](docs/operator-workflows.md)
 - [Open Source Operations](docs/open-source-operations.md)
 
 ## Community

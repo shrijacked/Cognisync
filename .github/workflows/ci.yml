@@ -33,5 +33,11 @@ jobs:
       - name: Smoke test CLI entrypoint
         run: python -m cognisync --help
 
+      - name: Smoke test doctor on demo workspace
+        run: python -m cognisync doctor --workspace examples/research-garden --strict
+
+      - name: Smoke test lint on demo workspace
+        run: python -m cognisync lint --workspace examples/research-garden --strict
+
       - name: Smoke test demo workspace generation
         run: python -m cognisync demo /tmp/cognisync-demo
