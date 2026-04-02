@@ -11,6 +11,7 @@ from cognisync.adapters import (
     install_builtin_adapter,
 )
 from cognisync.config import save_config
+from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.linter import lint_snapshot
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
@@ -43,6 +44,22 @@ def cmd_scan(args: argparse.Namespace) -> int:
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
     print(f"Scanned {len(snapshot.artifacts)} artifacts into {workspace.index_path}")
+    return 0
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.path)
+    try:
+        artifacts = create_demo_workspace(workspace, force=args.force)
+    except DemoError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    print(f"Demo workspace ready at {workspace.root}")
+    print(f"Report: {artifacts['report']}")
+    print(f"Slides: {artifacts['slides']}")
+    print(f"Query packet: {artifacts['query_packet']}")
+    print(f"Compile packet: {artifacts['compile_packet']}")
     return 0
 
 
@@ -155,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser = subparsers.add_parser("scan", help="Scan workspace files and build an index")
     scan_parser.add_argument("--workspace", default=".")
     scan_parser.set_defaults(func=cmd_scan)
+
+    demo_parser = subparsers.add_parser("demo", help="Create a polished demo knowledge garden")
+    demo_parser.add_argument("path", nargs="?", default="examples/research-garden")
+    demo_parser.add_argument("--force", action="store_true")
+    demo_parser.set_defaults(func=cmd_demo)
 
     plan_parser = subparsers.add_parser("plan", help="Build a compile plan from the current workspace")
     plan_parser.add_argument("--workspace", default=".")

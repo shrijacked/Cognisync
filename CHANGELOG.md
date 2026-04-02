@@ -4,6 +4,7 @@
 
 - added a built-in Gemini CLI adapter preset so the framework now ships with multiple frontier-model CLI integrations
 - documented dual built-in adapter flows for Codex and Gemini in the README
+- added a polished `cognisync demo` flow plus a checked-in example garden for faster onboarding
 
 ## v0.1.0 - 2026-04-03
 

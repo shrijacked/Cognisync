@@ -9,6 +9,10 @@ from cognisync.utils import relative_markdown_path, slugify, utc_timestamp
 from cognisync.workspace import Workspace
 
 
+def _literalize_snippet(text: str) -> str:
+    return text.replace("[", "&#91;").replace("]", "&#93;")
+
+
 def render_query_report(workspace: Workspace, question: str, hits: Iterable[SearchHit]) -> Path:
     output_path = workspace.outputs_dir / "reports" / f"{slugify(question)}.md"
     lines = [
@@ -34,7 +38,7 @@ def render_query_report(workspace: Workspace, question: str, hits: Iterable[Sear
                 [
                     f"{index}. [{hit.title}]({relative_markdown_path(output_path, target)})",
                     f"   Score: {hit.score}",
-                    f"   Snippet: {hit.snippet}",
+                    f"   Snippet: {_literalize_snippet(hit.snippet)}",
                     "",
                 ]
             )
@@ -84,7 +88,7 @@ def render_marp_slides(workspace: Workspace, question: str, hits: Iterable[Searc
                 [
                     f"## {hit.title}",
                     "",
-                    hit.snippet,
+                    _literalize_snippet(hit.snippet),
                     "",
                     f"[Open source]({relative_markdown_path(output_path, target)})",
                     "",
@@ -122,7 +126,7 @@ def render_query_packet(workspace: Workspace, question: str, hits: Iterable[Sear
                 [
                     f"- [{hit.title}]({relative_markdown_path(output_path, target)})",
                     f"  - Score: {hit.score}",
-                    f"  - Snippet: {hit.snippet}",
+                    f"  - Snippet: {_literalize_snippet(hit.snippet)}",
                 ]
             )
         lines.append("")

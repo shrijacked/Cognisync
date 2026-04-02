@@ -67,6 +67,23 @@ cognisync lint
 cognisync query "What are the main themes in this workspace?" --slides
 ```
 
+## Try The Demo
+
+If you want a concrete workspace immediately, Cognisync can scaffold a polished demo garden:
+
+```bash
+cognisync demo
+```
+
+By default this writes a browsable example into `examples/research-garden/`. The demo includes:
+
+- seeded raw source material
+- compiled source summaries and concept pages
+- a filed query page
+- generated reports, slides, and prompt packets
+
+You can inspect the checked-in example in [examples/research-garden](examples/research-garden) or follow the walkthrough in [Demo Walkthrough](docs/demo-walkthrough.md).
+
 ## Built-In Adapter Example
 
 Cognisync now ships with real Codex and Gemini CLI presets so users do not have to guess at the adapter shape:
@@ -115,6 +132,7 @@ This makes the system easy to automate, easy to audit, and easy to publish.
 The implementation is documented in:
 
 - [Architecture](docs/architecture.md)
+- [Demo Walkthrough](docs/demo-walkthrough.md)
 - [Execution Plan](docs/execution-plan.md)
 - [Open Source Operations](docs/open-source-operations.md)
 
