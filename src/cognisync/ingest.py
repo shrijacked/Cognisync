@@ -30,6 +30,13 @@ class IngestResult:
 
 
 @dataclass(frozen=True)
+class BatchIngestEntry:
+    kind: str
+    source: str
+    name: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class HtmlCapture:
     title: str
     description: str
@@ -374,6 +381,25 @@ def ingest_repo(workspace: Workspace, repo_path: Path, name: Optional[str] = Non
     return IngestResult(path=target_path, kind="repo")
 
 
+def ingest_batch(workspace: Workspace, manifest_path: Path, force: bool = False) -> List[IngestResult]:
+    entries = _load_batch_manifest(Path(manifest_path))
+    results: List[IngestResult] = []
+    for entry in entries:
+        if entry.kind == "file":
+            results.append(ingest_file(workspace, source=Path(entry.source), category="files", name=entry.name, force=force))
+        elif entry.kind == "pdf":
+            results.append(ingest_pdf(workspace, source=Path(entry.source), name=entry.name, force=force))
+        elif entry.kind == "url":
+            results.append(ingest_url(workspace, url=entry.source, name=entry.name, force=force))
+        elif entry.kind == "repo":
+            results.append(ingest_repo(workspace, repo_path=Path(entry.source), name=entry.name, force=force))
+        else:
+            raise IngestError(
+                f"Unsupported batch ingest kind '{entry.kind}'. Expected one of file, pdf, url, repo."
+            )
+    return results
+
+
 def _convert_remote_text_to_markdown(text: str, content_type: str) -> HtmlCapture:
     if "html" in content_type:
         parser = _HtmlToMarkdownParser()
@@ -614,6 +640,34 @@ def _slug_from_url(url: str) -> str:
         return tail
     host = parsed.netloc or "url-capture"
     return host.replace(":", "-")
+
+
+def _load_batch_manifest(path: Path) -> List[BatchIngestEntry]:
+    manifest_path = path.resolve()
+    if not manifest_path.is_file():
+        raise IngestError(f"Batch manifest does not exist: {manifest_path}")
+
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise IngestError(f"Batch manifest is not valid JSON: {manifest_path}") from error
+
+    items = payload.get("items", payload) if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        raise IngestError("Batch manifest must be a list or an object with an `items` list.")
+
+    entries: List[BatchIngestEntry] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise IngestError(f"Batch manifest entry {index} must be an object.")
+        kind = str(item.get("kind", "")).strip().lower()
+        source = str(item.get("source") or item.get("path") or item.get("url") or "").strip()
+        name_value = item.get("name")
+        name = str(name_value).strip() if name_value is not None and str(name_value).strip() else None
+        if not kind or not source:
+            raise IngestError(f"Batch manifest entry {index} must include `kind` and `source`.")
+        entries.append(BatchIngestEntry(kind=kind, source=source, name=name))
+    return entries
 
 
 def _find_readme(root: Path) -> Optional[Path]:

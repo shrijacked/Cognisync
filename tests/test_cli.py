@@ -1,4 +1,5 @@
 import io
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -7,6 +8,7 @@ from pathlib import Path
 from tests import support  # noqa: F401
 
 from cognisync.cli import main
+from cognisync.config import LLMProfile, load_config, save_config
 
 
 class CliTests(unittest.TestCase):
@@ -70,6 +72,54 @@ class CliTests(unittest.TestCase):
 
             report_files = list((root / "outputs" / "reports").glob("*.md"))
             self.assertTrue(report_files)
+
+    def test_research_command_runs_search_packet_and_answer_filing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Research Workspace"]), 0)
+
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory helps agent loops persist findings.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(root / ".cognisync" / "config.json")
+            config.llm_profiles["researcher"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Filed Answer\\n\\nAgent loops rely on structured memory. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(root / ".cognisync" / "config.json", config)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "researcher",
+                        "how do agent loops use memory",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            report_path = root / "outputs" / "reports" / "how-do-agent-loops-use-memory.md"
+            answer_path = root / "wiki" / "queries" / "how-do-agent-loops-use-memory.md"
+            packet_path = root / "prompts" / "query-how-do-agent-loops-use-memory.md"
+            self.assertTrue(report_path.exists())
+            self.assertTrue(answer_path.exists())
+            self.assertTrue(packet_path.exists())
+            self.assertIn("Filed Answer", answer_path.read_text(encoding="utf-8"))
+            self.assertIn("Wrote filed answer", stdout.getvalue())
 
 
 if __name__ == "__main__":

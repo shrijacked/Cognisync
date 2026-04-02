@@ -38,7 +38,7 @@ def run_compile_cycle(
     workspace.write_plan_json("compile-plan", plan)
     plan_path = workspace.plans_dir / "compile-plan.md"
     plan_path.write_text(render_compile_plan(plan), encoding="utf-8")
-    packet_path = render_compile_packet(workspace, plan)
+    packet_path = render_compile_packet(workspace, plan, snapshot=snapshot)
 
     ran_profile = False
     resolved_output = output_file

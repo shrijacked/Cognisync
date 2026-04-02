@@ -1,5 +1,6 @@
 import io
 import base64
+import json
 import subprocess
 import sys
 import tempfile
@@ -244,6 +245,107 @@ class OperationsTests(unittest.TestCase):
             self.assertIn("src/", text)
             self.assertIn("agents/", text)
             self.assertIn("planner.py", text)
+
+    def test_ingest_batch_manifest_processes_multiple_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_root = root / "source-assets"
+            source_root.mkdir()
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="Batch Ingest Test")
+
+            note = source_root / "note.md"
+            note.write_text("# Note\n\nBatch ingest file.\n", encoding="utf-8")
+            pdf = source_root / "paper.pdf"
+            pdf.write_bytes(_build_test_pdf_bytes("batch pdf text"))
+            html = "<html><head><title>Batch Url</title></head><body><p>Batch url body.</p></body></html>"
+            url = "data:text/html;charset=utf-8," + quote(html)
+
+            repo_dir = root / "sample-repo"
+            repo_dir.mkdir()
+            (repo_dir / "README.md").write_text("# Sample Repo\n\nBatch ingest repo.\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "seed repo"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+            manifest = source_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"kind": "file", "source": str(note)},
+                            {"kind": "pdf", "source": str(pdf)},
+                            {"kind": "url", "source": url, "name": "batch-url"},
+                            {"kind": "repo", "source": str(repo_dir)},
+                        ]
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["ingest", "batch", str(manifest), "--workspace", str(workspace.root)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((workspace.raw_dir / "files" / "note.md").exists())
+            self.assertTrue((workspace.raw_dir / "pdfs" / "paper.md").exists())
+            self.assertTrue((workspace.raw_dir / "urls" / "batch-url.md").exists())
+            self.assertTrue((workspace.raw_dir / "repos" / "sample-repo.md").exists())
+            self.assertTrue(workspace.index_path.exists())
+            self.assertIn("Batch ingested 4 source(s).", stdout.getvalue())
+
+    def test_plan_packet_includes_richer_raw_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_root = root / "source-assets"
+            source_root.mkdir()
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="Compile Context Test")
+
+            pdf = source_root / "paper.pdf"
+            pdf.write_bytes(_build_test_pdf_bytes("agent memory loops"))
+            self.assertEqual(main(["ingest", "pdf", str(pdf), "--workspace", str(workspace.root)]), 0)
+
+            image_bytes = base64.b64encode(
+                bytes.fromhex(
+                    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+                    "0000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
+                )
+            ).decode("ascii")
+            html = (
+                "<html><head><title>Edge Agents</title></head>"
+                "<body><p>image capture</p>"
+                f'<img alt="system diagram" src="data:image/png;base64,{image_bytes}">'
+                "</body></html>"
+            )
+            url = "data:text/html;charset=utf-8," + quote(html)
+            self.assertEqual(main(["ingest", "url", url, "--workspace", str(workspace.root)]), 0)
+
+            repo_dir = root / "sample-repo"
+            repo_dir.mkdir()
+            (repo_dir / "README.md").write_text("# Repo\n\nTree snapshot.\n", encoding="utf-8")
+            (repo_dir / "src.py").write_text("print('ok')\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "seed repo"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            self.assertEqual(main(["ingest", "repo", str(repo_dir), "--workspace", str(workspace.root)]), 0)
+
+            self.assertEqual(main(["plan", "--workspace", str(workspace.root)]), 0)
+
+            packet = (workspace.prompts_dir / "compile-plan.md").read_text(encoding="utf-8")
+            self.assertIn("## Input Context", packet)
+            self.assertIn("raw/pdfs/paper.md", packet)
+            self.assertIn("agent memory loops", packet)
+            self.assertIn("edge-agents-assets/system-diagram-1.png", packet)
+            self.assertIn("Repository Tree Snapshot", packet)
 
     def test_compile_runs_profile_writes_summary_and_passes_lint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

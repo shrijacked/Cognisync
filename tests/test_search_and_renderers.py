@@ -47,7 +47,9 @@ class SearchAndRenderersTests(unittest.TestCase):
             self.assertGreaterEqual(len(hits), 1)
             self.assertEqual(hits[0].path, "raw/agent-loops.md")
             self.assertIn("How do agent loops work?", report_text)
-            self.assertIn("## Top Sources", report_text)
+            self.assertIn("## Evidence Summary", report_text)
+            self.assertIn("[S1]", report_text)
+            self.assertIn("## Source Blocks", report_text)
             self.assertIn("marp: true", slides_text)
             self.assertIn("Agent Loops", slides_text)
 
