@@ -39,7 +39,10 @@ workspace/
 ├── prompts/
 └── .cognisync/
     ├── config.json
+    ├── graph.json
     ├── index.json
+    ├── runs/
+    ├── sources.json
     └── plans/
 ```
 
@@ -47,10 +50,12 @@ workspace/
 
 - Workspace scaffolding
 - Deterministic corpus scanner and manifest builder
+- Stable source and graph manifests under `.cognisync/`
 - Markdown-aware search over `raw/` and `wiki/`
 - Compile planner for missing summaries, concept pages, and repair work
 - Knowledge-base linter for broken links, missing summaries, and duplicate titles
 - Markdown and Marp report renderers
+- Research and compile run manifests with persisted validation state
 - Command adapter contracts for wiring in external LLM CLIs
 - A tested Python API and CLI
 
@@ -64,7 +69,7 @@ cognisync ingest batch sources.json
 cognisync adapter list
 cognisync adapter install codex --profile codex
 cognisync compile --profile codex --strict
-cognisync research "what are the main themes in this workspace?" --profile codex --slides
+cognisync research "what are the main themes in this workspace?" --profile codex --mode memo --slides
 ```
 
 ## Try The Demo
@@ -119,18 +124,28 @@ Batch ingest accepts a JSON list or an object with an `items` list:
 The query and research outputs are now more citation-friendly by default:
 
 - reports render an evidence summary with inline source ids like `[S1]`
-- source blocks include path, score, snippet, and embedded-image hints
+- source blocks include path, source kind, score, retrieval reason, snippet, and embedded-image hints
 - compile packets include input-context excerpts so external agents see richer raw context up front
+- research runs validate inline citations and persist their status into `.cognisync/runs/`
+- scans now materialize stable source and graph manifests at `.cognisync/sources.json` and `.cognisync/graph.json`
 
 ## Research Command
 
 `cognisync research` is the opinionated operator surface for question-driven work:
 
 ```bash
-cognisync research "how do agent loops use memory?" --profile claude --slides
+cognisync research "how do agent loops use memory?" --profile claude --mode memo --slides
 ```
 
-It scans the workspace, searches the corpus, renders a cited report, builds a prompt packet, optionally runs the packet through an adapter profile, and files the resulting answer back into `wiki/queries/`.
+It scans the workspace, searches the corpus, renders a cited report, builds a prompt packet, optionally runs the packet through an adapter profile, validates inline citations, and files the resulting answer back into the workspace.
+
+The research surface now supports explicit answer modes:
+
+- `--mode wiki` for reusable filed answers in `wiki/queries/`
+- `--mode report` for report-shaped outputs in `outputs/reports/`
+- `--mode memo` for tighter research memos in `outputs/reports/`
+- `--mode brief` for concise briefing artifacts in `outputs/reports/`
+- `--mode slides` for Marp-oriented slide-deck answers in `outputs/slides/`
 
 ## Built-In Adapter Example
 

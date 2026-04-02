@@ -21,6 +21,7 @@ flowchart TD
     D --> E["configured LLM profile executes compile work"]
     E --> F["scan and lint run again on the updated workspace"]
     F --> G["research turns the refreshed corpus into cited reports and filed answers"]
+    G --> H["run manifests, graph state, and source manifests persist the loop"]
 ```
 
 ## Command Roles
@@ -66,7 +67,7 @@ The command:
 4. optionally executes the packet through a configured adapter profile
 5. re-scans and lints the workspace
 
-Compile packets now include an `Input Context` section that excerpts the raw artifacts behind each task, including PDF sidecar text, URL image references, and repository tree snapshots.
+Compile packets now include an `Input Context` section that excerpts the raw artifacts behind each task, including PDF sidecar text, URL image references, and repository tree snapshots. Compile runs also persist run metadata in `.cognisync/runs/`.
 
 ### `research`
 
@@ -78,13 +79,25 @@ The command:
 2. searches the corpus for relevant sources
 3. renders a cited report and prompt packet
 4. optionally executes the packet through a configured adapter profile
-5. files the resulting answer back into `wiki/queries/`
+5. validates citations and files the resulting answer back into the workspace
+
+Research supports explicit output modes:
+
+- `wiki` for `wiki/queries/`
+- `report`, `memo`, and `brief` for `outputs/reports/`
+- `slides` for `outputs/slides/`
+
+Research and scan now persist:
+
+- `.cognisync/sources.json` for grouped raw-source manifests
+- `.cognisync/graph.json` for artifact and tag graph state
+- `.cognisync/runs/` for compile and research run manifests with validation details
 
 ## Traceability
 
 | Task | Command Surface | Output |
 | --- | --- | --- |
 | O6 | `doctor` | readiness report |
-| O7 | `ingest` | richer raw source artifacts plus updated index |
-| O8 | `compile` | compile plan, prompt packet, optional model output, fresh lint state |
-| O9 | `research` | cited report, prompt packet, optional filed answer |
+| O7 | `ingest` | richer raw source artifacts plus updated index and grouped source manifest |
+| O8 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
+| O9 | `research` | cited report, prompt packet, validated answer artifact, run manifest |

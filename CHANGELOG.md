@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- added stable `.cognisync/sources.json` and `.cognisync/graph.json` manifests so scans persist grouped source and graph state
+- added compile and research run manifests under `.cognisync/runs/`
+- added citation validation for research answers and fail-fast handling for unknown source ids
+- added explicit `cognisync research --mode ...` support for `wiki`, `report`, `memo`, `brief`, and `slides`
+- improved deterministic retrieval with source-type-aware ranking and surfaced retrieval reasons in rendered artifacts
+
 ## v0.1.3 - 2026-04-03
 
 - added a built-in Claude Code CLI adapter preset for headless prompt-packet execution
