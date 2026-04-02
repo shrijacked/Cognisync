@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- added a built-in Gemini CLI adapter preset so the framework now ships with multiple frontier-model CLI integrations
+- documented dual built-in adapter flows for Codex and Gemini in the README
+
 ## v0.1.0 - 2026-04-03
 
 Initial public release.

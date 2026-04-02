@@ -99,6 +99,23 @@ def builtin_adapter_presets() -> Dict[str, BuiltinAdapterPreset]:
                 ),
             ),
         ),
+        "gemini": BuiltinAdapterPreset(
+            name="gemini",
+            summary="Google Gemini CLI profile for non-interactive prompt-packet execution.",
+            profile=LLMProfile(
+                command=[
+                    "gemini",
+                    "--prompt",
+                    "Follow the instructions provided on stdin and return the final answer on stdout.",
+                    "--yolo",
+                ],
+                stdin_source="prompt_file",
+                description=(
+                    "Runs prompt packets through Gemini CLI in non-interactive mode by streaming the "
+                    "packet over stdin and capturing the model response from stdout."
+                ),
+            ),
+        ),
     }
 
 

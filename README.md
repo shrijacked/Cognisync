@@ -69,18 +69,27 @@ cognisync query "What are the main themes in this workspace?" --slides
 
 ## Built-In Adapter Example
 
-Cognisync now ships with a real Codex CLI preset so users do not have to guess at the adapter shape:
+Cognisync now ships with real Codex and Gemini CLI presets so users do not have to guess at the adapter shape:
 
 ```bash
 cognisync adapter install codex --profile codex
+cognisync adapter install gemini --profile gemini
+
 cognisync run-packet prompts/compile-plan.md --profile codex --output-file outputs/reports/compile-pass.md
+cognisync run-packet prompts/query-what-are-the-main-themes-in-this-workspace.md --profile gemini --output-file outputs/reports/gemini-brief.md
 ```
 
-The built-in `codex` preset does three things:
+The built-in `codex` preset:
 
 - streams the prompt packet to `codex exec` over stdin
 - runs Codex in the current workspace root
 - uses `--output-last-message` when you pass `--output-file`
+
+The built-in `gemini` preset:
+
+- streams the prompt packet to Gemini CLI over stdin
+- runs Gemini in non-interactive mode using `--prompt`
+- captures stdout into `--output-file` through Cognisync when you request a file output
 
 ## Release Strategy
 

@@ -20,6 +20,7 @@ class AdapterTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("codex:", stdout.getvalue())
+        self.assertIn("gemini:", stdout.getvalue())
 
     def test_run_packet_executes_configured_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,6 +123,77 @@ class AdapterTests(unittest.TestCase):
             self.assertIn("exec", profile.command)
             self.assertEqual(profile.output_file_flag, "--output-last-message")
             self.assertIn("Installed builtin adapter 'codex'", stdout.getvalue())
+
+    def test_adapter_install_writes_builtin_gemini_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Gemini Adapter Test")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "adapter",
+                        "install",
+                        "gemini",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "gemini",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            config = load_config(workspace.config_path)
+            self.assertIn("gemini", config.llm_profiles)
+
+            profile = config.llm_profiles["gemini"]
+            self.assertEqual(profile.stdin_source, "prompt_file")
+            self.assertEqual(profile.command[0], "gemini")
+            self.assertIn("--yolo", profile.command)
+            self.assertIsNone(profile.output_file_flag)
+            self.assertIn("Installed builtin adapter 'gemini'", stdout.getvalue())
+
+    def test_run_packet_writes_stdout_to_output_file_when_adapter_has_no_output_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Output Capture Test")
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["stdout-capture"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; print(sys.stdin.read().strip().upper())",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            prompt_path = workspace.prompts_dir / "capture.md"
+            prompt_path.write_text("capture this", encoding="utf-8")
+            output_path = workspace.outputs_dir / "reports" / "capture.txt"
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run-packet",
+                        str(prompt_path),
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "stdout-capture",
+                        "--output-file",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(output_path.exists())
+            self.assertEqual(output_path.read_text(encoding="utf-8").strip(), "CAPTURE THIS")
 
 
 if __name__ == "__main__":
