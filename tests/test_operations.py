@@ -77,7 +77,14 @@ class OperationsTests(unittest.TestCase):
             workspace = Workspace(root / "workspace")
             workspace.initialize(name="URL Ingest Test")
 
-            html = "<html><head><title>Edge Agents</title></head><body><h1>Edge Agents</h1><p>Data url ingest test.</p></body></html>"
+            html = (
+                "<html><head><title>Edge Agents</title>"
+                '<meta name="description" content="Local agent systems for edge inference.">'
+                '<link rel="canonical" href="https://example.com/edge-agents">'
+                "</head><body><h1>Edge Agents</h1><h2>Deployment</h2>"
+                '<p>Data url ingest test with <a href="https://example.com/docs">docs</a>.</p>'
+                "</body></html>"
+            )
             url = "data:text/html;charset=utf-8," + quote(html)
             exit_code = main(["ingest", "url", url, "--workspace", str(workspace.root)])
 
@@ -87,6 +94,13 @@ class OperationsTests(unittest.TestCase):
             text = files[0].read_text(encoding="utf-8")
             self.assertIn("# Edge Agents", text)
             self.assertIn("Source URL:", text)
+            self.assertIn("description: Local agent systems for edge inference.", text)
+            self.assertIn("canonical_url: https://example.com/edge-agents", text)
+            self.assertIn("## Extracted Metadata", text)
+            self.assertIn("- Heading count: `2`", text)
+            self.assertIn("- Outbound link count: `1`", text)
+            self.assertIn("## Discovered Links", text)
+            self.assertIn("https://example.com/docs", text)
 
     def test_ingest_repo_creates_manifest_for_local_repository(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,9 +112,20 @@ class OperationsTests(unittest.TestCase):
             repo_dir.mkdir()
             (repo_dir / "README.md").write_text("# Sample Repo\n\nAgent systems.\n", encoding="utf-8")
             (repo_dir / "main.py").write_text("print('hello')\n", encoding="utf-8")
+            (repo_dir / "helper.js").write_text("console.log('hi')\n", encoding="utf-8")
 
             subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
             subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "commit", "-m", "seed repo"],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
             exit_code = main(["ingest", "repo", str(repo_dir), "--workspace", str(workspace.root)])
 
@@ -111,6 +136,13 @@ class OperationsTests(unittest.TestCase):
             self.assertIn("# sample-repo", text)
             self.assertIn("Current branch: `main`", text)
             self.assertIn("README excerpt", text)
+            self.assertIn("## Repository Stats", text)
+            self.assertIn("- File count: `3`", text)
+            self.assertIn("## Language Signals", text)
+            self.assertIn("- `python`: 1 file(s)", text)
+            self.assertIn("- `javascript`: 1 file(s)", text)
+            self.assertIn("## Recent Commits", text)
+            self.assertIn("seed repo", text)
 
     def test_compile_runs_profile_writes_summary_and_passes_lint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
