@@ -179,10 +179,12 @@ Use the change summaries when you want a compact diff of the corpus after an ope
 - artifact count delta
 - source count delta
 - orphan-page delta
+- graph node and edge deltas
 - new concept pages
 - newly resolved merge decisions
 - newly dismissed review items
 - newly surfaced conflict edges
+- suggested follow-up questions based on new conflicts, assertion growth, and coverage gaps
 
 ### `research`
 
@@ -197,6 +199,7 @@ The command:
 5. validates citations and files the resulting answer back into the workspace
 
 Reports and prompt packets now also include `Fact Blocks`, which aggregate source-backed claims from the retrieved hits before the broader narrative sections. This helps distinguish grounded assertions from the surrounding synthesis.
+Accepted concept pages now also render grounded assertion sections, so promoted concepts are backed by explicit source evidence instead of only a supporting-source list.
 
 Research supports explicit output modes:
 
@@ -243,6 +246,7 @@ The scan and compile loop also uses a richer graph substrate now:
 - backlink actions route orphan wiki pages into durable navigation surfaces
 - filed conflict notes suppress resolved conflict reviews while preserving the disagreement as a first-class artifact
 - `cognisync maintain` turns the deterministic parts of that queue into a one-command maintenance pass
+- lint now flags stale source summaries, and compile planning turns them into `refresh_source_summary` tasks
 
 ## Traceability
 

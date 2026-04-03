@@ -120,10 +120,12 @@ Each scan, ingest, maintenance, and research pass now also writes a small change
 
 - artifact and source count deltas
 - orphan-page delta
+- graph node and edge deltas
 - new concept pages
 - newly resolved merges
 - newly dismissed review items
 - newly surfaced conflicts
+- suggested follow-up questions based on new conflicts, assertion growth, and coverage gaps
 
 The richer ingest layer now makes the loop more useful before an LLM even runs:
 
@@ -197,6 +199,7 @@ The graph layer is richer now as well:
 - repeated entities and tags become concept candidates with support counts
 - compile planning can propose concept pages from those candidates even when explicit tags are missing
 - conflicting source claims are represented in the graph so downstream tools can inspect tensions in the corpus
+- accepted concept pages now render grounded assertion sections so promoted concepts carry source-backed evidence instead of only source links
 
 The operator loop now has a review layer too:
 
@@ -219,6 +222,7 @@ The operator loop now has a review layer too:
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
+- those change summaries now include graph deltas and follow-up questions so a run leaves behind next-step guidance, not just counters
 - research job workspaces land under `outputs/reports/research-jobs/`, include deterministic note artifacts, a source packet, checkpoints, and a validation report, and are ignored by the scanner so orchestration scratchpads do not leak back into retrieval
 - review exports land under `outputs/reports/review-exports/` and are ignored by the scanner so operator telemetry does not leak back into retrieval
 - general export bundles land under `outputs/reports/exports/` and are also ignored by the scanner so bridge artifacts do not leak back into retrieval
@@ -246,7 +250,8 @@ The saved config surface looks like this:
 ```
 
 `cognisync doctor` now reports the active maintenance policy too, and warns when the workspace is configured permissively enough that low-signal concept pages are more likely to slip through maintenance.
-- lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
+- lint now surfaces raw sources with no headings or tags, duplicate concept pages, conflicting claims, and stale source summaries as graph-aware issues
+- compile planning now turns stale summaries into `refresh_source_summary` work items instead of leaving them as passive warnings
 
 ```mermaid
 flowchart TD
