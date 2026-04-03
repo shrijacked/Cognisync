@@ -42,6 +42,7 @@ def default_review_actions() -> Dict[str, object]:
         "updated_at": utc_timestamp(),
         "accepted_concepts": {},
         "applied_backlinks": {},
+        "dismissed_reviews": {},
         "filed_conflicts": {},
         "resolved_entity_merges": {},
     }
@@ -60,6 +61,17 @@ def read_review_actions(workspace: Workspace) -> Dict[str, object]:
     }
     payload["applied_backlinks"] = {
         str(key): dict(value) for key, value in dict(raw.get("applied_backlinks", {})).items()
+    }
+    payload["dismissed_reviews"] = {
+        str(key): {
+            "kind": str(dict(value).get("kind", "")),
+            "title": str(dict(value).get("title", "")),
+            "path": str(dict(value).get("path", "")),
+            "reason": str(dict(value).get("reason", "")),
+            "related_paths": list(dict(value).get("related_paths", [])),
+            "dismissed_at": str(dict(value).get("dismissed_at", "")),
+        }
+        for key, value in dict(raw.get("dismissed_reviews", {})).items()
     }
     payload["filed_conflicts"] = {
         str(key): dict(value) for key, value in dict(raw.get("filed_conflicts", {})).items()
@@ -83,6 +95,19 @@ def write_review_actions(workspace: Workspace, payload: Dict[str, object]) -> No
     }
     actions["applied_backlinks"] = {
         str(key): dict(value) for key, value in dict(payload.get("applied_backlinks", {})).items()
+    }
+    actions["dismissed_reviews"] = {
+        str(key): {
+            "kind": str(dict(value).get("kind", "")),
+            "title": str(dict(value).get("title", "")),
+            "path": str(dict(value).get("path", "")),
+            "reason": str(dict(value).get("reason", "")),
+            "related_paths": sorted(
+                {str(path) for path in list(dict(value).get("related_paths", [])) if str(path).strip()}
+            ),
+            "dismissed_at": str(dict(value).get("dismissed_at", "")),
+        }
+        for key, value in dict(payload.get("dismissed_reviews", {})).items()
     }
     actions["filed_conflicts"] = {
         str(key): dict(value) for key, value in dict(payload.get("filed_conflicts", {})).items()

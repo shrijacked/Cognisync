@@ -24,6 +24,8 @@ def build_review_queue(workspace: Workspace, snapshot: IndexSnapshot) -> Dict[st
     items.extend(_build_entity_merge_items(workspace, snapshot, actions))
     items.extend(_build_conflict_review_items(workspace, snapshot, actions))
     items.extend(_build_backlink_suggestion_items(workspace, snapshot))
+    dismissed = {str(key) for key in dict(actions.get("dismissed_reviews", {})).keys()}
+    items = [item for item in items if str(item.get("review_id", "")) not in dismissed]
     items.sort(key=lambda item: (_priority_rank(item["priority"]), item["kind"], item["title"]))
     return {
         "schema_version": 1,

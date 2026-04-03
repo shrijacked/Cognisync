@@ -176,6 +176,31 @@ def file_conflict_review(workspace: Workspace, subject: str) -> Path:
     return note_path
 
 
+def dismiss_review_item(workspace: Workspace, review_id: str, reason: str) -> Dict[str, object]:
+    normalized_reason = reason.strip()
+    if not normalized_reason:
+        raise MaintenanceError("A dismissal reason is required.")
+
+    snapshot = _refresh_workspace_state(workspace)
+    queue = build_review_queue(workspace, snapshot)
+    item = next((candidate for candidate in queue["items"] if candidate["review_id"] == review_id), None)
+    if item is None:
+        raise MaintenanceError(f"No open review item found for '{review_id}'.")
+
+    actions = read_review_actions(workspace)
+    actions["dismissed_reviews"][review_id] = {
+        "kind": str(item["kind"]),
+        "title": str(item["title"]),
+        "path": str(item.get("path") or item.get("target_path") or ""),
+        "related_paths": list(item.get("related_paths", [])),
+        "reason": normalized_reason,
+        "dismissed_at": utc_timestamp(),
+    }
+    write_review_actions(workspace, actions)
+    _refresh_workspace_state(workspace)
+    return dict(actions["dismissed_reviews"][review_id])
+
+
 def run_maintenance_cycle(
     workspace: Workspace,
     max_concepts: int = 10,

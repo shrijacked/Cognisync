@@ -29,6 +29,7 @@ from cognisync.maintenance import (
     MaintenanceError,
     accept_concept_candidate,
     apply_backlink_suggestion,
+    dismiss_review_item,
     file_conflict_review,
     resolve_entity_merge,
     run_maintenance_cycle,
@@ -172,6 +173,18 @@ def cmd_review_file_conflict(args: argparse.Namespace) -> int:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Filed conflict note into {path}")
+    return 0
+
+
+def cmd_review_dismiss(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        entry = dismiss_review_item(workspace, args.review_id, args.reason)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Dismissed review item {args.review_id} ({entry['kind']})")
+    print(f"Reason: {entry['reason']}")
     return 0
 
 
@@ -563,6 +576,12 @@ def build_parser() -> argparse.ArgumentParser:
     review_conflict_parser.add_argument("subject")
     review_conflict_parser.add_argument("--workspace", default=".")
     review_conflict_parser.set_defaults(func=cmd_review_file_conflict)
+
+    review_dismiss_parser = review_subparsers.add_parser("dismiss", help="Dismiss a review item with a persisted reason")
+    review_dismiss_parser.add_argument("review_id")
+    review_dismiss_parser.add_argument("--reason", required=True)
+    review_dismiss_parser.add_argument("--workspace", default=".")
+    review_dismiss_parser.set_defaults(func=cmd_review_dismiss)
 
     maintain_parser = subparsers.add_parser("maintain", help="Apply graph-driven maintenance actions automatically")
     maintain_parser.add_argument("--workspace", default=".")

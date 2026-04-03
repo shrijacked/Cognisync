@@ -266,6 +266,98 @@ class ReviewQueueTests(unittest.TestCase):
             conflict_items = [item for item in queue["items"] if item["kind"] == "conflict_review"]
             self.assertFalse(conflict_items)
 
+    def test_review_dismiss_records_reason_and_hides_item_from_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Dismiss Review Test")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "review",
+                        "dismiss",
+                        "backlink:wiki-queries-agent-memory.md:raw-retrieval.md",
+                        "--reason",
+                        "navigation already handled elsewhere",
+                        "--workspace",
+                        str(root),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            actions = json.loads((workspace.state_dir / "review-actions.json").read_text(encoding="utf-8"))
+            dismissed = actions["dismissed_reviews"]["backlink:wiki-queries-agent-memory.md:raw-retrieval.md"]
+            self.assertEqual(dismissed["reason"], "navigation already handled elsewhere")
+            self.assertEqual(dismissed["kind"], "backlink_suggestion")
+            self.assertIn("Dismissed review item", stdout.getvalue())
+
+            queue = json.loads((workspace.state_dir / "review-queue.json").read_text(encoding="utf-8"))
+            review_ids = {item["review_id"] for item in queue["items"]}
+            self.assertNotIn("backlink:wiki-queries-agent-memory.md:raw-retrieval.md", review_ids)
+
+    def test_maintain_skips_dismissed_review_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Dismissed Maintenance Test")
+
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "review",
+                        "dismiss",
+                        "conflict:raw-cloud.md:raw-local.md:the deployment model:is",
+                        "--reason",
+                        "tracking this manually",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["maintain", "--workspace", str(root)]), 0)
+
+            actions = json.loads((workspace.state_dir / "review-actions.json").read_text(encoding="utf-8"))
+            self.assertIn("conflict:raw-cloud.md:raw-local.md:the deployment model:is", actions["dismissed_reviews"])
+            self.assertFalse(actions["filed_conflicts"])
+            self.assertFalse((workspace.wiki_dir / "queries" / "conflicts").exists())
+
+            maintenance_manifests = sorted((workspace.state_dir / "runs").glob("maintenance-*.json"))
+            self.assertTrue(maintenance_manifests)
+            manifest = json.loads(maintenance_manifests[-1].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["filed_conflict_count"], 0)
+
     def test_maintain_applies_review_actions_and_writes_run_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
