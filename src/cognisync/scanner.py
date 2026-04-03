@@ -56,10 +56,13 @@ def scan_workspace(workspace: Workspace) -> IndexSnapshot:
 def _build_inventory(root: Path) -> Dict[str, Path]:
     inventory: Dict[str, Path] = {}
     allowed_roots = {"raw", "wiki", "outputs", "prompts"}
+    ignored_roots = {"outputs/reports/change-summaries"}
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
+        if any(rel == ignored or rel.startswith(f"{ignored}/") for ignored in ignored_roots):
+            continue
         parts = PurePosixPath(rel).parts
         if not parts or parts[0] not in allowed_roots:
             continue

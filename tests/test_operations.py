@@ -54,6 +54,32 @@ def _build_test_pdf_bytes(text: str) -> bytes:
 
 
 class OperationsTests(unittest.TestCase):
+    def test_ingest_writes_change_summary_against_live_baseline_when_state_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_root = Path(tmp) / "source-assets"
+            source_root.mkdir()
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="Ingest Change Summary Test")
+
+            (workspace.raw_dir / "existing.md").write_text(
+                "# Existing Source\n\nAlready in the corpus.\n",
+                encoding="utf-8",
+            )
+            note = source_root / "note.md"
+            note.write_text("# Note\n\nIngest me.\n", encoding="utf-8")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["ingest", "file", str(note), "--workspace", str(workspace.root)])
+
+            self.assertEqual(exit_code, 0)
+            summary_files = sorted((workspace.outputs_dir / "reports" / "change-summaries").glob("ingest-*.md"))
+            self.assertTrue(summary_files)
+            summary_text = summary_files[-1].read_text(encoding="utf-8")
+            self.assertIn("Source count: `1 -> 2` (`+1`)", summary_text)
+            self.assertIn("Wrote change summary", stdout.getvalue())
+
     def test_doctor_reports_clean_workspace_with_configured_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

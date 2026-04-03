@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.linter import lint_snapshot
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.review_queue import build_review_queue
@@ -29,6 +30,7 @@ class MaintenanceResult:
     resolved_merge_keys: List[str]
     applied_backlink_targets: List[str]
     filed_conflict_keys: List[str]
+    change_summary_path: Path
     remaining_review_count: int
     issue_count: int
     run_manifest_path: Path
@@ -208,6 +210,7 @@ def run_maintenance_cycle(
     max_backlinks: int = 10,
     max_conflicts: int = 10,
 ) -> MaintenanceResult:
+    previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
     snapshot = _refresh_workspace_state(workspace)
     queue = build_review_queue(workspace, snapshot)
 
@@ -251,6 +254,7 @@ def run_maintenance_cycle(
     final_snapshot = _refresh_workspace_state(workspace)
     final_queue = build_review_queue(workspace, final_snapshot)
     issues = lint_snapshot(final_snapshot, workspace=workspace)
+    change_summary = write_change_summary(workspace, "maintenance", previous_state, final_snapshot)
     run_manifest_path = write_run_manifest(
         workspace,
         "maintenance",
@@ -264,6 +268,7 @@ def run_maintenance_cycle(
             "applied_backlink_targets": backlink_targets,
             "filed_conflict_count": len(filed_conflict_keys),
             "filed_conflict_keys": filed_conflict_keys,
+            "change_summary_path": workspace.relative_path(change_summary.path),
             "remaining_review_count": len(final_queue["items"]),
             "issue_count": len(issues),
             "status": "completed",
@@ -274,6 +279,7 @@ def run_maintenance_cycle(
         resolved_merge_keys=merge_keys,
         applied_backlink_targets=backlink_targets,
         filed_conflict_keys=filed_conflict_keys,
+        change_summary_path=change_summary.path,
         remaining_review_count=len(final_queue["items"]),
         issue_count=len(issues),
         run_manifest_path=run_manifest_path,

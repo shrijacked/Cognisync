@@ -49,6 +49,24 @@ Transformers rely on attention and influence [[agents]].
             self.assertIn("wiki/concepts/agents.md", [link.resolved_path for link in artifact.links])
             self.assertIn("raw/transformers.md", snapshot.backlinks["wiki/concepts/agents.md"])
 
+    def test_scan_ignores_change_summary_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Scanner Ignore Change Summary Test")
+
+            (workspace.raw_dir / "note.md").write_text("# Note\n\nCorpus content.\n", encoding="utf-8")
+            workspace.change_summaries_dir.mkdir(parents=True, exist_ok=True)
+            (workspace.change_summaries_dir / "scan-1.md").write_text(
+                "# Scan Change Summary\n\nOperator telemetry.\n",
+                encoding="utf-8",
+            )
+
+            snapshot = scan_workspace(workspace)
+
+            self.assertIn("raw/note.md", snapshot.artifact_paths())
+            self.assertNotIn("outputs/reports/change-summaries/scan-1.md", snapshot.artifact_paths())
+
 
 if __name__ == "__main__":
     unittest.main()

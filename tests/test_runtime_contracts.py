@@ -52,6 +52,43 @@ def _build_test_pdf_bytes(text: str) -> bytes:
 
 
 class RuntimeContractsTests(unittest.TestCase):
+    def test_scan_writes_change_summary_for_new_conflicts_and_orphan_delta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="Scan Change Summary Test")
+
+            (workspace.raw_dir / "baseline.md").write_text(
+                "# Baseline\n\nShared source.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["scan", "--workspace", str(workspace.root)]), 0)
+
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "# Agent Memory\n\nThis page is not linked yet.\n",
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["scan", "--workspace", str(workspace.root)])
+
+            self.assertEqual(exit_code, 0)
+            summary_files = sorted((workspace.outputs_dir / "reports" / "change-summaries").glob("scan-*.md"))
+            self.assertGreaterEqual(len(summary_files), 2)
+            summary_texts = [path.read_text(encoding="utf-8") for path in summary_files]
+            self.assertTrue(any("New conflicts" in text and "the deployment model is" in text for text in summary_texts))
+            self.assertTrue(any("Orphan pages: `0 -> 1` (`+1`)" in text for text in summary_texts))
+            self.assertIn("Wrote change summary", stdout.getvalue())
+
     def test_scan_writes_source_and_graph_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -114,6 +151,45 @@ class RuntimeContractsTests(unittest.TestCase):
             ]
             self.assertEqual(len(link_edges), 1)
             self.assertEqual(link_edges[0]["target"], "wiki/concepts/agent-loops.md")
+
+    def test_maintain_writes_change_summary_for_concepts_and_merges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="Maintenance Change Summary Test")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Vector Database\n\n"
+                "Vector Database improves recall.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Memory Systems\n\n"
+                "## Vector Databases\n\n"
+                "Vector Databases help persistence.\n",
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["maintain", "--workspace", str(workspace.root)])
+
+            self.assertEqual(exit_code, 0)
+            summary_files = sorted((workspace.outputs_dir / "reports" / "change-summaries").glob("maintenance-*.md"))
+            self.assertTrue(summary_files)
+            summary_text = summary_files[-1].read_text(encoding="utf-8")
+            self.assertIn("New concept pages", summary_text)
+            self.assertIn("wiki/concepts/vector-databases.md", summary_text)
+            self.assertIn("Resolved merge decisions", summary_text)
+            self.assertIn("vector database -> Vector Databases", summary_text)
+            self.assertIn("Wrote change summary", stdout.getvalue())
 
     def test_search_engine_applies_source_type_aware_ranking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
