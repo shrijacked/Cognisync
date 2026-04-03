@@ -190,10 +190,29 @@ The operator loop now has a review layer too:
 - `cognisync review apply-backlink <wiki/path.md>` routes orphan pages back into stable navigation pages without mutating raw source material
 - `cognisync review file-conflict "<subject>"` files a deterministic conflict note under `wiki/queries/conflicts/`
 - `cognisync review dismiss <review-id> --reason "..."` closes a queue item intentionally and persists why it should stay closed
+- `cognisync review reopen <review-id>` removes a dismissal so the underlying item can surface in the queue again
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
+
+Maintenance policy is now configurable too. Cognisync reads defaults from `.cognisync/config.json` and lets you override them per run:
+
+- `maintain --min-concept-support 3`
+- `maintain --deny-concept agents --deny-concept loops`
+- `maintain --allow-short-concepts-without-entity`
+
+The saved config surface looks like this:
+
+```json
+{
+  "maintenance_policy": {
+    "min_concept_support": 2,
+    "require_entity_evidence_for_short_concepts": true,
+    "deny_concepts": []
+  }
+}
+```
 - lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
 
 ```mermaid
