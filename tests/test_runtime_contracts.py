@@ -386,6 +386,10 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(manifest["job_profile"], "literature-review")
             notes_dir = workspace.root / manifest["notes_dir"]
             self.assertTrue(notes_dir.exists())
+            source_packet_path = workspace.root / manifest["source_packet_path"]
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            self.assertTrue(source_packet_path.exists())
+            self.assertTrue(checkpoints_path.exists())
             note_paths = [workspace.root / path for path in manifest["note_paths"]]
             self.assertGreaterEqual(len(note_paths), 4)
             self.assertTrue(any(path.name == "paper-matrix.md" for path in note_paths))
@@ -393,9 +397,13 @@ class RuntimeContractsTests(unittest.TestCase):
 
             plan_text = (workspace.root / manifest["plan_path"]).read_text(encoding="utf-8")
             packet_text = (workspace.root / manifest["packet_path"]).read_text(encoding="utf-8")
+            source_packet_text = source_packet_path.read_text(encoding="utf-8")
+            checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
             self.assertIn("Job profile: literature-review", plan_text)
             self.assertIn("Build paper matrix", plan_text)
             self.assertIn("Research job profile: literature-review", packet_text)
+            self.assertIn("# Research Source Packet", source_packet_text)
+            self.assertTrue(any(item["step_id"] == "build-paper-matrix" for item in checkpoint_payload["steps"]))
 
     def test_research_resume_latest_preserves_job_profile_notes_and_validation_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -458,11 +466,18 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(manifest["job_profile"], "contradiction-finding")
             self.assertTrue(manifest["validation"]["passed"])
             self.assertTrue(any(path.endswith("claim-ledger.md") for path in manifest["note_paths"]))
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            source_packet_path = workspace.root / manifest["source_packet_path"]
+            self.assertTrue(checkpoints_path.exists())
+            self.assertTrue(source_packet_path.exists())
             validation_report_path = workspace.root / manifest["validation_report_path"]
             self.assertTrue(validation_report_path.exists())
             validation_text = validation_report_path.read_text(encoding="utf-8")
+            checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
             self.assertIn("Validation Status", validation_text)
             self.assertIn("completed", validation_text.lower())
+            execute_step = next(item for item in checkpoint_payload["steps"] if item["step_id"] == "execute-profile")
+            self.assertEqual(execute_step["status"], "completed")
 
     def test_research_resume_latest_reuses_existing_packet_and_updates_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

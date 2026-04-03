@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 from typing import Dict, List, Optional, Sequence
@@ -167,6 +168,8 @@ class ResearchRunResult:
     answer_path: Optional[Path]
     slide_path: Optional[Path]
     notes_dir: Path
+    source_packet_path: Path
+    checkpoints_path: Path
     validation_report_path: Path
     change_summary_path: Path
     run_manifest_path: Path
@@ -181,6 +184,8 @@ class ResearchRunResult:
 class ResearchJobArtifacts:
     notes_dir: Path
     note_paths: List[Path]
+    source_packet_path: Path
+    checkpoints_path: Path
     validation_report_path: Path
 
 
@@ -278,6 +283,8 @@ def run_research_cycle(
         job_profile=job_profile,
         notes_dir=workspace.relative_path(job_artifacts.notes_dir),
         note_paths=[workspace.relative_path(path) for path in job_artifacts.note_paths],
+        source_packet_path=workspace.relative_path(job_artifacts.source_packet_path),
+        checkpoints_path=workspace.relative_path(job_artifacts.checkpoints_path),
         validation_report_path=workspace.relative_path(job_artifacts.validation_report_path),
         sources=sources,
         report_path=workspace.relative_path(report_path),
@@ -289,6 +296,7 @@ def run_research_cycle(
         filing_status=filing_status,
     )
     plan_path, plan_json_path = _write_research_plan(workspace, question, plan)
+    _write_research_checkpoints(workspace, job_artifacts.checkpoints_path, plan)
 
     if not profile_name:
         change_summary_path = _write_research_change_summary(workspace, previous_state)
@@ -307,6 +315,8 @@ def run_research_cycle(
             slide_path=slide_path,
             notes_dir=job_artifacts.notes_dir,
             note_paths=job_artifacts.note_paths,
+            source_packet_path=job_artifacts.source_packet_path,
+            checkpoints_path=job_artifacts.checkpoints_path,
             validation_report_path=job_artifacts.validation_report_path,
             change_summary_path=change_summary_path,
             status="planned",
@@ -322,6 +332,8 @@ def run_research_cycle(
             answer_path=None,
             slide_path=slide_path,
             notes_dir=job_artifacts.notes_dir,
+            source_packet_path=job_artifacts.source_packet_path,
+            checkpoints_path=job_artifacts.checkpoints_path,
             validation_report_path=job_artifacts.validation_report_path,
             change_summary_path=change_summary_path,
             run_manifest_path=run_manifest_path,
@@ -346,6 +358,8 @@ def run_research_cycle(
         slide_path=slide_path,
         notes_dir=job_artifacts.notes_dir,
         note_paths=job_artifacts.note_paths,
+        source_packet_path=job_artifacts.source_packet_path,
+        checkpoints_path=job_artifacts.checkpoints_path,
         validation_report_path=job_artifacts.validation_report_path,
         run_manifest_path=run_manifest_path,
         run_id=run_manifest_path.stem,
@@ -398,6 +412,8 @@ def _resume_research_cycle(
 
     sources = list(manifest.get("sources", []))
     notes_dir = _workspace_path(workspace, manifest.get("notes_dir")) or (workspace.research_jobs_dir / run_manifest_path.stem)
+    source_packet_path = _workspace_path(workspace, manifest.get("source_packet_path")) or (notes_dir / "source-packet.md")
+    checkpoints_path = _workspace_path(workspace, manifest.get("checkpoints_path")) or (notes_dir / "checkpoints.json")
     note_paths = [
         _workspace_path(workspace, value)
         for value in list(manifest.get("note_paths", []))
@@ -415,6 +431,8 @@ def _resume_research_cycle(
         validation=dict(manifest.get("validation", _pending_validation_payload(_available_citations(sources)))),
         existing_notes_dir=notes_dir,
         existing_note_paths=[path for path in note_paths if path is not None],
+        source_packet_path=source_packet_path,
+        checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
     )
     resume_count = int(manifest.get("resume_count", 0)) + 1
@@ -435,6 +453,8 @@ def _resume_research_cycle(
         slide_path=slide_path,
         notes_dir=job_artifacts.notes_dir,
         note_paths=job_artifacts.note_paths,
+        source_packet_path=job_artifacts.source_packet_path,
+        checkpoints_path=job_artifacts.checkpoints_path,
         validation_report_path=job_artifacts.validation_report_path,
         run_manifest_path=run_manifest_path,
         run_id=run_manifest_path.stem,
@@ -460,6 +480,8 @@ def _execute_research_run(
     slide_path: Optional[Path],
     notes_dir: Path,
     note_paths: List[Path],
+    source_packet_path: Path,
+    checkpoints_path: Path,
     validation_report_path: Path,
     run_manifest_path: Path,
     run_id: str,
@@ -479,6 +501,8 @@ def _execute_research_run(
             job_profile=job_profile,
             notes_dir=workspace.relative_path(notes_dir),
             note_paths=[workspace.relative_path(path) for path in note_paths],
+            source_packet_path=workspace.relative_path(source_packet_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
             validation_report_path=workspace.relative_path(validation_report_path),
             sources=sources,
             report_path=workspace.relative_path(report_path),
@@ -505,6 +529,8 @@ def _execute_research_run(
             slide_path=slide_path,
             notes_dir=notes_dir,
             note_paths=note_paths,
+            source_packet_path=source_packet_path,
+            checkpoints_path=checkpoints_path,
             validation_report_path=validation_report_path,
             change_summary_path=_write_research_change_summary(workspace, previous_state),
             status="adapter_failed",
@@ -522,6 +548,8 @@ def _execute_research_run(
         job_profile=job_profile,
         notes_dir=workspace.relative_path(notes_dir),
         note_paths=[workspace.relative_path(path) for path in note_paths],
+        source_packet_path=workspace.relative_path(source_packet_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
         validation_report_path=workspace.relative_path(validation_report_path),
         sources=sources,
         report_path=workspace.relative_path(report_path),
@@ -533,6 +561,7 @@ def _execute_research_run(
         filing_status="pending",
     )
     _persist_existing_research_plan(workspace, plan_path, plan_json_path, running_plan)
+    _write_research_checkpoints(workspace, checkpoints_path, running_plan)
     _write_research_run_state(
         workspace=workspace,
         run_id=run_id,
@@ -548,6 +577,8 @@ def _execute_research_run(
         slide_path=slide_path,
         notes_dir=notes_dir,
         note_paths=note_paths,
+        source_packet_path=source_packet_path,
+        checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
         change_summary_path=None,
         status="running",
@@ -565,6 +596,8 @@ def _execute_research_run(
             job_profile=job_profile,
             notes_dir=workspace.relative_path(notes_dir),
             note_paths=[workspace.relative_path(path) for path in note_paths],
+            source_packet_path=workspace.relative_path(source_packet_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
             validation_report_path=workspace.relative_path(validation_report_path),
             sources=sources,
             report_path=workspace.relative_path(report_path),
@@ -591,6 +624,8 @@ def _execute_research_run(
             slide_path=slide_path,
             notes_dir=notes_dir,
             note_paths=note_paths,
+            source_packet_path=source_packet_path,
+            checkpoints_path=checkpoints_path,
             validation_report_path=validation_report_path,
             change_summary_path=_write_research_change_summary(workspace, previous_state),
             status="adapter_failed",
@@ -627,6 +662,8 @@ def _execute_research_run(
         job_profile=job_profile,
         notes_dir=workspace.relative_path(notes_dir),
         note_paths=[workspace.relative_path(path) for path in note_paths],
+        source_packet_path=workspace.relative_path(source_packet_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
         validation_report_path=workspace.relative_path(validation_report_path),
         sources=sources,
         report_path=workspace.relative_path(report_path),
@@ -638,6 +675,7 @@ def _execute_research_run(
         filing_status="completed" if output_file.exists() else "pending",
     )
     _persist_existing_research_plan(workspace, plan_path, plan_json_path, final_plan)
+    _write_research_checkpoints(workspace, checkpoints_path, final_plan)
     _write_research_run_state(
         workspace=workspace,
         run_id=run_id,
@@ -653,6 +691,8 @@ def _execute_research_run(
         slide_path=slide_path,
         notes_dir=notes_dir,
         note_paths=note_paths,
+        source_packet_path=source_packet_path,
+        checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
         change_summary_path=change_summary_path,
         status=final_status,
@@ -671,6 +711,8 @@ def _execute_research_run(
         answer_path=output_file,
         slide_path=slide_path,
         notes_dir=notes_dir,
+        source_packet_path=source_packet_path,
+        checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
         change_summary_path=change_summary_path,
         run_manifest_path=run_manifest_path,
@@ -697,6 +739,8 @@ def _write_research_run_state(
     slide_path: Optional[Path],
     notes_dir: Path,
     note_paths: List[Path],
+    source_packet_path: Path,
+    checkpoints_path: Path,
     validation_report_path: Path,
     change_summary_path: Optional[Path],
     status: str,
@@ -722,6 +766,8 @@ def _write_research_run_state(
             "slide_path": workspace.relative_path(slide_path) if slide_path else None,
             "notes_dir": workspace.relative_path(notes_dir),
             "note_paths": [workspace.relative_path(path) for path in note_paths],
+            "source_packet_path": workspace.relative_path(source_packet_path),
+            "checkpoints_path": workspace.relative_path(checkpoints_path),
             "validation_report_path": workspace.relative_path(validation_report_path),
             "change_summary_path": workspace.relative_path(change_summary_path) if change_summary_path else None,
             "status": status,
@@ -753,6 +799,8 @@ def _build_research_plan(
     job_profile: str,
     notes_dir: str,
     note_paths: List[str],
+    source_packet_path: str,
+    checkpoints_path: str,
     validation_report_path: str,
     sources: List[Dict[str, object]],
     report_path: str,
@@ -836,10 +884,12 @@ def _build_research_plan(
         job_profile=job_profile,
         report_path=report_path,
         packet_path=packet_path,
+        source_packet_path=source_packet_path,
         answer_path=answer_path,
         slide_path=slide_path,
         notes_dir=notes_dir,
         note_paths=note_paths,
+        checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
         sources=sources,
         steps=steps,
@@ -877,6 +927,7 @@ def render_research_plan(plan: ResearchPlan) -> str:
         "",
         f"- Report: `{plan.report_path}`",
         f"- Prompt packet: `{plan.packet_path}`",
+        f"- Source packet: `{plan.source_packet_path}`" if plan.source_packet_path else "- Source packet: `-`",
         f"- Answer target: `{plan.answer_path}`",
     ]
     if plan.slide_path:
@@ -885,6 +936,8 @@ def render_research_plan(plan: ResearchPlan) -> str:
         lines.append(f"- Notes directory: `{plan.notes_dir}`")
     if plan.validation_report_path:
         lines.append(f"- Validation report: `{plan.validation_report_path}`")
+    if plan.checkpoints_path:
+        lines.append(f"- Checkpoints: `{plan.checkpoints_path}`")
     if plan.note_paths:
         lines.extend(["", "## Intermediate Notes", ""])
         for path in plan.note_paths:
@@ -929,6 +982,8 @@ def _write_research_job_artifacts(
     validation: Dict[str, object],
     existing_notes_dir: Optional[Path] = None,
     existing_note_paths: Optional[Sequence[Path]] = None,
+    source_packet_path: Optional[Path] = None,
+    checkpoints_path: Optional[Path] = None,
     validation_report_path: Optional[Path] = None,
 ) -> ResearchJobArtifacts:
     profile_definition = RESEARCH_JOB_PROFILES[job_profile]
@@ -946,11 +1001,22 @@ def _write_research_job_artifacts(
             )
         note_paths.append(note_path)
 
+    resolved_source_packet_path = source_packet_path or (notes_dir / "source-packet.md")
+    _write_source_packet(resolved_source_packet_path, question, job_profile, sources)
+    resolved_checkpoints_path = checkpoints_path or (notes_dir / "checkpoints.json")
+    if not resolved_checkpoints_path.exists():
+        resolved_checkpoints_path.write_text(
+            '{"schema_version": 1, "status": "pending", "steps": []}\n',
+            encoding="utf-8",
+        )
+
     validation_path = validation_report_path or (notes_dir / "validation-report.md")
     _write_validation_report(workspace, validation_path, question, job_profile, sources, validation)
     return ResearchJobArtifacts(
         notes_dir=notes_dir,
         note_paths=note_paths + [validation_path],
+        source_packet_path=resolved_source_packet_path,
+        checkpoints_path=resolved_checkpoints_path,
         validation_report_path=validation_path,
     )
 
@@ -1053,6 +1119,74 @@ def _write_validation_report(
         lines.append("- None")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_source_packet(
+    path: Path,
+    question: str,
+    job_profile: str,
+    sources: Sequence[Dict[str, object]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Research Source Packet",
+        "",
+        f"Question: {question}",
+        f"Job profile: {job_profile}",
+        "",
+        "## Retrieved Sources",
+        "",
+    ]
+    if not sources:
+        lines.append("No sources were selected for this run.")
+    else:
+        for source in sources:
+            lines.extend(
+                [
+                    f"### [{source['citation']}] {source['title']}",
+                    "",
+                    f"- Path: `{source['path']}`",
+                    f"- Source kind: `{source['source_kind']}`",
+                    f"- Score: `{source.get('score', '')}`",
+                    f"- Retrieval: {source.get('retrieval_reason', 'lexical match')}",
+                    f"- Snippet: {source.get('snippet', '')}",
+                    "",
+                ]
+            )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_research_checkpoints(workspace: Workspace, path: Path, plan: ResearchPlan) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    statuses = [step.status for step in plan.steps]
+    if any(status == "failed" for status in statuses):
+        overall_status = "failed"
+    elif any(status == "warning" for status in statuses):
+        overall_status = "warning"
+    elif all(status == "completed" for status in statuses):
+        overall_status = "completed"
+    else:
+        overall_status = "in_progress"
+    payload = {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "question": plan.question,
+        "job_profile": plan.job_profile,
+        "status": overall_status,
+        "steps": [
+            {
+                "step_id": step.step_id,
+                "kind": step.kind,
+                "title": step.title,
+                "status": step.status,
+                "owner": step.owner,
+                "output_path": step.output_path,
+                "depends_on": step.depends_on,
+            }
+            for step in plan.steps
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _default_answer_path(workspace: Workspace, question: str, mode: str) -> Path:

@@ -177,10 +177,12 @@ class ResearchPlan:
     job_profile: str
     report_path: str
     packet_path: str
+    source_packet_path: Optional[str]
     answer_path: str
     slide_path: Optional[str]
     notes_dir: Optional[str]
     note_paths: List[str]
+    checkpoints_path: Optional[str]
     validation_report_path: Optional[str]
     sources: List[Dict[str, object]]
     steps: List[ResearchPlanStep]
@@ -193,10 +195,12 @@ class ResearchPlan:
             "job_profile": self.job_profile,
             "report_path": self.report_path,
             "packet_path": self.packet_path,
+            "source_packet_path": self.source_packet_path,
             "answer_path": self.answer_path,
             "slide_path": self.slide_path,
             "notes_dir": self.notes_dir,
             "note_paths": self.note_paths,
+            "checkpoints_path": self.checkpoints_path,
             "validation_report_path": self.validation_report_path,
             "sources": self.sources,
             "steps": [step.to_dict() for step in self.steps],
@@ -211,10 +215,12 @@ class ResearchPlan:
             job_profile=str(data.get("job_profile", "synthesis-report")),
             report_path=str(data["report_path"]),
             packet_path=str(data["packet_path"]),
+            source_packet_path=str(data["source_packet_path"]) if data.get("source_packet_path") is not None else None,
             answer_path=str(data["answer_path"]),
             slide_path=str(data["slide_path"]) if data.get("slide_path") is not None else None,
             notes_dir=str(data["notes_dir"]) if data.get("notes_dir") is not None else None,
             note_paths=list(data.get("note_paths", [])),
+            checkpoints_path=str(data["checkpoints_path"]) if data.get("checkpoints_path") is not None else None,
             validation_report_path=(
                 str(data["validation_report_path"]) if data.get("validation_report_path") is not None else None
             ),

@@ -555,6 +555,8 @@ def cmd_research(args: argparse.Namespace) -> int:
     print(f"Wrote report to {result.report_path}")
     print(f"Wrote prompt packet to {result.packet_path}")
     print(f"Wrote research notes to {result.notes_dir}")
+    print(f"Wrote source packet to {result.source_packet_path}")
+    print(f"Wrote checkpoints to {result.checkpoints_path}")
     print(f"Wrote validation report to {result.validation_report_path}")
     print(f"Wrote change summary to {result.change_summary_path}")
     print(f"Wrote run manifest to {result.run_manifest_path}")
