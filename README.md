@@ -143,6 +143,12 @@ cognisync research "how do agent loops use memory?" --profile claude --mode memo
 
 It scans the workspace, searches the corpus, renders a cited report, builds a prompt packet, optionally runs the packet through an adapter profile, validates inline citations, and files the resulting answer back into the workspace.
 
+Every research run now also writes:
+
+- a research plan in `.cognisync/plans/`
+- a run manifest in `.cognisync/runs/`
+- enough state to resume execution later without rebuilding the packet
+
 The research surface now supports explicit answer modes:
 
 - `--mode wiki` for reusable filed answers in `wiki/queries/`
@@ -150,6 +156,13 @@ The research surface now supports explicit answer modes:
 - `--mode memo` for tighter research memos in `outputs/reports/`
 - `--mode brief` for concise briefing artifacts in `outputs/reports/`
 - `--mode slides` for Marp-oriented slide-deck answers in `outputs/slides/`
+
+You can also plan first and execute later:
+
+```bash
+cognisync research "map the open questions in this corpus"
+cognisync research --resume latest --profile codex
+```
 
 ## Built-In Adapter Example
 

@@ -97,6 +97,8 @@ Research and scan now persist:
 - `.cognisync/graph.json` for artifact and tag graph state
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
+Research now also writes a dedicated plan in `.cognisync/plans/` and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
+
 ## Traceability
 
 | Task | Command Surface | Output |
