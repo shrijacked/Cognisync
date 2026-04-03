@@ -9,7 +9,7 @@ It covers:
 - contributor workflow
 - automated verification
 - release packaging strategy
-- the rationale for a GitHub-first release strategy through `v0.1.3`
+- the rationale for a GitHub-first release strategy through `v0.1.4`
 
 ## Delivery Flow
 
@@ -26,7 +26,7 @@ flowchart TD
 
 ## Release Decision
 
-Through `v0.1.3`, Cognisync ships as a repository-first release on GitHub.
+Through `v0.1.4`, Cognisync ships as a repository-first release on GitHub.
 
 ### Why GitHub first
 

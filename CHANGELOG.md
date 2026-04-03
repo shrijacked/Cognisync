@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.4 - 2026-04-03
+
 - added stable `.cognisync/sources.json` and `.cognisync/graph.json` manifests so scans persist grouped source and graph state
 - added compile and research run manifests under `.cognisync/runs/`
 - added citation validation for research answers and fail-fast handling for unknown source ids
@@ -23,6 +25,8 @@
 - added workspace change-summary artifacts after `scan`, `ingest`, and `maintain` so corpus deltas are readable without diffing manifests by hand
 - added `review reopen` so dismissed queue items can be restored without editing manifest files by hand
 - added configurable maintenance policy controls in workspace config and one-off CLI overrides for concept support thresholds and deny lists
+- added `review list-dismissed` and `review clear-dismissed` so the dismissal ledger is manageable from the CLI
+- taught `doctor` to surface maintenance policy state and warn when settings are permissive enough to create noisier maintenance runs
 
 ## v0.1.3 - 2026-04-03
 

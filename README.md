@@ -191,6 +191,8 @@ The operator loop now has a review layer too:
 - `cognisync review file-conflict "<subject>"` files a deterministic conflict note under `wiki/queries/conflicts/`
 - `cognisync review dismiss <review-id> --reason "..."` closes a queue item intentionally and persists why it should stay closed
 - `cognisync review reopen <review-id>` removes a dismissal so the underlying item can surface in the queue again
+- `cognisync review list-dismissed` shows the current dismissal ledger
+- `cognisync review clear-dismissed <review-id>` removes one dismissal record without reopening it through a separate queue action
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
@@ -213,6 +215,8 @@ The saved config surface looks like this:
   }
 }
 ```
+
+`cognisync doctor` now reports the active maintenance policy too, and warns when the workspace is configured permissively enough that low-signal concept pages are more likely to slip through maintenance.
 - lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
 
 ```mermaid
@@ -280,7 +284,7 @@ Custom adapter commands can template three useful values into the configured com
 
 ## Release Strategy
 
-`v0.1.3` remains a GitHub-first source release.
+`v0.1.4` remains a GitHub-first source release.
 
 The package metadata is already in place, but the project is staying repo-first for now so the adapter contract, CLI surface, and contributor workflow can stabilize before a PyPI push. The current release policy is documented in [Open Source Operations](docs/open-source-operations.md).
 

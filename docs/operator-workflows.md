@@ -89,11 +89,12 @@ The command:
 2. materializes `.cognisync/review-queue.json`
 3. prints a queue of concept candidates, entity merge suggestions, conflict reviews, and backlink opportunities
 4. can apply deterministic actions directly through subcommands:
-   `accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, and `reopen`
+   `accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, `list-dismissed`, and `clear-dismissed`
 
 The queue is intentionally durable and machine-readable so later automation can consume it directly.
 Dismissed items persist in `.cognisync/review-actions.json` with a reason, and they stay out of future queues and maintenance runs unless that state is edited.
 `reopen` removes a persisted dismissal so the next queue refresh can surface the item again if the underlying condition still exists.
+`list-dismissed` and `clear-dismissed` make the dismissal ledger reviewable without opening the manifest file directly.
 
 ### `maintain`
 
@@ -124,6 +125,10 @@ CLI overrides:
 - `--min-concept-support`
 - `--deny-concept`
 - `--allow-short-concepts-without-entity`
+
+### `doctor`
+
+`doctor` now reports the active maintenance policy as a separate health line. Permissive settings like `min_concept_support=1` or allowing short concepts without entity evidence are surfaced as warnings so operators can spot noisy automation before a maintenance pass expands the graph too aggressively.
 
 ### Change summaries
 
