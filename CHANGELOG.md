@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- expanded `cognisync ui review` with graph overview panels, connected-artifact summaries, richer run history, graph-node drilldowns, run-detail pages, lightweight filters, and a stable `dashboard-state.json` sidecar
+- expanded `cognisync ui review` with graph overview panels, connected-artifact summaries, richer run history, graph-node drilldowns, run-detail pages, artifact previews, lightweight filters, and local review actions when served
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 
