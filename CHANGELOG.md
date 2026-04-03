@@ -13,6 +13,8 @@
 - enriched `.cognisync/graph.json` with entity nodes, concept candidates, and conflict edges, and taught compile planning to use concept candidates beyond explicit tags
 - added `.cognisync/review-queue.json` plus `cognisync review` so graph intelligence becomes a durable operator queue
 - added graph-aware lint checks for missing raw metadata, duplicate concept pages, and conflicting source claims
+- added `.cognisync/review-actions.json`, `review accept-concept`, and `review resolve-merge` so review items can be applied deterministically
+- added `cognisync maintain` to auto-apply open concept and merge actions and persist a maintenance run manifest
 
 ## v0.1.3 - 2026-04-03
 

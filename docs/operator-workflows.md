@@ -9,6 +9,7 @@ It focuses on five commands that make the framework feel like a product rather t
 - `cognisync doctor`
 - `cognisync ingest ...`
 - `cognisync review`
+- `cognisync maintain`
 - `cognisync compile ...`
 - `cognisync research ...`
 
@@ -19,11 +20,13 @@ flowchart TD
     A["doctor validates workspace and adapters"] --> B["ingest adds new raw material into raw/"]
     B --> C["scan updates the deterministic index"]
     C --> D["review surfaces concept, merge, and conflict follow-ups"]
-    D --> E["compile builds a plan and prompt packet"]
-    E --> F["configured LLM profile executes compile work"]
-    F --> G["scan and lint run again on the updated workspace"]
-    G --> H["research turns the refreshed corpus into cited reports and filed answers"]
-    H --> I["run manifests, graph state, and review queue persist the loop"]
+    D --> E["review actions accept concepts or resolve merges"]
+    E --> F["maintain can apply the same actions automatically"]
+    F --> G["compile builds a plan and prompt packet"]
+    G --> H["configured LLM profile executes compile work"]
+    H --> I["scan and lint run again on the updated workspace"]
+    I --> J["research turns the refreshed corpus into cited reports and filed answers"]
+    J --> K["run manifests, graph state, review queue, and review actions persist the loop"]
 ```
 
 ## Command Roles
@@ -87,6 +90,19 @@ The command:
 
 The queue is intentionally durable and machine-readable so later automation can consume it directly.
 
+### `maintain`
+
+Use `maintain` when you want Cognisync to apply the obvious graph-backed follow-up work without a manual review pass.
+
+The command:
+
+1. refreshes the current queue
+2. accepts a bounded number of open concept candidates
+3. resolves a bounded number of entity merge candidates
+4. re-scans the workspace and writes a maintenance run manifest
+
+The current maintenance surface is intentionally conservative. It only applies deterministic concept scaffolds and merge resolutions, then leaves richer synthesis to compile and research.
+
 ### `research`
 
 Use `research` when you want one command to turn a question into reusable workspace artifacts.
@@ -110,6 +126,7 @@ Research and scan now persist:
 - `.cognisync/sources.json` for grouped raw-source manifests
 - `.cognisync/graph.json` for artifact and tag graph state
 - `.cognisync/review-queue.json` for graph follow-up work
+- `.cognisync/review-actions.json` for accepted concept pages and resolved merge decisions
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
 Research now also writes a dedicated plan in `.cognisync/plans/` and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
@@ -127,6 +144,8 @@ The scan and compile loop also uses a richer graph substrate now:
 - repeated headings, entity mentions, and tags can all feed concept-page planning
 - concept creation is no longer limited to explicit tag overlap
 - `cognisync review` turns that graph state into a usable operator queue
+- resolved merge actions collapse future entity nodes onto a preferred label
+- `cognisync maintain` turns the deterministic parts of that queue into a one-command maintenance pass
 
 ## Traceability
 
@@ -135,5 +154,6 @@ The scan and compile loop also uses a richer graph substrate now:
 | O6 | `doctor` | readiness report |
 | O7 | `ingest` | richer raw source artifacts plus updated index and grouped source manifest |
 | O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups |
-| O9 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
-| O10 | `research` | cited report, prompt packet, validated answer artifact, run manifest |
+| O9 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest |
+| O10 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
+| O11 | `research` | cited report, prompt packet, validated answer artifact, run manifest |
