@@ -3,7 +3,9 @@
 ## Unreleased
 
 - added `cognisync export jsonl` so research runs can be emitted as portable JSONL dataset artifacts
+- added `cognisync export training-bundle` so research runs can be packaged as label-bearing training datasets
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
+- added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
 - added `research --job-profile` so question-driven runs can scaffold profile-specific intermediate notes and validation reports
 - added source-packet and checkpoints artifacts inside each research job workspace so resumed runs keep a fuller execution bundle
 - added source-backed assertion nodes and artifact support edges to `.cognisync/graph.json`

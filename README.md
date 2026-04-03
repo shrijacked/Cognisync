@@ -61,7 +61,8 @@ workspace/
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
 - Deterministic corpus change summaries after scan, ingest, maintenance, and research runs
-- Export bridges for JSONL research datasets and presentation bundles
+- Export bridges for JSONL research datasets, training bundles, and presentation bundles
+- Evaluation reports over persisted research runs
 - Research job notes and validation reports under `outputs/reports/research-jobs/`
 - Markdown-aware search over `raw/` and `wiki/`
 - Compile planner for missing summaries, concept pages, and repair work
@@ -216,7 +217,9 @@ The operator loop now has a review layer too:
 - `cognisync review clear-dismissed <review-id>` removes one dismissal record without reopening it through a separate queue action
 - `cognisync review export` writes a machine-readable artifact with the open queue, dismissal ledger, and review action state for other agents or tools
 - `cognisync export jsonl` writes research-run records into `outputs/reports/exports/` as a portable JSONL dataset artifact
+- `cognisync export training-bundle` writes a finetuning-friendly dataset bundle with labels derived from validation and conflict checks
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
+- `cognisync eval research` scores persisted research runs and writes a scorecard report plus machine-readable payload
 - `cognisync ui review` builds a lightweight browser dashboard from the same review state, with graph and run drilldowns, artifact previews, source coverage, compile health, run timelines, concept-graph views, and local review actions when served
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
@@ -284,12 +287,16 @@ Once a workspace has real runs in `.cognisync/runs/`, Cognisync can export that 
 
 ```bash
 cognisync export jsonl
+cognisync export training-bundle
 cognisync export presentations
+cognisync eval research
 ```
 
 - `export jsonl` writes one JSONL row per research run with the question, run metadata, cited report text, prompt packet text, filed answer text, slide path, and validation state
 - exported JSONL rows now also include the research job profile, note paths, source-packet path, checkpoints path, and validation report path
+- `export training-bundle` writes `dataset.jsonl` plus `manifest.json` with validation-derived labels like citation failures, unsupported-claim failures, and conflict gates
 - `export presentations` copies generated slide decks and their companion reports or filed answers into a timestamped bundle with a stable `manifest.json`
+- `eval research` writes a Markdown scorecard and JSON payload with pass/fail counts, profile breakdowns, and validation-label tallies across persisted research runs
 - both export surfaces write into `outputs/reports/exports/`
 - scanner ignores these bundles so dataset and sharing artifacts do not re-enter retrieval
 

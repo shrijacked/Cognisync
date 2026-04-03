@@ -121,7 +121,9 @@ Use `export` when you want the same workspace state to leave Cognisync in a port
 Supported paths in this release:
 
 - `cognisync export jsonl`
+- `cognisync export training-bundle`
 - `cognisync export presentations`
+- `cognisync eval research`
 
 `export jsonl` walks `.cognisync/runs/`, selects research runs, and writes a JSONL dataset artifact under `outputs/reports/exports/` with:
 
@@ -133,6 +135,20 @@ Supported paths in this release:
 - note paths, source-packet path, checkpoints path, validation-report path, and paths back to the original workspace artifacts
 
 `export presentations` copies slide decks plus companion reports and answers into a timestamped bundle under `outputs/reports/exports/` and writes a stable `manifest.json` for downstream viewers or sharing flows.
+
+`export training-bundle` writes a timestamped bundle under `outputs/reports/exports/` with:
+
+- `dataset.jsonl` records for each research run
+- validation-derived labels such as citation failures, unsupported-claim failures, and conflict gates
+- a bundle `manifest.json` with record counts, label counts, and run-status counts
+
+`eval research` reads the same persisted research runs and writes a Markdown scorecard plus JSON payload with:
+
+- validation pass and failure counts
+- warning-bearing run counts
+- average source and citation usage
+- run-status and job-profile breakdowns
+- validation-label tallies for downstream evaluation tracking
 
 The scanner ignores `outputs/reports/exports/` so these bridge artifacts never pollute search or retrieval.
 
