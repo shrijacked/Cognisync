@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import defaultdict
 import json
 from pathlib import Path
 import shutil
@@ -24,14 +25,26 @@ class PresentationBundleResult:
     presentation_count: int
 
 
-def export_research_jsonl(workspace: Workspace, output_file: Optional[Path] = None) -> ExportResult:
+@dataclass(frozen=True)
+class TrainingBundleResult:
+    directory: Path
+    dataset_path: Path
+    manifest_path: Path
+    record_count: int
+
+
+def collect_research_export_records(workspace: Workspace) -> List[Dict[str, object]]:
     records: List[Dict[str, object]] = []
     for manifest_path in sorted(workspace.runs_dir.glob("*.json")):
         manifest = read_json_manifest(manifest_path)
         if str(manifest.get("run_kind", "")) != "research":
             continue
         records.append(_build_research_export_record(workspace, manifest_path, manifest))
+    return records
 
+
+def export_research_jsonl(workspace: Workspace, output_file: Optional[Path] = None) -> ExportResult:
+    records = collect_research_export_records(workspace)
     destination = output_file or _next_jsonl_export_path(workspace)
     destination.parent.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(record, sort_keys=True) for record in records]
@@ -106,6 +119,70 @@ def export_presentations_bundle(
     )
 
 
+def export_training_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+) -> TrainingBundleResult:
+    destination = output_dir or _next_training_bundle_dir(workspace)
+    destination.mkdir(parents=True, exist_ok=True)
+    dataset_path = destination / "dataset.jsonl"
+    manifest_path = destination / "manifest.json"
+
+    records = collect_research_export_records(workspace)
+    status_counts: Dict[str, int] = defaultdict(int)
+    label_counts: Dict[str, int] = defaultdict(int)
+    enriched_records: List[Dict[str, object]] = []
+    for record in records:
+        labels = derive_research_labels(record)
+        enriched = dict(record)
+        enriched["labels"] = labels
+        enriched["source_count"] = len(list(record.get("sources", [])))
+        enriched["citation_count"] = len(list(dict(record.get("validation", {})).get("used", [])))
+        enriched["error_count"] = len(list(dict(record.get("validation", {})).get("errors", [])))
+        enriched["warning_count"] = len(list(dict(record.get("validation", {})).get("warnings", [])))
+        enriched_records.append(enriched)
+        status_counts[str(record.get("status", ""))] += 1
+        for label, value in labels.items():
+            if isinstance(value, bool) and value:
+                label_counts[label] += 1
+
+    dataset_lines = [json.dumps(record, sort_keys=True) for record in enriched_records]
+    dataset_path.write_text("\n".join(dataset_lines) + ("\n" if dataset_lines else ""), encoding="utf-8")
+    manifest_payload = {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "record_count": len(enriched_records),
+        "dataset_file": dataset_path.name,
+        "status_counts": dict(sorted(status_counts.items())),
+        "label_counts": dict(sorted(label_counts.items())),
+    }
+    manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return TrainingBundleResult(
+        directory=destination,
+        dataset_path=dataset_path,
+        manifest_path=manifest_path,
+        record_count=len(enriched_records),
+    )
+
+
+def derive_research_labels(record: Dict[str, object]) -> Dict[str, object]:
+    validation = dict(record.get("validation", {}))
+    checks = dict(validation.get("checks", {}))
+    citation_check = dict(checks.get("citations", {}))
+    answer_lint = dict(checks.get("answer_lint", {}))
+    unsupported_claims = dict(checks.get("unsupported_claims", {}))
+    source_conflicts = dict(checks.get("source_conflicts", {}))
+    return {
+        "validation_passed": bool(validation.get("passed", False)),
+        "has_warnings": bool(validation.get("warnings", [])),
+        "has_errors": bool(validation.get("errors", [])),
+        "has_citation_errors": bool(citation_check.get("errors", [])),
+        "has_answer_lint_errors": bool(answer_lint.get("errors", [])),
+        "has_unsupported_claims": bool(unsupported_claims.get("errors", [])),
+        "has_conflict_gate": bool(source_conflicts.get("errors", [])),
+    }
+
+
 def _build_research_export_record(
     workspace: Workspace,
     manifest_path: Path,
@@ -174,5 +251,11 @@ def _next_jsonl_export_path(workspace: Workspace) -> Path:
 
 def _next_presentation_bundle_dir(workspace: Workspace) -> Path:
     directory = workspace.export_artifacts_dir / f"presentations-{_timestamp_slug()}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _next_training_bundle_dir(workspace: Workspace) -> Path:
+    directory = workspace.export_artifacts_dir / f"training-bundle-{_timestamp_slug()}"
     directory.mkdir(parents=True, exist_ok=True)
     return directory

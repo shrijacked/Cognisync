@@ -15,7 +15,8 @@ from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import MaintenancePolicy, save_config
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
-from cognisync.exports import export_presentations_bundle, export_research_jsonl
+from cognisync.evaluation import evaluate_research_runs
+from cognisync.exports import export_presentations_bundle, export_research_jsonl, export_training_bundle
 from cognisync.ingest import (
     IngestError,
     ingest_batch,
@@ -224,6 +225,43 @@ def cmd_export_presentations(args: argparse.Namespace) -> int:
     print(f"Wrote presentation export to {result.directory}")
     print(f"Wrote presentation manifest to {result.manifest_path}")
     print(f"Bundled {result.presentation_count} presentation(s).")
+    return 0
+
+
+def cmd_export_training_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_training_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote training export to {result.directory}")
+    print(f"Wrote training dataset to {result.dataset_path}")
+    print(f"Wrote training manifest to {result.manifest_path}")
+    print(f"Bundled {result.record_count} research run(s).")
+    return 0
+
+
+def cmd_eval_research(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_file = None
+    payload_file = None
+    if args.output_file:
+        output_file = Path(args.output_file).expanduser()
+        if not output_file.is_absolute():
+            output_file = workspace.root / output_file
+        output_file = output_file.resolve()
+    if args.payload_file:
+        payload_file = Path(args.payload_file).expanduser()
+        if not payload_file.is_absolute():
+            payload_file = workspace.root / payload_file
+        payload_file = payload_file.resolve()
+    result = evaluate_research_runs(workspace, output_file=output_file, payload_file=payload_file)
+    print(f"Wrote research evaluation report to {result.report_path}")
+    print(f"Wrote research evaluation payload to {result.payload_path}")
+    print(f"Evaluated {result.run_count} research run(s).")
     return 0
 
 
@@ -873,6 +911,24 @@ def build_parser() -> argparse.ArgumentParser:
     export_presentations_parser.add_argument("--workspace", default=".")
     export_presentations_parser.add_argument("--output-dir", default=None)
     export_presentations_parser.set_defaults(func=cmd_export_presentations)
+
+    export_training_parser = export_subparsers.add_parser(
+        "training-bundle", help="Export research runs as a training-ready dataset bundle"
+    )
+    export_training_parser.add_argument("--workspace", default=".")
+    export_training_parser.add_argument("--output-dir", default=None)
+    export_training_parser.set_defaults(func=cmd_export_training_bundle)
+
+    eval_parser = subparsers.add_parser("eval", help="Evaluate persisted Cognisync artifacts")
+    eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
+
+    eval_research_parser = eval_subparsers.add_parser(
+        "research", help="Score persisted research runs and write an evaluation report"
+    )
+    eval_research_parser.add_argument("--workspace", default=".")
+    eval_research_parser.add_argument("--output-file", default=None)
+    eval_research_parser.add_argument("--payload-file", default=None)
+    eval_research_parser.set_defaults(func=cmd_eval_research)
 
     ui_parser = subparsers.add_parser("ui", help="Generate or serve lightweight Cognisync web interfaces")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
