@@ -118,11 +118,11 @@ class ReviewQueueTests(unittest.TestCase):
             workspace.initialize(name="Accept Concept Test")
 
             (workspace.raw_dir / "retrieval.md").write_text(
-                "# Retrieval Systems\n\n## Vector Databases\n\nVector Databases improve recall.\n",
+                "# Retrieval Systems\n\n## Vector Databases\n\nAgent memory uses vector databases.\n",
                 encoding="utf-8",
             )
             (workspace.raw_dir / "memory.md").write_text(
-                "# Memory Systems\n\n## Vector Databases\n\nVector Databases help persistence.\n",
+                "# Memory Systems\n\n## Vector Databases\n\nAgent memory uses vector databases.\n",
                 encoding="utf-8",
             )
 
@@ -138,6 +138,9 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertIn("# Vector Databases", concept_text)
             self.assertIn("raw/retrieval.md", concept_text)
             self.assertIn("raw/memory.md", concept_text)
+            self.assertIn("## Grounded Assertions", concept_text)
+            self.assertIn("agent memory uses vector databases", concept_text.lower())
+            self.assertIn("Support count: `2`", concept_text)
 
             actions = json.loads((workspace.state_dir / "review-actions.json").read_text(encoding="utf-8"))
             self.assertIn("vector-databases", actions["accepted_concepts"])

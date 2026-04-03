@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.config import MaintenancePolicy
+from cognisync.graph_intelligence import extract_claim_tuples
 from cognisync.linter import lint_snapshot
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.review_queue import build_review_queue
@@ -368,6 +369,7 @@ def _render_concept_page(workspace: Workspace, snapshot: IndexSnapshot, item: Di
     title = str(item["title"]).removeprefix("Create concept page for ")
     target_path = workspace.root / str(item["target_path"])
     related_paths = [str(path) for path in list(item.get("related_paths", []))]
+    grounded_assertion_lines = _grounded_assertion_lines(workspace, snapshot, target_path, title, related_paths)
     lines = [
         "---",
         f"title: {title}",
@@ -384,6 +386,8 @@ def _render_concept_page(workspace: Workspace, snapshot: IndexSnapshot, item: Di
         "",
     ]
     lines.extend(_support_source_lines(workspace, snapshot, target_path, related_paths))
+    lines.extend(["## Grounded Assertions", ""])
+    lines.extend(grounded_assertion_lines)
     lines.extend(
         [
             "## Review Metadata",
@@ -477,6 +481,59 @@ def _support_source_lines(
         if snippet:
             lines.append(f"  - Evidence: {snippet}")
     lines.append("")
+    return lines
+
+
+def _grounded_assertion_lines(
+    workspace: Workspace,
+    snapshot: IndexSnapshot,
+    target_path: Path,
+    title: str,
+    related_paths: List[str],
+) -> List[str]:
+    concept_label = canonicalize_review_label(title)
+    support: Dict[Tuple[str, str, str], List[str]] = {}
+    for path in related_paths:
+        source_path = workspace.root / path
+        if not source_path.exists():
+            continue
+        text = source_path.read_text(encoding="utf-8", errors="ignore")
+        for subject, verb, obj in extract_claim_tuples(text):
+            labels = {canonicalize_review_label(subject), canonicalize_review_label(obj)}
+            if concept_label not in labels:
+                continue
+            support.setdefault((subject, verb, obj), [])
+            if path not in support[(subject, verb, obj)]:
+                support[(subject, verb, obj)].append(path)
+
+    if not support:
+        return ["No grounded assertions were extracted for this concept yet.", ""]
+
+    lines: List[str] = []
+    ranked_assertions = sorted(
+        support.items(),
+        key=lambda item: (-len(item[1]), item[0][0], item[0][1], item[0][2]),
+    )
+    for (subject, verb, obj), support_paths in ranked_assertions:
+        claim = f"{subject} {verb} {obj}"
+        display_claim = claim[:1].upper() + claim[1:]
+        support_links: List[str] = []
+        for support_path in support_paths:
+            artifact = snapshot.artifact_by_path(support_path)
+            source_path = workspace.root / support_path
+            support_links.append(
+                f"[{artifact.title}]({relative_markdown_path(target_path, source_path)}) (`{support_path}`)"
+            )
+        lines.extend(
+            [
+                f"### {display_claim}",
+                "",
+                f"- Claim: `{claim}`",
+                f"- Support count: `{len(support_paths)}`",
+                f"- Supported by: {', '.join(support_links)}",
+                "",
+            ]
+        )
     return lines
 
 
