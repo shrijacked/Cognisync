@@ -99,6 +99,13 @@ Research and scan now persist:
 
 Research now also writes a dedicated plan in `.cognisync/plans/` and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
 
+Before a research run is considered complete, Cognisync now checks:
+
+- citation validity against the retrieved source set
+- unsupported uncited claims in the answer body
+- answer lint, such as missing top-level headings
+- conflicting source statements, which are recorded as warnings when the answer does not acknowledge them
+
 ## Traceability
 
 | Task | Command Surface | Output |

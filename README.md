@@ -149,6 +149,13 @@ Every research run now also writes:
 - a run manifest in `.cognisync/runs/`
 - enough state to resume execution later without rebuilding the packet
 
+Research verification is now stricter too:
+
+- unknown citations fail the run
+- uncited narrative claims fail the run
+- malformed answers, such as missing top-level headings, fail the run
+- conflicting source statements are surfaced as run warnings and downgrade the run to `completed_with_warnings`
+
 The research surface now supports explicit answer modes:
 
 - `--mode wiki` for reusable filed answers in `wiki/queries/`

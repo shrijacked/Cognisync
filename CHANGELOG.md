@@ -9,6 +9,7 @@
 - improved deterministic retrieval with source-type-aware ranking and surfaced retrieval reasons in rendered artifacts
 - added remote Git repo ingest plus `ingest urls` and `ingest sitemap` so larger web source sets can land through the CLI without wrapper scripts
 - added persisted research plans and `research --resume` so question-driven jobs can be planned first and executed or retried later
+- added stronger research verification for unsupported claims, answer lint, and conflicting source statements
 
 ## v0.1.3 - 2026-04-03
 
