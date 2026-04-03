@@ -25,8 +25,13 @@ def write_workspace_manifests(workspace: Workspace, snapshot: IndexSnapshot) -> 
     return source_path, graph_path
 
 
-def write_run_manifest(workspace: Workspace, run_kind: str, payload: Dict[str, object]) -> Path:
-    run_id = _run_manifest_name(run_kind, payload)
+def write_run_manifest(
+    workspace: Workspace,
+    run_kind: str,
+    payload: Dict[str, object],
+    run_id: Optional[str] = None,
+) -> Path:
+    run_id = run_id or _run_manifest_name(run_kind, payload)
     path = workspace.runs_dir / f"{run_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -37,6 +42,10 @@ def write_run_manifest(workspace: Workspace, run_kind: str, payload: Dict[str, o
     manifest.update(payload)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+def read_json_manifest(path: Path) -> Dict[str, object]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def build_source_manifest(snapshot: IndexSnapshot) -> Dict[str, object]:

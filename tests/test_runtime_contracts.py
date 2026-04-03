@@ -218,6 +218,103 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertTrue(manifest["validation"]["passed"])
             self.assertEqual(manifest["citations"]["used"], ["S1"])
             self.assertEqual(manifest["answer_path"], "outputs/reports/how-do-agent-loops-use-memory-memo.md")
+            self.assertEqual(manifest["status"], "completed")
+            self.assertIn("plan_path", manifest)
+
+    def test_research_without_profile_writes_a_resumable_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Plan Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--mode",
+                        "memo",
+                        "how do agent loops use memory",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("No profile provided", stdout.getvalue())
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            self.assertEqual(len(run_manifests), 1)
+            manifest = json.loads(run_manifests[0].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "planned")
+            self.assertEqual(manifest["attempt_count"], 0)
+            self.assertTrue(manifest["resume_supported"])
+            self.assertTrue((workspace.root / manifest["plan_path"]).exists())
+            self.assertTrue((workspace.root / manifest["packet_path"]).exists())
+
+            plan_text = (workspace.root / manifest["plan_path"]).read_text(encoding="utf-8")
+            self.assertIn("Research Plan", plan_text)
+            self.assertIn("Execute the prompt packet through the selected adapter profile.", plan_text)
+
+    def test_research_resume_latest_reuses_existing_packet_and_updates_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Resume Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(["research", "--workspace", str(root), "how do agent loops use memory"]),
+                0,
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["researcher"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Resumed Answer\\n\\nAgent loops use structured memory. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--resume",
+                        "latest",
+                        "--profile",
+                        "researcher",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Resumed research run", stdout.getvalue())
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            self.assertEqual(len(run_manifests), 1)
+            manifest = json.loads(run_manifests[0].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(manifest["attempt_count"], 1)
+            self.assertEqual(manifest["resume_count"], 1)
+            self.assertTrue(manifest["validation"]["passed"])
+            answer_path = workspace.root / manifest["answer_path"]
+            self.assertTrue(answer_path.exists())
+            self.assertIn("Resumed Answer", answer_path.read_text(encoding="utf-8"))
 
     def test_research_fails_when_answer_cites_unknown_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from cognisync.config import default_config, load_config, save_config
-from cognisync.types import CompilePlan, IndexSnapshot
+from cognisync.types import IndexSnapshot
 
 
 class Workspace:
@@ -123,7 +123,7 @@ class Workspace:
         data = json.loads(self.index_path.read_text(encoding="utf-8"))
         return IndexSnapshot.from_dict(data)
 
-    def write_plan_json(self, name: str, plan: CompilePlan) -> Path:
+    def write_plan_json(self, name: str, plan) -> Path:
         path = self.plans_dir / f"{name}.json"
         path.write_text(json.dumps(plan.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
         return path

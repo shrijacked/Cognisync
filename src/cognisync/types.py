@@ -142,6 +142,68 @@ class CompilePlan:
 
 
 @dataclass
+class ResearchPlanStep:
+    step_id: str
+    kind: str
+    title: str
+    status: str
+    detail: str
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "ResearchPlanStep":
+        return cls(
+            step_id=str(data["step_id"]),
+            kind=str(data["kind"]),
+            title=str(data["title"]),
+            status=str(data["status"]),
+            detail=str(data.get("detail", "")),
+        )
+
+
+@dataclass
+class ResearchPlan:
+    generated_at: str
+    question: str
+    mode: str
+    report_path: str
+    packet_path: str
+    answer_path: str
+    slide_path: Optional[str]
+    sources: List[Dict[str, object]]
+    steps: List[ResearchPlanStep]
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "generated_at": self.generated_at,
+            "question": self.question,
+            "mode": self.mode,
+            "report_path": self.report_path,
+            "packet_path": self.packet_path,
+            "answer_path": self.answer_path,
+            "slide_path": self.slide_path,
+            "sources": self.sources,
+            "steps": [step.to_dict() for step in self.steps],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "ResearchPlan":
+        return cls(
+            generated_at=str(data["generated_at"]),
+            question=str(data["question"]),
+            mode=str(data["mode"]),
+            report_path=str(data["report_path"]),
+            packet_path=str(data["packet_path"]),
+            answer_path=str(data["answer_path"]),
+            slide_path=str(data["slide_path"]) if data.get("slide_path") is not None else None,
+            sources=list(data.get("sources", [])),
+            steps=[ResearchPlanStep.from_dict(item) for item in data.get("steps", [])],
+        )
+
+
+@dataclass
 class LintIssue:
     issue_id: str
     kind: str

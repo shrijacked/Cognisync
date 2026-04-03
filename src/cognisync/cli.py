@@ -241,6 +241,12 @@ def cmd_query(args: argparse.Namespace) -> int:
 def cmd_research(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     output_file = Path(args.output_file).resolve() if args.output_file else None
+    if args.resume and args.question:
+        print("Pass either a new question or --resume, not both.", file=sys.stderr)
+        return 2
+    if not args.resume and not args.question:
+        print("A question is required unless you pass --resume.", file=sys.stderr)
+        return 2
     try:
         result = run_research_cycle(
             workspace,
@@ -250,13 +256,18 @@ def cmd_research(args: argparse.Namespace) -> int:
             output_file=output_file,
             slides=args.slides,
             mode=args.mode,
+            resume=args.resume,
         )
     except ResearchError as error:
         print(str(error), file=sys.stderr)
         return 2
 
+    if result.resumed:
+        print(f"Resumed research run from {result.run_manifest_path}")
+    print(f"Wrote research plan to {result.plan_path}")
     print(f"Wrote report to {result.report_path}")
     print(f"Wrote prompt packet to {result.packet_path}")
+    print(f"Wrote run manifest to {result.run_manifest_path}")
     if result.slide_path is not None:
         print(f"Wrote slide deck to {result.slide_path}")
     if result.answer_path is not None:
@@ -454,8 +465,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     research_parser.add_argument("--limit", type=int, default=5)
     research_parser.add_argument("--profile", default=None)
+    research_parser.add_argument("--resume", default=None, help="Resume a research run from a manifest path or `latest`.")
     research_parser.add_argument("--output-file", default=None)
-    research_parser.add_argument("question")
+    research_parser.add_argument("question", nargs="?")
     research_parser.set_defaults(func=cmd_research)
 
     run_parser = subparsers.add_parser("run-packet", help="Execute a prompt packet through a configured LLM profile")
