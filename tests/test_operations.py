@@ -116,6 +116,28 @@ class OperationsTests(unittest.TestCase):
             self.assertIn("FAIL", stdout.getvalue())
             self.assertIn("profile:missing", stdout.getvalue())
 
+    def test_doctor_surfaces_maintenance_policy_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Doctor Policy Test")
+
+            config = load_config(workspace.config_path)
+            config.maintenance_policy.min_concept_support = 1
+            config.maintenance_policy.require_entity_evidence_for_short_concepts = False
+            config.maintenance_policy.deny_concepts = ["agents"]
+            save_config(workspace.config_path, config)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["doctor", "--workspace", str(root), "--strict"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("maintenance_policy", stdout.getvalue())
+            self.assertIn("WARN", stdout.getvalue())
+            self.assertIn("min_support=1", stdout.getvalue())
+            self.assertIn("deny_concepts=1", stdout.getvalue())
+
     def test_ingest_file_and_pdf_copy_assets_into_raw(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

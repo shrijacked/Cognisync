@@ -30,8 +30,10 @@ from cognisync.maintenance import (
     MaintenanceError,
     accept_concept_candidate,
     apply_backlink_suggestion,
+    clear_dismissed_review_item,
     dismiss_review_item,
     file_conflict_review,
+    list_dismissed_review_items,
     reopen_review_item,
     resolve_entity_merge,
     run_maintenance_cycle,
@@ -205,6 +207,37 @@ def cmd_review_reopen(args: argparse.Namespace) -> int:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Reopened review item {args.review_id} ({entry['kind']})")
+    return 0
+
+
+def cmd_review_list_dismissed(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    entries = list_dismissed_review_items(workspace)
+    if not entries:
+        print("No dismissed review items found.")
+        return 0
+    print(f"Dismissed review items: {len(entries)}")
+    print("")
+    for entry in entries:
+        print(f"{entry['review_id']} [{entry['kind']}]")
+        reason = str(entry.get("reason", "")).strip()
+        if reason:
+            print(f"reason: {reason}")
+        path = str(entry.get("path", "")).strip()
+        if path:
+            print(f"path: {path}")
+        print("")
+    return 0
+
+
+def cmd_review_clear_dismissed(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        entry = clear_dismissed_review_item(workspace, args.review_id)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Cleared dismissed review item {args.review_id} ({entry['kind']})")
     return 0
 
 
@@ -655,6 +688,17 @@ def build_parser() -> argparse.ArgumentParser:
     review_reopen_parser.add_argument("review_id")
     review_reopen_parser.add_argument("--workspace", default=".")
     review_reopen_parser.set_defaults(func=cmd_review_reopen)
+
+    review_list_dismissed_parser = review_subparsers.add_parser("list-dismissed", help="List dismissed review items")
+    review_list_dismissed_parser.add_argument("--workspace", default=".")
+    review_list_dismissed_parser.set_defaults(func=cmd_review_list_dismissed)
+
+    review_clear_dismissed_parser = review_subparsers.add_parser(
+        "clear-dismissed", help="Remove a dismissal record so the review item can surface again"
+    )
+    review_clear_dismissed_parser.add_argument("review_id")
+    review_clear_dismissed_parser.add_argument("--workspace", default=".")
+    review_clear_dismissed_parser.set_defaults(func=cmd_review_clear_dismissed)
 
     maintain_parser = subparsers.add_parser("maintain", help="Apply graph-driven maintenance actions automatically")
     maintain_parser.add_argument("--workspace", default=".")

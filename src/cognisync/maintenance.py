@@ -218,6 +218,30 @@ def reopen_review_item(workspace: Workspace, review_id: str) -> Dict[str, object
     return dict(entry)
 
 
+def list_dismissed_review_items(workspace: Workspace) -> List[Dict[str, object]]:
+    actions = read_review_actions(workspace)
+    entries = []
+    for review_id, entry in sorted(dict(actions.get("dismissed_reviews", {})).items()):
+        payload = dict(entry)
+        payload["review_id"] = str(review_id)
+        entries.append(payload)
+    return entries
+
+
+def clear_dismissed_review_item(workspace: Workspace, review_id: str) -> Dict[str, object]:
+    actions = read_review_actions(workspace)
+    dismissed = dict(actions.get("dismissed_reviews", {}))
+    entry = dismissed.get(review_id)
+    if entry is None:
+        raise MaintenanceError(f"No dismissed review item found for '{review_id}'.")
+
+    del dismissed[review_id]
+    actions["dismissed_reviews"] = dismissed
+    write_review_actions(workspace, actions)
+    _refresh_workspace_state(workspace)
+    return dict(entry)
+
+
 def run_maintenance_cycle(
     workspace: Workspace,
     max_concepts: int = 10,

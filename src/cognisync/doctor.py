@@ -90,6 +90,7 @@ def run_doctor(workspace: Workspace) -> List[DoctorCheck]:
         )
 
     checks.extend(_profile_checks(config))
+    checks.extend(_maintenance_policy_checks(config))
     return checks
 
 
@@ -143,6 +144,35 @@ def _profile_checks(config: CognisyncConfig) -> List[DoctorCheck]:
                 )
             )
     return checks
+
+
+def _maintenance_policy_checks(config: CognisyncConfig) -> List[DoctorCheck]:
+    policy = config.maintenance_policy
+    detail = (
+        "Maintenance policy: "
+        f"min_support={policy.min_concept_support}, "
+        f"require_entity_for_short={str(policy.require_entity_evidence_for_short_concepts).lower()}, "
+        f"deny_concepts={len(policy.deny_concepts)}."
+    )
+    if policy.min_concept_support <= 1 or not policy.require_entity_evidence_for_short_concepts:
+        return [
+            DoctorCheck(
+                name="maintenance_policy",
+                status="warn",
+                detail=detail,
+                remedy=(
+                    "Raise `min_concept_support` or require entity evidence for short concepts "
+                    "if maintenance is creating low-signal concept pages."
+                ),
+            )
+        ]
+    return [
+        DoctorCheck(
+            name="maintenance_policy",
+            status="pass",
+            detail=detail,
+        )
+    ]
 
 
 def render_doctor_report(checks: List[DoctorCheck]) -> str:
