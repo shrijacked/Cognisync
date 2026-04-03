@@ -4,7 +4,7 @@
 
 This document describes the day-to-day operational loop for Cognisync.
 
-It focuses on six commands that make the framework feel like a product rather than a toolkit:
+It focuses on seven commands that make the framework feel like a product rather than a toolkit:
 
 - `cognisync doctor`
 - `cognisync ingest ...`
@@ -107,10 +107,10 @@ The command:
 
 1. refreshes the workspace manifests if needed
 2. writes a standalone HTML dashboard into `outputs/reports/review-ui/`
-3. writes a stable `review-export.json` sidecar in the same directory
+3. writes stable `review-export.json` and `dashboard-state.json` sidecars in the same directory
 4. can optionally serve that directory locally with `--serve`
 
-The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, so the filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, recent change summaries, and run history from `.cognisync/runs/`. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
 
 ### `maintain`
 
@@ -215,7 +215,7 @@ The scan and compile loop also uses a richer graph substrate now:
 | O6 | `doctor` | readiness report |
 | O7 | `ingest` | richer raw source artifacts, updated index and grouped source manifest, change summary artifact |
 | O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups, plus export artifacts for other tools |
-| O9 | `ui review` | browser-ready dashboard bundle plus stable review export sidecar |
+| O9 | `ui review` | browser-ready dashboard bundle with review, graph, and run-history state |
 | O10 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
 | O11 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
 | O12 | `research` | cited report, prompt packet, validated answer artifact, run manifest, change summary artifact |

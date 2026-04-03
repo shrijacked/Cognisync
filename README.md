@@ -203,7 +203,8 @@ The operator loop now has a review layer too:
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
 - review exports land under `outputs/reports/review-exports/` and are ignored by the scanner so operator telemetry does not leak back into retrieval
-- the review dashboard lands under `outputs/reports/review-ui/`, writes a stable `review-export.json` sidecar, and can be served with `cognisync ui review --serve`
+- the review dashboard lands under `outputs/reports/review-ui/`, writes stable `review-export.json` and `dashboard-state.json` sidecars, and can be served with `cognisync ui review --serve`
+- the dashboard now surfaces graph overview data from `.cognisync/graph.json`, connected artifact summaries, recent change summaries, and richer run history from `.cognisync/runs/`
 
 Maintenance policy is now configurable too. Cognisync reads defaults from `.cognisync/config.json` and lets you override them per run:
 
