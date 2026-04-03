@@ -92,6 +92,40 @@ class GraphIntelligenceTests(unittest.TestCase):
             self.assertEqual(edge["subject"], "the deployment model")
             self.assertEqual(edge["verb"], "is")
 
+    def test_graph_manifest_materializes_source_backed_assertions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Graph Assertion Test")
+
+            (workspace.raw_dir / "memory-a.md").write_text(
+                "# Memory A\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory-b.md").write_text(
+                "# Memory B\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            graph_payload = json.loads((workspace.state_dir / "graph.json").read_text(encoding="utf-8"))
+
+            assertion_nodes = [node for node in graph_payload["nodes"] if node["kind"] == "assertion"]
+            self.assertTrue(assertion_nodes)
+            assertion = next(
+                node
+                for node in assertion_nodes
+                if node["subject"] == "agent memory" and node["verb"] == "uses" and node["object"] == "vector databases"
+            )
+            self.assertEqual(assertion["support_count"], 2)
+
+            support_edges = [
+                edge
+                for edge in graph_payload["edges"]
+                if edge["kind"] == "asserts" and edge["target"] == assertion["id"]
+            ]
+            self.assertEqual({edge["source"] for edge in support_edges}, {"raw/memory-a.md", "raw/memory-b.md"})
+
 
 if __name__ == "__main__":
     unittest.main()

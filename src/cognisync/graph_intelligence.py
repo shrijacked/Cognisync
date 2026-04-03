@@ -133,6 +133,7 @@ def build_concept_candidates(snapshot: IndexSnapshot) -> List[Dict[str, object]]
 def build_graph_semantics(workspace: Workspace, snapshot: IndexSnapshot) -> Dict[str, List[Dict[str, object]]]:
     entity_support: Dict[str, Dict[str, object]] = {}
     artifact_mentions: Dict[str, Set[str]] = defaultdict(set)
+    assertion_support: Dict[Tuple[str, str, str], Set[str]] = defaultdict(set)
     conflict_edges: List[Dict[str, object]] = []
     conflict_seen: Set[Tuple[str, str, str, str]] = set()
     review_actions = read_review_actions(workspace)
@@ -169,6 +170,7 @@ def build_graph_semantics(workspace: Workspace, snapshot: IndexSnapshot) -> Dict
 
         for subject, verb, obj in extract_claim_tuples(text):
             claim_support[(subject, verb)][obj].add(artifact.path)
+            assertion_support[(subject, verb, obj)].add(artifact.path)
 
     nodes: List[Dict[str, object]] = []
     edges: List[Dict[str, object]] = []
@@ -187,6 +189,24 @@ def build_graph_semantics(workspace: Workspace, snapshot: IndexSnapshot) -> Dict
     for artifact_path, entity_slugs in sorted(artifact_mentions.items()):
         for slug in sorted(entity_slugs):
             edges.append({"source": artifact_path, "target": f"entity:{slug}", "kind": "mentions"})
+
+    for (subject, verb, obj), support_paths in sorted(assertion_support.items()):
+        assertion_slug = slugify(f"{subject}-{verb}-{obj}")
+        assertion_id = f"assertion:{assertion_slug}"
+        nodes.append(
+            {
+                "id": assertion_id,
+                "kind": "assertion",
+                "title": f"{subject} {verb} {obj}",
+                "subject": subject,
+                "verb": verb,
+                "object": obj,
+                "support_count": len(support_paths),
+                "support_paths": sorted(support_paths),
+            }
+        )
+        for support_path in sorted(support_paths):
+            edges.append({"source": support_path, "target": assertion_id, "kind": "asserts"})
 
     for candidate in build_concept_candidates(snapshot):
         nodes.append(
