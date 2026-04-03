@@ -89,12 +89,13 @@ The command:
 2. materializes `.cognisync/review-queue.json`
 3. prints a queue of concept candidates, entity merge suggestions, conflict reviews, and backlink opportunities
 4. can apply deterministic actions directly through subcommands:
-   `accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, `list-dismissed`, and `clear-dismissed`
+   `accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, `list-dismissed`, `clear-dismissed`, and `export`
 
 The queue is intentionally durable and machine-readable so later automation can consume it directly.
 Dismissed items persist in `.cognisync/review-actions.json` with a reason, and they stay out of future queues and maintenance runs unless that state is edited.
 `reopen` removes a persisted dismissal so the next queue refresh can surface the item again if the underlying condition still exists.
 `list-dismissed` and `clear-dismissed` make the dismissal ledger reviewable without opening the manifest file directly.
+`export` writes a machine-readable snapshot under `outputs/reports/review-exports/` with the open queue, dismissal ledger, and review-action state, and those artifacts are ignored by the scanner so they do not pollute retrieval.
 
 ### `maintain`
 
@@ -198,7 +199,7 @@ The scan and compile loop also uses a richer graph substrate now:
 | --- | --- | --- |
 | O6 | `doctor` | readiness report |
 | O7 | `ingest` | richer raw source artifacts, updated index and grouped source manifest, change summary artifact |
-| O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups |
+| O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups, plus export artifacts for other tools |
 | O9 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
 | O10 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
 | O11 | `research` | cited report, prompt packet, validated answer artifact, run manifest, change summary artifact |
