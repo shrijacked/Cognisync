@@ -110,7 +110,7 @@ The command:
 3. writes stable `review-export.json` and `dashboard-state.json` sidecars in the same directory
 4. can optionally serve that directory locally with `--serve`
 
-The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, recent change summaries, and run history from `.cognisync/runs/`. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, recent change summaries, and run history from `.cognisync/runs/`. It also writes static graph-node and run-detail pages plus lightweight browser-side filters, so operators can drill into the current graph and run ledger without leaving the file-native workflow. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
 
 ### `maintain`
 
