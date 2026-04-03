@@ -432,6 +432,67 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertNotIn(review_id, actions["dismissed_reviews"])
             self.assertIn("Cleared dismissed review item", stdout.getvalue())
 
+    def test_review_export_writes_machine_readable_artifact_with_queue_and_dismissals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Review Export Test")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            review_id = "conflict:raw-cloud.md:raw-local.md:the deployment model:is"
+            self.assertEqual(
+                main(["review", "dismiss", review_id, "--reason", "tracking this manually", "--workspace", str(root)]),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["review", "export", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            export_files = sorted((workspace.outputs_dir / "reports" / "review-exports").glob("review-export-*.json"))
+            self.assertTrue(export_files)
+
+            payload = json.loads(export_files[-1].read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["summary"]["dismissed_item_count"], 1)
+            self.assertGreaterEqual(payload["summary"]["open_item_count"], 1)
+            self.assertIn("dismissed_reviews", payload["action_state"])
+            self.assertEqual(
+                payload["action_state"]["dismissed_reviews"][review_id]["reason"],
+                "tracking this manually",
+            )
+            self.assertTrue(any(item["kind"] == "backlink_suggestion" for item in payload["open_items"]))
+            self.assertFalse(any(item["review_id"] == review_id for item in payload["open_items"]))
+            self.assertEqual(payload["dismissed_items"][0]["review_id"], review_id)
+            self.assertIn("Wrote review export to", stdout.getvalue())
+
     def test_maintain_applies_review_actions_and_writes_run_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

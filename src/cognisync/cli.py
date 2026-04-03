@@ -41,6 +41,7 @@ from cognisync.maintenance import (
 from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.research import ResearchError, run_research_cycle
+from cognisync.review_exports import write_review_export
 from cognisync.review_queue import build_review_queue, render_review_queue
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
@@ -140,6 +141,22 @@ def cmd_review(args: argparse.Namespace) -> int:
     queue = build_review_queue(workspace, snapshot)
     print(render_review_queue(queue, limit=args.limit))
     print(f"Wrote review queue to {workspace.review_queue_manifest_path}")
+    return 0
+
+
+def cmd_review_export(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    snapshot = _ensure_snapshot(workspace)
+    output_file = None
+    if args.output_file:
+        output_file = Path(args.output_file).expanduser()
+        if not output_file.is_absolute():
+            output_file = workspace.root / output_file
+        output_file = output_file.resolve()
+    result = write_review_export(workspace, snapshot, output_file=output_file)
+    print(f"Wrote review export to {result.path}")
+    print(f"Open review items: {result.item_count}")
+    print(f"Dismissed review items: {result.dismissed_count}")
     return 0
 
 
@@ -700,6 +717,13 @@ def build_parser() -> argparse.ArgumentParser:
     review_clear_dismissed_parser.add_argument("review_id")
     review_clear_dismissed_parser.add_argument("--workspace", default=".")
     review_clear_dismissed_parser.set_defaults(func=cmd_review_clear_dismissed)
+
+    review_export_parser = review_subparsers.add_parser(
+        "export", help="Write a machine-readable review artifact for other tools and agents"
+    )
+    review_export_parser.add_argument("--workspace", default=".")
+    review_export_parser.add_argument("--output-file", default=None)
+    review_export_parser.set_defaults(func=cmd_review_export)
 
     maintain_parser = subparsers.add_parser("maintain", help="Apply graph-driven maintenance actions automatically")
     maintain_parser.add_argument("--workspace", default=".")

@@ -56,7 +56,7 @@ def scan_workspace(workspace: Workspace) -> IndexSnapshot:
 def _build_inventory(root: Path) -> Dict[str, Path]:
     inventory: Dict[str, Path] = {}
     allowed_roots = {"raw", "wiki", "outputs", "prompts"}
-    ignored_roots = {"outputs/reports/change-summaries"}
+    ignored_roots = {"outputs/reports/change-summaries", "outputs/reports/review-exports"}
     for path in root.rglob("*"):
         if not path.is_file():
             continue

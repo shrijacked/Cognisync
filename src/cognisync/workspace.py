@@ -68,6 +68,10 @@ class Workspace:
     def change_summaries_dir(self) -> Path:
         return self.outputs_dir / "reports" / "change-summaries"
 
+    @property
+    def review_exports_dir(self) -> Path:
+        return self.outputs_dir / "reports" / "review-exports"
+
     def initialize(self, name: Optional[str] = None, force: bool = False) -> None:
         directories = [
             self.raw_dir,
