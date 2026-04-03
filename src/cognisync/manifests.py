@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from cognisync.corpus import classify_source_kind, infer_extraction_status, pick_primary_artifact, source_group_key
+from cognisync.graph_intelligence import build_graph_semantics
 from cognisync.types import ArtifactRecord, IndexSnapshot
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
@@ -19,7 +20,7 @@ def write_workspace_manifests(workspace: Workspace, snapshot: IndexSnapshot) -> 
         encoding="utf-8",
     )
     graph_path.write_text(
-        json.dumps(build_graph_manifest(snapshot), indent=2, sort_keys=True),
+        json.dumps(build_graph_manifest(workspace, snapshot), indent=2, sort_keys=True),
         encoding="utf-8",
     )
     return source_path, graph_path
@@ -89,7 +90,7 @@ def build_source_manifest(snapshot: IndexSnapshot) -> Dict[str, object]:
     }
 
 
-def build_graph_manifest(snapshot: IndexSnapshot) -> Dict[str, object]:
+def build_graph_manifest(workspace: Workspace, snapshot: IndexSnapshot) -> Dict[str, object]:
     nodes = []
     edges = []
     tag_nodes = set()
@@ -129,6 +130,26 @@ def build_graph_manifest(snapshot: IndexSnapshot) -> Dict[str, object]:
                 continue
             edges.append({"source": artifact.path, "target": link.resolved_path, "kind": "link"})
             seen_edges.add(edge)
+
+    semantics = build_graph_semantics(workspace, snapshot)
+    seen_node_ids = {node["id"] for node in nodes}
+    for node in semantics["nodes"]:
+        if node["id"] in seen_node_ids:
+            continue
+        nodes.append(node)
+        seen_node_ids.add(node["id"])
+    for edge in semantics["edges"]:
+        edge_key = (
+            str(edge["source"]),
+            str(edge["target"]),
+            str(edge["kind"]),
+            str(edge.get("subject", "")),
+            str(edge.get("verb", "")),
+        )
+        if edge_key in seen_edges:
+            continue
+        edges.append(edge)
+        seen_edges.add(edge_key)
 
     return {
         "schema_version": 1,

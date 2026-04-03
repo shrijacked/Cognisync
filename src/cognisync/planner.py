@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Dict, List
 
+from cognisync.graph_intelligence import build_concept_candidates
 from cognisync.linter import lint_snapshot
 from cognisync.types import CompilePlan, IndexSnapshot, PlanTask
-from cognisync.utils import slugify, utc_timestamp
+from cognisync.utils import utc_timestamp
 
 
 def build_compile_plan(snapshot: IndexSnapshot) -> CompilePlan:
@@ -29,23 +30,20 @@ def build_compile_plan(snapshot: IndexSnapshot) -> CompilePlan:
             )
         )
 
-    tag_usage: Dict[str, List[str]] = defaultdict(list)
-    for artifact in snapshot.artifacts:
-        for tag in artifact.tags:
-            tag_usage[tag].append(artifact.path)
-
-    for tag, supporting_paths in sorted(tag_usage.items()):
-        output_path = f"wiki/concepts/{slugify(tag)}.md"
-        if len(set(supporting_paths)) < 2 or output_path in existing_paths:
+    for candidate in build_concept_candidates(snapshot):
+        output_path = str(candidate["output_path"])
+        if output_path in existing_paths or candidate.get("resolved"):
             continue
         tasks.append(
             PlanTask(
-                task_id=f"concept:{slugify(tag)}",
+                task_id=str(candidate["id"]),
                 kind="create_concept_page",
-                title=f"Create concept page for {tag}",
-                inputs=sorted(set(supporting_paths)),
+                title=f"Create concept page for {candidate['title']}",
+                inputs=list(candidate["support_paths"]),
                 output_path=output_path,
-                rationale="The concept appears across multiple sources but has no dedicated concept page.",
+                rationale=(
+                    "This concept candidate appears across multiple sources but has no dedicated concept page."
+                ),
                 prompt_hint="Synthesize the recurring concept, cite supporting sources, and add backlinks.",
             )
         )
