@@ -124,6 +124,8 @@ Supported paths in this release:
 - `cognisync export training-bundle`
 - `cognisync export presentations`
 - `cognisync eval research`
+- `cognisync synth qa`
+- `cognisync synth contrastive`
 
 `export jsonl` walks `.cognisync/runs/`, selects research runs, and writes a JSONL dataset artifact under `outputs/reports/exports/` with:
 
@@ -149,6 +151,10 @@ Supported paths in this release:
 - average source and citation usage
 - run-status and job-profile breakdowns
 - validation-label tallies for downstream evaluation tracking
+
+`synth qa` reads the assertion graph and writes deterministic question-answer pairs with source ids and support paths.
+
+`synth contrastive` reads the same assertion support paths and writes positive/negative retrieval pairs for downstream ranking work.
 
 The scanner ignores `outputs/reports/exports/` so these bridge artifacts never pollute search or retrieval.
 

@@ -220,6 +220,7 @@ The operator loop now has a review layer too:
 - `cognisync export training-bundle` writes a finetuning-friendly dataset bundle with labels derived from validation and conflict checks
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and writes a scorecard report plus machine-readable payload
+- `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
 - `cognisync ui review` builds a lightweight browser dashboard from the same review state, with graph and run drilldowns, artifact previews, source coverage, compile health, run timelines, concept-graph views, and local review actions when served
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
@@ -290,6 +291,8 @@ cognisync export jsonl
 cognisync export training-bundle
 cognisync export presentations
 cognisync eval research
+cognisync synth qa
+cognisync synth contrastive
 ```
 
 - `export jsonl` writes one JSONL row per research run with the question, run metadata, cited report text, prompt packet text, filed answer text, slide path, and validation state
@@ -297,6 +300,8 @@ cognisync eval research
 - `export training-bundle` writes `dataset.jsonl` plus `manifest.json` with validation-derived labels like citation failures, unsupported-claim failures, and conflict gates
 - `export presentations` copies generated slide decks and their companion reports or filed answers into a timestamped bundle with a stable `manifest.json`
 - `eval research` writes a Markdown scorecard and JSON payload with pass/fail counts, profile breakdowns, and validation-label tallies across persisted research runs
+- `synth qa` writes assertion-grounded question-answer pairs from `.cognisync/graph.json`
+- `synth contrastive` writes positive/negative retrieval pairs from assertion support paths
 - both export surfaces write into `outputs/reports/exports/`
 - scanner ignores these bundles so dataset and sharing artifacts do not re-enter retrieval
 

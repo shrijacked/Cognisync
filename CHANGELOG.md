@@ -6,6 +6,7 @@
 - added `cognisync export training-bundle` so research runs can be packaged as label-bearing training datasets
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
+- added `cognisync synth qa` and `cognisync synth contrastive` so the assertion graph can emit deterministic synthetic QA and retrieval data
 - added `research --job-profile` so question-driven runs can scaffold profile-specific intermediate notes and validation reports
 - added source-packet and checkpoints artifacts inside each research job workspace so resumed runs keep a fuller execution bundle
 - added source-backed assertion nodes and artifact support edges to `.cognisync/graph.json`
