@@ -151,6 +151,7 @@ Batch ingest accepts a JSON list or an object with an `items` list:
 The query and research outputs are now more citation-friendly by default:
 
 - reports render an evidence summary with inline source ids like `[S1]`
+- reports now render `Fact Blocks` that separate source-backed claims from the looser narrative sections
 - source blocks include path, source kind, score, retrieval reason, snippet, and embedded-image hints
 - compile packets include input-context excerpts so external agents see richer raw context up front
 - research runs validate inline citations and persist their status into `.cognisync/runs/`

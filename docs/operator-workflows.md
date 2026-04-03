@@ -196,6 +196,8 @@ The command:
 4. optionally executes the packet through a configured adapter profile
 5. validates citations and files the resulting answer back into the workspace
 
+Reports and prompt packets now also include `Fact Blocks`, which aggregate source-backed claims from the retrieved hits before the broader narrative sections. This helps distinguish grounded assertions from the surrounding synthesis.
+
 Research supports explicit output modes:
 
 - `wiki` for `wiki/queries/`
