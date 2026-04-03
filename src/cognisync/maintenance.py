@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from cognisync.change_summaries import capture_change_state, write_change_summary
+from cognisync.config import MaintenancePolicy
 from cognisync.linter import lint_snapshot
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.review_queue import build_review_queue
@@ -203,13 +204,29 @@ def dismiss_review_item(workspace: Workspace, review_id: str, reason: str) -> Di
     return dict(actions["dismissed_reviews"][review_id])
 
 
+def reopen_review_item(workspace: Workspace, review_id: str) -> Dict[str, object]:
+    actions = read_review_actions(workspace)
+    dismissed = dict(actions.get("dismissed_reviews", {}))
+    entry = dismissed.get(review_id)
+    if entry is None:
+        raise MaintenanceError(f"No dismissed review item found for '{review_id}'.")
+
+    del dismissed[review_id]
+    actions["dismissed_reviews"] = dismissed
+    write_review_actions(workspace, actions)
+    _refresh_workspace_state(workspace)
+    return dict(entry)
+
+
 def run_maintenance_cycle(
     workspace: Workspace,
     max_concepts: int = 10,
     max_merges: int = 10,
     max_backlinks: int = 10,
     max_conflicts: int = 10,
+    policy: MaintenancePolicy | None = None,
 ) -> MaintenanceResult:
+    active_policy = policy or MaintenancePolicy()
     previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
     snapshot = _refresh_workspace_state(workspace)
     queue = build_review_queue(workspace, snapshot)
@@ -225,7 +242,7 @@ def run_maintenance_cycle(
     concept_slugs = [
         str(item["slug"])
         for item in queue["items"]
-        if item["kind"] == "concept_candidate" and _should_auto_accept_concept(item)
+        if item["kind"] == "concept_candidate" and _should_auto_accept_concept(item, active_policy)
     ][:max_concepts]
     accepted_paths = [accept_concept_candidate(workspace, slug) for slug in concept_slugs]
 
@@ -293,15 +310,34 @@ def _refresh_workspace_state(workspace: Workspace) -> IndexSnapshot:
     return snapshot
 
 
-def _should_auto_accept_concept(item: Dict[str, object]) -> bool:
+def _should_auto_accept_concept(item: Dict[str, object], policy: MaintenancePolicy) -> bool:
     title = str(item.get("title", "")).removeprefix("Create concept page for ").strip()
     words = [word for word in title.split() if word]
     evidence_kinds = {str(kind) for kind in list(item.get("evidence_kinds", []))}
-    if len(words) >= 2 and "entity" in evidence_kinds:
+    support_count = max(0, int(item.get("support_count", 0)))
+    if support_count < max(1, int(policy.min_concept_support)):
+        return False
+    if _is_denied_concept(item, title, policy):
+        return False
+    if len(words) >= 2 and "entity" in evidence_kinds and policy.require_entity_evidence_for_short_concepts:
+        return True
+    if len(words) >= 2 and not policy.require_entity_evidence_for_short_concepts:
         return True
     if len(words) >= 3:
         return True
     return False
+
+
+def _is_denied_concept(item: Dict[str, object], title: str, policy: MaintenancePolicy) -> bool:
+    deny_tokens = {
+        canonicalize_review_label(value)
+        for value in policy.deny_concepts
+        if canonicalize_review_label(value)
+    }
+    deny_slugs = {slugify(value) for value in policy.deny_concepts if str(value).strip()}
+    candidate_slug = str(item.get("slug", "")).strip()
+    title_canonical = canonicalize_review_label(title)
+    return candidate_slug in deny_slugs or title_canonical in deny_tokens
 
 
 def _render_concept_page(workspace: Workspace, snapshot: IndexSnapshot, item: Dict[str, object]) -> str:

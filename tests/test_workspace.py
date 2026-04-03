@@ -35,6 +35,9 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(config.workspace_name, "Research Garden")
             self.assertEqual(config.summary_directory, "wiki/sources")
             self.assertEqual(config.concept_directory, "wiki/concepts")
+            self.assertEqual(config.maintenance_policy.min_concept_support, 2)
+            self.assertTrue(config.maintenance_policy.require_entity_evidence_for_short_concepts)
+            self.assertEqual(config.maintenance_policy.deny_concepts, [])
 
     def test_initialize_creates_navigation_pages_without_broken_links(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -33,6 +33,26 @@ class LLMProfile:
 
 
 @dataclass
+class MaintenancePolicy:
+    min_concept_support: int = 2
+    require_entity_evidence_for_short_concepts: bool = True
+    deny_concepts: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "MaintenancePolicy":
+        return cls(
+            min_concept_support=max(1, int(data.get("min_concept_support", 2))),
+            require_entity_evidence_for_short_concepts=bool(
+                data.get("require_entity_evidence_for_short_concepts", True)
+            ),
+            deny_concepts=sorted({str(item).strip() for item in list(data.get("deny_concepts", [])) if str(item).strip()}),
+        )
+
+
+@dataclass
 class CognisyncConfig:
     schema_version: int = 1
     workspace_name: str = "Cognisync Workspace"
@@ -41,10 +61,12 @@ class CognisyncConfig:
     query_directory: str = "wiki/queries"
     report_directory: str = "outputs/reports"
     slide_directory: str = "outputs/slides"
+    maintenance_policy: MaintenancePolicy = field(default_factory=MaintenancePolicy)
     llm_profiles: Dict[str, LLMProfile] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         data = asdict(self)
+        data["maintenance_policy"] = self.maintenance_policy.to_dict()
         data["llm_profiles"] = {name: profile.to_dict() for name, profile in self.llm_profiles.items()}
         return data
 
@@ -58,6 +80,7 @@ class CognisyncConfig:
             query_directory=str(data.get("query_directory", "wiki/queries")),
             report_directory=str(data.get("report_directory", "outputs/reports")),
             slide_directory=str(data.get("slide_directory", "outputs/slides")),
+            maintenance_policy=MaintenancePolicy.from_dict(dict(data.get("maintenance_policy", {}))),
             llm_profiles={
                 str(name): LLMProfile.from_dict(profile)
                 for name, profile in dict(data.get("llm_profiles", {})).items()

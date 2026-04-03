@@ -72,6 +72,7 @@ def _build_concept_candidate_items(snapshot: IndexSnapshot, actions: Dict[str, o
                 "status": "open",
                 "title": f"Create concept page for {candidate['title']}",
                 "slug": candidate["slug"],
+                "support_count": int(candidate["support_count"]),
                 "target_path": candidate["output_path"],
                 "path": candidate["output_path"],
                 "evidence_kinds": list(candidate.get("evidence_kinds", [])),

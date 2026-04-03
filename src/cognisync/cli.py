@@ -12,7 +12,7 @@ from cognisync.adapters import (
 )
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.compile_flow import CompileError, run_compile_cycle
-from cognisync.config import save_config
+from cognisync.config import MaintenancePolicy, save_config
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
 from cognisync.ingest import (
@@ -32,6 +32,7 @@ from cognisync.maintenance import (
     apply_backlink_suggestion,
     dismiss_review_item,
     file_conflict_review,
+    reopen_review_item,
     resolve_entity_merge,
     run_maintenance_cycle,
 )
@@ -196,8 +197,21 @@ def cmd_review_dismiss(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review_reopen(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        entry = reopen_review_item(workspace, args.review_id)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Reopened review item {args.review_id} ({entry['kind']})")
+    return 0
+
+
 def cmd_maintain(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
+    config = workspace.load_config()
+    policy = _resolve_maintenance_policy(config.maintenance_policy, args)
     try:
         result = run_maintenance_cycle(
             workspace,
@@ -205,6 +219,7 @@ def cmd_maintain(args: argparse.Namespace) -> int:
             max_merges=args.max_merges,
             max_backlinks=args.max_backlinks,
             max_conflicts=args.max_conflicts,
+            policy=policy,
         )
     except MaintenanceError as error:
         print(str(error), file=sys.stderr)
@@ -352,6 +367,29 @@ def cmd_ingest_batch(args: argparse.Namespace) -> int:
         print(f"- {result.kind}: {result.path}")
     print(f"Wrote change summary to {change_summary.path}")
     return 0
+
+
+def _resolve_maintenance_policy(base_policy: MaintenancePolicy, args: argparse.Namespace) -> MaintenancePolicy:
+    deny_concepts = set(base_policy.deny_concepts)
+    for value in list(getattr(args, "deny_concept", []) or []):
+        deny_concepts.update(_split_csv_items(value))
+    min_concept_support = (
+        int(args.min_concept_support)
+        if getattr(args, "min_concept_support", None) is not None
+        else int(base_policy.min_concept_support)
+    )
+    require_entity_evidence = bool(base_policy.require_entity_evidence_for_short_concepts)
+    if getattr(args, "allow_short_concepts_without_entity", False):
+        require_entity_evidence = False
+    return MaintenancePolicy(
+        min_concept_support=max(1, min_concept_support),
+        require_entity_evidence_for_short_concepts=require_entity_evidence,
+        deny_concepts=sorted(deny_concepts),
+    )
+
+
+def _split_csv_items(value: str) -> list[str]:
+    return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
 def cmd_query(args: argparse.Namespace) -> int:
@@ -613,12 +651,20 @@ def build_parser() -> argparse.ArgumentParser:
     review_dismiss_parser.add_argument("--workspace", default=".")
     review_dismiss_parser.set_defaults(func=cmd_review_dismiss)
 
+    review_reopen_parser = review_subparsers.add_parser("reopen", help="Reopen a previously dismissed review item")
+    review_reopen_parser.add_argument("review_id")
+    review_reopen_parser.add_argument("--workspace", default=".")
+    review_reopen_parser.set_defaults(func=cmd_review_reopen)
+
     maintain_parser = subparsers.add_parser("maintain", help="Apply graph-driven maintenance actions automatically")
     maintain_parser.add_argument("--workspace", default=".")
     maintain_parser.add_argument("--max-concepts", type=int, default=10)
     maintain_parser.add_argument("--max-merges", type=int, default=10)
     maintain_parser.add_argument("--max-backlinks", type=int, default=10)
     maintain_parser.add_argument("--max-conflicts", type=int, default=10)
+    maintain_parser.add_argument("--min-concept-support", type=int, default=None)
+    maintain_parser.add_argument("--deny-concept", action="append", default=[])
+    maintain_parser.add_argument("--allow-short-concepts-without-entity", action="store_true")
     maintain_parser.set_defaults(func=cmd_maintain)
 
     query_parser = subparsers.add_parser("query", help="Search the workspace and render a research brief")
