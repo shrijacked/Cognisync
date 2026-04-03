@@ -4,11 +4,12 @@
 
 This document describes the day-to-day operational loop for Cognisync.
 
-It focuses on five commands that make the framework feel like a product rather than a toolkit:
+It focuses on six commands that make the framework feel like a product rather than a toolkit:
 
 - `cognisync doctor`
 - `cognisync ingest ...`
 - `cognisync review`
+- `cognisync ui review`
 - `cognisync maintain`
 - `cognisync compile ...`
 - `cognisync research ...`
@@ -21,13 +22,14 @@ flowchart TD
     B --> C["scan updates the deterministic index"]
     C --> D["review surfaces concept, merge, and conflict follow-ups"]
     D --> E["review actions accept concepts or resolve merges"]
-    E --> F["maintain can apply the same actions automatically"]
-    F --> G["change summaries capture corpus deltas"]
-    G --> H["compile builds a plan and prompt packet"]
-    H --> I["configured LLM profile executes compile work"]
-    I --> J["scan and lint run again on the updated workspace"]
-    J --> K["research turns the refreshed corpus into cited reports and filed answers"]
-    K --> L["run manifests, graph state, review queue, review actions, and change summaries persist the loop"]
+    E --> F["ui review renders a browser dashboard from the same manifests"]
+    F --> G["maintain can apply the same actions automatically"]
+    G --> H["change summaries capture corpus deltas"]
+    H --> I["compile builds a plan and prompt packet"]
+    I --> J["configured LLM profile executes compile work"]
+    J --> K["scan and lint run again on the updated workspace"]
+    K --> L["research turns the refreshed corpus into cited reports and filed answers"]
+    L --> M["run manifests, graph state, review queue, review actions, and change summaries persist the loop"]
 ```
 
 ## Command Roles
@@ -96,6 +98,19 @@ Dismissed items persist in `.cognisync/review-actions.json` with a reason, and t
 `reopen` removes a persisted dismissal so the next queue refresh can surface the item again if the underlying condition still exists.
 `list-dismissed` and `clear-dismissed` make the dismissal ledger reviewable without opening the manifest file directly.
 `export` writes a machine-readable snapshot under `outputs/reports/review-exports/` with the open queue, dismissal ledger, and review-action state, and those artifacts are ignored by the scanner so they do not pollute retrieval.
+
+### `ui review`
+
+Use `ui review` when you want a lightweight browser surface over the same review state.
+
+The command:
+
+1. refreshes the workspace manifests if needed
+2. writes a standalone HTML dashboard into `outputs/reports/review-ui/`
+3. writes a stable `review-export.json` sidecar in the same directory
+4. can optionally serve that directory locally with `--serve`
+
+The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, so the filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
 
 ### `maintain`
 
@@ -200,6 +215,7 @@ The scan and compile loop also uses a richer graph substrate now:
 | O6 | `doctor` | readiness report |
 | O7 | `ingest` | richer raw source artifacts, updated index and grouped source manifest, change summary artifact |
 | O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups, plus export artifacts for other tools |
-| O9 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
-| O10 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
-| O11 | `research` | cited report, prompt packet, validated answer artifact, run manifest, change summary artifact |
+| O9 | `ui review` | browser-ready dashboard bundle plus stable review export sidecar |
+| O10 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
+| O11 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
+| O12 | `research` | cited report, prompt packet, validated answer artifact, run manifest, change summary artifact |

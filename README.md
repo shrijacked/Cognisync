@@ -36,7 +36,8 @@ workspace/
 ├── outputs/
 │   ├── reports/
 │   │   ├── change-summaries/
-│   │   └── review-exports/
+│   │   ├── review-exports/
+│   │   └── review-ui/
 │   └── slides/
 ├── prompts/
 └── .cognisync/
@@ -196,11 +197,13 @@ The operator loop now has a review layer too:
 - `cognisync review list-dismissed` shows the current dismissal ledger
 - `cognisync review clear-dismissed <review-id>` removes one dismissal record without reopening it through a separate queue action
 - `cognisync review export` writes a machine-readable artifact with the open queue, dismissal ledger, and review action state for other agents or tools
+- `cognisync ui review` builds a lightweight browser dashboard from the same review state and can optionally serve it locally
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
 - review exports land under `outputs/reports/review-exports/` and are ignored by the scanner so operator telemetry does not leak back into retrieval
+- the review dashboard lands under `outputs/reports/review-ui/`, writes a stable `review-export.json` sidecar, and can be served with `cognisync ui review --serve`
 
 Maintenance policy is now configurable too. Cognisync reads defaults from `.cognisync/config.json` and lets you override them per run:
 
