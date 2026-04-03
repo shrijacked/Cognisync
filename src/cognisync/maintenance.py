@@ -27,6 +27,8 @@ class MaintenanceError(RuntimeError):
 class MaintenanceResult:
     accepted_concept_paths: List[Path]
     resolved_merge_keys: List[str]
+    applied_backlink_targets: List[str]
+    filed_conflict_keys: List[str]
     remaining_review_count: int
     issue_count: int
     run_manifest_path: Path
@@ -48,7 +50,11 @@ def accept_concept_candidate(workspace: Workspace, slug: str) -> Path:
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(_render_concept_page(workspace, snapshot, item), encoding="utf-8")
-    _ensure_concepts_navigation_link(workspace, str(item["target_path"]), str(item["title"]).removeprefix("Create concept page for "))
+    _ensure_navigation_link(
+        workspace,
+        str(item["target_path"]),
+        str(item["title"]).removeprefix("Create concept page for "),
+    )
 
     actions = read_review_actions(workspace)
     actions["accepted_concepts"][slug] = {
@@ -93,7 +99,7 @@ def resolve_entity_merge(workspace: Workspace, canonical_label: str, preferred_l
             encoding="utf-8",
         )
 
-    _ensure_concepts_navigation_link(workspace, workspace.relative_path(target_path), chosen_label)
+    _ensure_navigation_link(workspace, workspace.relative_path(target_path), chosen_label)
 
     actions = read_review_actions(workspace)
     actions["resolved_entity_merges"][normalized] = {
@@ -107,14 +113,87 @@ def resolve_entity_merge(workspace: Workspace, canonical_label: str, preferred_l
     return target_path
 
 
+def apply_backlink_suggestion(workspace: Workspace, target_path: str) -> Path:
+    snapshot = _refresh_workspace_state(workspace)
+    queue = build_review_queue(workspace, snapshot)
+    item = next(
+        (
+            candidate
+            for candidate in queue["items"]
+            if candidate["kind"] == "backlink_suggestion" and candidate["path"] == target_path
+        ),
+        None,
+    )
+    if item is None:
+        raise MaintenanceError(f"No open backlink suggestion found for '{target_path}'.")
+
+    artifact = snapshot.artifact_by_path(target_path)
+    navigation_path = _ensure_navigation_link(workspace, target_path, artifact.title)
+
+    actions = read_review_actions(workspace)
+    actions["applied_backlinks"][target_path] = {
+        "navigation_path": target_path if navigation_path is None else workspace.relative_path(navigation_path),
+        "related_paths": list(item.get("related_paths", [])),
+        "applied_at": utc_timestamp(),
+    }
+    write_review_actions(workspace, actions)
+    _refresh_workspace_state(workspace)
+    return navigation_path if navigation_path is not None else workspace.root / target_path
+
+
+def file_conflict_review(workspace: Workspace, subject: str) -> Path:
+    snapshot = _refresh_workspace_state(workspace)
+    queue = build_review_queue(workspace, snapshot)
+    normalized_subject = " ".join(subject.lower().split())
+    matches = [
+        item
+        for item in queue["items"]
+        if item["kind"] == "conflict_review" and " ".join(str(item["subject"]).lower().split()) == normalized_subject
+    ]
+    if not matches:
+        raise MaintenanceError(f"No open conflict review found for '{subject}'.")
+    if len(matches) > 1:
+        raise MaintenanceError(f"Multiple conflict reviews matched '{subject}'. Use a more specific selector.")
+
+    item = matches[0]
+    note_path = workspace.wiki_dir / "queries" / "conflicts" / f"{slugify(str(item['subject']))}.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    if not note_path.exists():
+        note_path.write_text(_render_conflict_note(workspace, snapshot, item), encoding="utf-8")
+
+    _ensure_navigation_link(workspace, workspace.relative_path(note_path), f"Conflict: {str(item['subject']).title()}")
+
+    actions = read_review_actions(workspace)
+    actions["filed_conflicts"][str(item["conflict_key"])] = {
+        "subject": str(item["subject"]),
+        "verb": str(item["verb"]),
+        "path": workspace.relative_path(note_path),
+        "related_paths": list(item.get("related_paths", [])),
+        "filed_at": utc_timestamp(),
+    }
+    write_review_actions(workspace, actions)
+    _refresh_workspace_state(workspace)
+    return note_path
+
+
 def run_maintenance_cycle(
     workspace: Workspace,
     max_concepts: int = 10,
     max_merges: int = 10,
+    max_backlinks: int = 10,
+    max_conflicts: int = 10,
 ) -> MaintenanceResult:
     snapshot = _refresh_workspace_state(workspace)
     queue = build_review_queue(workspace, snapshot)
 
+    backlink_targets = [
+        str(item["path"]) for item in queue["items"] if item["kind"] == "backlink_suggestion"
+    ][:max_backlinks]
+    for target in backlink_targets:
+        apply_backlink_suggestion(workspace, target)
+
+    snapshot = _refresh_workspace_state(workspace)
+    queue = build_review_queue(workspace, snapshot)
     concept_slugs = [
         str(item["slug"]) for item in queue["items"] if item["kind"] == "concept_candidate"
     ][:max_concepts]
@@ -128,6 +207,20 @@ def run_maintenance_cycle(
     for merge_key in merge_keys:
         resolve_entity_merge(workspace, merge_key)
 
+    snapshot = _refresh_workspace_state(workspace)
+    queue = build_review_queue(workspace, snapshot)
+    conflict_subjects = [
+        str(item["subject"]) for item in queue["items"] if item["kind"] == "conflict_review"
+    ][:max_conflicts]
+    filed_conflict_keys: List[str] = []
+    for subject in conflict_subjects:
+        note_path = file_conflict_review(workspace, subject)
+        actions = read_review_actions(workspace)
+        for key, entry in dict(actions.get("filed_conflicts", {})).items():
+            if dict(entry).get("path") == workspace.relative_path(note_path):
+                filed_conflict_keys.append(str(key))
+                break
+
     final_snapshot = _refresh_workspace_state(workspace)
     final_queue = build_review_queue(workspace, final_snapshot)
     issues = lint_snapshot(final_snapshot, workspace=workspace)
@@ -140,6 +233,10 @@ def run_maintenance_cycle(
             "accepted_concept_paths": [workspace.relative_path(path) for path in accepted_paths],
             "resolved_merge_count": len(merge_keys),
             "resolved_merge_keys": merge_keys,
+            "applied_backlink_count": len(backlink_targets),
+            "applied_backlink_targets": backlink_targets,
+            "filed_conflict_count": len(filed_conflict_keys),
+            "filed_conflict_keys": filed_conflict_keys,
             "remaining_review_count": len(final_queue["items"]),
             "issue_count": len(issues),
             "status": "completed",
@@ -148,6 +245,8 @@ def run_maintenance_cycle(
     return MaintenanceResult(
         accepted_concept_paths=accepted_paths,
         resolved_merge_keys=merge_keys,
+        applied_backlink_targets=backlink_targets,
+        filed_conflict_keys=filed_conflict_keys,
         remaining_review_count=len(final_queue["items"]),
         issue_count=len(issues),
         run_manifest_path=run_manifest_path,
@@ -226,6 +325,37 @@ def _render_merge_resolution_page(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_conflict_note(workspace: Workspace, snapshot: IndexSnapshot, item: Dict[str, object]) -> str:
+    note_path = workspace.wiki_dir / "queries" / "conflicts" / f"{slugify(str(item['subject']))}.md"
+    source_lines = _support_source_lines(workspace, snapshot, note_path, list(item.get("related_paths", [])))
+    lines = [
+        "---",
+        f"title: Conflict: {str(item['subject']).title()}",
+        "tags: [conflict, review-filed]",
+        "---",
+        f"# Conflict: {str(item['subject']).title()}",
+        "",
+        (
+            f"This note captures a conflict review for the claim '{item['subject']} {item['verb']}'."
+        ),
+        "",
+        "## Conflicting Sources",
+        "",
+    ]
+    lines.extend(source_lines)
+    lines.extend(
+        [
+            "## Review Metadata",
+            "",
+            f"- Subject: `{item['subject']}`",
+            f"- Verb: `{item['verb']}`",
+            f"- Filed at: {utc_timestamp()}",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _support_source_lines(
     workspace: Workspace,
     snapshot: IndexSnapshot,
@@ -259,16 +389,30 @@ def _excerpt_text(path: Path, limit: int = 180) -> str:
     return compact[: limit - 3].rstrip() + "..."
 
 
-def _ensure_concepts_navigation_link(workspace: Workspace, target_path: str, title: str) -> None:
-    concepts_index = workspace.wiki_dir / "concepts.md"
-    if not concepts_index.exists():
-        return
-    link_line = f"- [[concepts/{Path(target_path).stem}|{title}]]"
-    existing = concepts_index.read_text(encoding="utf-8")
+def _ensure_navigation_link(workspace: Workspace, target_path: str, title: str) -> Path | None:
+    relative_target = workspace.relative_path(workspace.root / target_path) if Path(target_path).is_absolute() else target_path
+    if relative_target.startswith("wiki/concepts/"):
+        nav_path = workspace.wiki_dir / "concepts.md"
+        link_target = relative_target.removeprefix("wiki/").removesuffix(".md")
+    elif relative_target.startswith("wiki/queries/"):
+        nav_path = workspace.wiki_dir / "queries.md"
+        link_target = relative_target.removeprefix("wiki/").removesuffix(".md")
+    elif relative_target.startswith("wiki/sources/"):
+        nav_path = workspace.wiki_dir / "sources.md"
+        link_target = relative_target.removeprefix("wiki/").removesuffix(".md")
+    else:
+        nav_path = workspace.wiki_dir / "index.md"
+        link_target = relative_target.removesuffix(".md")
+
+    if not nav_path.exists():
+        return None
+    link_line = f"- [[{link_target}|{title}]]"
+    existing = nav_path.read_text(encoding="utf-8")
     if link_line in existing:
-        return
+        return nav_path
     updated = existing.rstrip() + "\n" + link_line + "\n"
-    concepts_index.write_text(updated, encoding="utf-8")
+    nav_path.write_text(updated, encoding="utf-8")
+    return nav_path
 
 
 def _update_concept_frontmatter_aliases(path: Path, preferred_label: str, aliases: List[str]) -> None:

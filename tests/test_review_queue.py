@@ -186,6 +186,86 @@ class ReviewQueueTests(unittest.TestCase):
             merge_items = [item for item in queue["items"] if item["kind"] == "entity_merge_candidate"]
             self.assertFalse(merge_items)
 
+    def test_review_apply_backlink_updates_navigation_and_records_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Backlink Action Test")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["review", "apply-backlink", "wiki/queries/agent-memory.md", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            queries_index = (workspace.wiki_dir / "queries.md").read_text(encoding="utf-8")
+            self.assertIn("[[queries/agent-memory|Agent Memory]]", queries_index)
+
+            actions = json.loads((workspace.state_dir / "review-actions.json").read_text(encoding="utf-8"))
+            self.assertIn("wiki/queries/agent-memory.md", actions["applied_backlinks"])
+            self.assertIn("Applied backlink suggestion", stdout.getvalue())
+
+            snapshot = scan_workspace(workspace)
+            self.assertIn("wiki/queries.md", snapshot.backlinks["wiki/queries/agent-memory.md"])
+
+            queue = json.loads((workspace.state_dir / "review-queue.json").read_text(encoding="utf-8"))
+            backlink_items = [item for item in queue["items"] if item["kind"] == "backlink_suggestion"]
+            self.assertFalse(backlink_items)
+
+    def test_review_file_conflict_creates_note_and_records_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Conflict Filing Test")
+
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["review", "file-conflict", "the deployment model", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            conflict_note = workspace.wiki_dir / "queries" / "conflicts" / "the-deployment-model.md"
+            self.assertTrue(conflict_note.exists())
+            note_text = conflict_note.read_text(encoding="utf-8")
+            self.assertIn("# Conflict: The Deployment Model", note_text)
+            self.assertIn("raw/cloud.md", note_text)
+            self.assertIn("raw/local.md", note_text)
+
+            actions = json.loads((workspace.state_dir / "review-actions.json").read_text(encoding="utf-8"))
+            self.assertIn("the deployment model|is|raw/cloud.md|raw/local.md", actions["filed_conflicts"])
+            self.assertIn("Filed conflict note", stdout.getvalue())
+
+            queue = json.loads((workspace.state_dir / "review-queue.json").read_text(encoding="utf-8"))
+            conflict_items = [item for item in queue["items"] if item["kind"] == "conflict_review"]
+            self.assertFalse(conflict_items)
+
     def test_maintain_applies_review_actions_and_writes_run_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -193,11 +273,37 @@ class ReviewQueueTests(unittest.TestCase):
             workspace.initialize(name="Maintenance Test")
 
             (workspace.raw_dir / "retrieval.md").write_text(
-                "# Retrieval Systems\n\n## Vector Database\n\nVector Database improves recall.\n",
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Vector Database\n\n"
+                "Vector Database improves recall.\n",
                 encoding="utf-8",
             )
             (workspace.raw_dir / "memory.md").write_text(
-                "# Memory Systems\n\n## Vector Databases\n\nVector Databases help persistence.\n",
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Memory Systems\n\n"
+                "## Vector Databases\n\n"
+                "Vector Databases help persistence.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
                 encoding="utf-8",
             )
 
@@ -210,6 +316,9 @@ class ReviewQueueTests(unittest.TestCase):
             actions = json.loads((workspace.state_dir / "review-actions.json").read_text(encoding="utf-8"))
             self.assertIn("vector-databases", actions["accepted_concepts"])
             self.assertIn("vector database", actions["resolved_entity_merges"])
+            self.assertIn("wiki/queries/agent-memory.md", actions["applied_backlinks"])
+            self.assertIn("the deployment model|is|raw/cloud.md|raw/local.md", actions["filed_conflicts"])
+            self.assertTrue((workspace.wiki_dir / "queries" / "conflicts" / "the-deployment-model.md").exists())
 
             maintenance_manifests = sorted((workspace.state_dir / "runs").glob("maintenance-*.json"))
             self.assertTrue(maintenance_manifests)
@@ -218,6 +327,8 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertEqual(manifest["status"], "completed")
             self.assertGreaterEqual(manifest["accepted_concept_count"], 1)
             self.assertGreaterEqual(manifest["resolved_merge_count"], 1)
+            self.assertGreaterEqual(manifest["applied_backlink_count"], 1)
+            self.assertGreaterEqual(manifest["filed_conflict_count"], 1)
             self.assertIn("Maintenance applied", stdout.getvalue())
 
 

@@ -22,7 +22,7 @@ def build_review_queue(workspace: Workspace, snapshot: IndexSnapshot) -> Dict[st
     items = []
     items.extend(_build_concept_candidate_items(snapshot, actions))
     items.extend(_build_entity_merge_items(workspace, snapshot, actions))
-    items.extend(_build_conflict_review_items(workspace, snapshot))
+    items.extend(_build_conflict_review_items(workspace, snapshot, actions))
     items.extend(_build_backlink_suggestion_items(workspace, snapshot))
     items.sort(key=lambda item: (_priority_rank(item["priority"]), item["kind"], item["title"]))
     return {
@@ -125,11 +125,20 @@ def _build_entity_merge_items(workspace: Workspace, snapshot: IndexSnapshot, act
     return items
 
 
-def _build_conflict_review_items(workspace: Workspace, snapshot: IndexSnapshot) -> List[Dict[str, object]]:
+def _build_conflict_review_items(
+    workspace: Workspace,
+    snapshot: IndexSnapshot,
+    actions: Dict[str, object],
+) -> List[Dict[str, object]]:
     semantics = build_graph_semantics(workspace, snapshot)
+    filed_conflicts = dict(actions.get("filed_conflicts", {}))
     items: List[Dict[str, object]] = []
     for edge in semantics["edges"]:
         if edge["kind"] != "conflict":
+            continue
+        conflict_paths = sorted([str(edge["source"]), str(edge["target"])])
+        conflict_key = f"{edge['subject']}|{edge['verb']}|{conflict_paths[0]}|{conflict_paths[1]}"
+        if conflict_key in filed_conflicts:
             continue
         items.append(
             {
@@ -137,6 +146,7 @@ def _build_conflict_review_items(workspace: Workspace, snapshot: IndexSnapshot) 
                     f"conflict:{edge['source']}:{edge['target']}:{edge['subject']}:{edge['verb']}".replace("/", "-")
                 ),
                 "kind": "conflict_review",
+                "conflict_key": conflict_key,
                 "priority": "high",
                 "status": "open",
                 "title": f"Resolve conflicting claim about {edge['subject']}",

@@ -28,6 +28,8 @@ from cognisync.linter import lint_snapshot
 from cognisync.maintenance import (
     MaintenanceError,
     accept_concept_candidate,
+    apply_backlink_suggestion,
+    file_conflict_review,
     resolve_entity_merge,
     run_maintenance_cycle,
 )
@@ -151,16 +153,47 @@ def cmd_review_resolve_merge(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review_apply_backlink(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        path = apply_backlink_suggestion(workspace, args.target_path)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Applied backlink suggestion through {path}")
+    return 0
+
+
+def cmd_review_file_conflict(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        path = file_conflict_review(workspace, args.subject)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Filed conflict note into {path}")
+    return 0
+
+
 def cmd_maintain(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        result = run_maintenance_cycle(workspace, max_concepts=args.max_concepts, max_merges=args.max_merges)
+        result = run_maintenance_cycle(
+            workspace,
+            max_concepts=args.max_concepts,
+            max_merges=args.max_merges,
+            max_backlinks=args.max_backlinks,
+            max_conflicts=args.max_conflicts,
+        )
     except MaintenanceError as error:
         print(str(error), file=sys.stderr)
         return 2
     print(
         "Maintenance applied "
-        f"{len(result.accepted_concept_paths)} concept(s) and {len(result.resolved_merge_keys)} merge resolution(s)."
+        f"{len(result.accepted_concept_paths)} concept(s), "
+        f"{len(result.resolved_merge_keys)} merge resolution(s), "
+        f"{len(result.applied_backlink_targets)} backlink(s), and "
+        f"{len(result.filed_conflict_keys)} conflict filing(s)."
     )
     print(f"Remaining review items: {result.remaining_review_count}")
     print(f"Lint issue count after maintenance: {result.issue_count}")
@@ -521,10 +554,22 @@ def build_parser() -> argparse.ArgumentParser:
     review_merge_parser.add_argument("--preferred-label", default=None)
     review_merge_parser.set_defaults(func=cmd_review_resolve_merge)
 
+    review_backlink_parser = review_subparsers.add_parser("apply-backlink", help="Apply a backlink suggestion through a stable navigation page")
+    review_backlink_parser.add_argument("target_path")
+    review_backlink_parser.add_argument("--workspace", default=".")
+    review_backlink_parser.set_defaults(func=cmd_review_apply_backlink)
+
+    review_conflict_parser = review_subparsers.add_parser("file-conflict", help="File a deterministic note for a conflict review item")
+    review_conflict_parser.add_argument("subject")
+    review_conflict_parser.add_argument("--workspace", default=".")
+    review_conflict_parser.set_defaults(func=cmd_review_file_conflict)
+
     maintain_parser = subparsers.add_parser("maintain", help="Apply graph-driven maintenance actions automatically")
     maintain_parser.add_argument("--workspace", default=".")
     maintain_parser.add_argument("--max-concepts", type=int, default=10)
     maintain_parser.add_argument("--max-merges", type=int, default=10)
+    maintain_parser.add_argument("--max-backlinks", type=int, default=10)
+    maintain_parser.add_argument("--max-conflicts", type=int, default=10)
     maintain_parser.set_defaults(func=cmd_maintain)
 
     query_parser = subparsers.add_parser("query", help="Search the workspace and render a research brief")

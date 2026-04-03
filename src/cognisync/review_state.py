@@ -41,6 +41,8 @@ def default_review_actions() -> Dict[str, object]:
         "schema_version": 1,
         "updated_at": utc_timestamp(),
         "accepted_concepts": {},
+        "applied_backlinks": {},
+        "filed_conflicts": {},
         "resolved_entity_merges": {},
     }
 
@@ -55,6 +57,12 @@ def read_review_actions(workspace: Workspace) -> Dict[str, object]:
     payload["updated_at"] = str(raw.get("updated_at", payload["updated_at"]))
     payload["accepted_concepts"] = {
         str(key): dict(value) for key, value in dict(raw.get("accepted_concepts", {})).items()
+    }
+    payload["applied_backlinks"] = {
+        str(key): dict(value) for key, value in dict(raw.get("applied_backlinks", {})).items()
+    }
+    payload["filed_conflicts"] = {
+        str(key): dict(value) for key, value in dict(raw.get("filed_conflicts", {})).items()
     }
     payload["resolved_entity_merges"] = {
         str(key): {
@@ -72,6 +80,12 @@ def write_review_actions(workspace: Workspace, payload: Dict[str, object]) -> No
     actions = default_review_actions()
     actions["accepted_concepts"] = {
         str(key): dict(value) for key, value in dict(payload.get("accepted_concepts", {})).items()
+    }
+    actions["applied_backlinks"] = {
+        str(key): dict(value) for key, value in dict(payload.get("applied_backlinks", {})).items()
+    }
+    actions["filed_conflicts"] = {
+        str(key): dict(value) for key, value in dict(payload.get("filed_conflicts", {})).items()
     }
     actions["resolved_entity_merges"] = {
         str(key): {
