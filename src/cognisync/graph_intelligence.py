@@ -10,6 +10,7 @@ from cognisync.workspace import Workspace
 
 
 TEXTUAL_KINDS = {"markdown", "text", "data", "code"}
+TOKEN_RE = re.compile(r"[a-z0-9]+")
 ENTITY_RE = re.compile(
     r"\b(?:[A-Z][A-Za-z0-9]+|[A-Z]{2,})(?:\s+(?:[A-Z][A-Za-z0-9]+|[A-Z]{2,})){1,3}\b"
 )
@@ -85,34 +86,34 @@ def build_concept_candidates(snapshot: IndexSnapshot) -> List[Dict[str, object]]
         if artifact.collection not in {"raw", "wiki"} or artifact.kind != "markdown":
             continue
         for label, evidence_kind in _candidate_labels_from_artifact(artifact):
-            slug = slugify(label)
-            if not slug:
+            canonical = canonicalize_graph_label(label)
+            if not canonical:
                 continue
             entry = support.setdefault(
-                slug,
+                canonical,
                 {
-                    "id": f"concept:{slug}",
-                    "slug": slug,
-                    "title": label,
+                    "labels": set(),
                     "evidence_kinds": set(),
                     "support_paths": set(),
-                    "output_path": f"wiki/concepts/{slug}.md",
                 },
             )
+            entry["labels"].add(label)
             entry["evidence_kinds"].add(evidence_kind)
             entry["support_paths"].add(artifact.path)
 
     candidates: List[Dict[str, object]] = []
-    for slug, data in sorted(support.items()):
+    for canonical, data in sorted(support.items()):
         support_paths = sorted(data["support_paths"])
         if len(support_paths) < 2:
             continue
-        output_path = str(data["output_path"])
+        title = _preferred_graph_label(data["labels"])
+        slug = slugify(title)
+        output_path = f"wiki/concepts/{slug}.md"
         candidates.append(
             {
-                "id": str(data["id"]),
+                "id": f"concept:{slug}",
                 "slug": slug,
-                "title": str(data["title"]),
+                "title": title,
                 "support_count": len(support_paths),
                 "support_paths": support_paths,
                 "evidence_kinds": sorted(data["evidence_kinds"]),
@@ -270,6 +271,24 @@ def _looks_named_token(word: str) -> bool:
     if word.isupper() and len(word) >= 2:
         return True
     return word[:1].isupper()
+
+
+def canonicalize_graph_label(value: str) -> str:
+    tokens = [token for token in TOKEN_RE.findall(value.lower()) if token]
+    normalized = [_singularize_graph_token(token) for token in tokens]
+    return " ".join(normalized)
+
+
+def _preferred_graph_label(labels: Sequence[str]) -> str:
+    return sorted(labels, key=lambda item: (-len(item.split()), -len(item), item))[0]
+
+
+def _singularize_graph_token(token: str) -> str:
+    if len(token) > 3 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
 
 def _read_artifact_text(workspace: Workspace, artifact: ArtifactRecord) -> str:

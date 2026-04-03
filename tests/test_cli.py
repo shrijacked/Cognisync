@@ -121,6 +121,29 @@ class CliTests(unittest.TestCase):
             self.assertIn("Filed Answer", answer_path.read_text(encoding="utf-8"))
             self.assertIn("Wrote filed answer", stdout.getvalue())
 
+    def test_review_command_prints_queue_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Review Workspace"]), 0)
+            (root / "raw" / "retrieval.md").write_text(
+                "# Retrieval Systems\n\n## Vector Databases\n\nVector Databases improve recall.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory.md").write_text(
+                "# Memory Systems\n\n## Vector Databases\n\nVector Databases help persistence.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["review", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("concept_candidate", stdout.getvalue())
+            self.assertIn("vector databases", stdout.getvalue().lower())
+
 
 if __name__ == "__main__":
     unittest.main()

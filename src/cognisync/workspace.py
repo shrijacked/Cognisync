@@ -56,6 +56,10 @@ class Workspace:
     def graph_manifest_path(self) -> Path:
         return self.state_dir / "graph.json"
 
+    @property
+    def review_queue_manifest_path(self) -> Path:
+        return self.state_dir / "review-queue.json"
+
     def initialize(self, name: Optional[str] = None, force: bool = False) -> None:
         directories = [
             self.raw_dir,

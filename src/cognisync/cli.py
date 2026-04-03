@@ -28,6 +28,7 @@ from cognisync.linter import lint_snapshot
 from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.research import ResearchError, run_research_cycle
+from cognisync.review_queue import build_review_queue, render_review_queue
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
@@ -104,12 +105,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def cmd_lint(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     snapshot = _ensure_snapshot(workspace)
-    issues = lint_snapshot(snapshot)
+    issues = lint_snapshot(snapshot, workspace=workspace)
     for issue in issues:
         print(f"[{issue.severity}] {issue.kind} {issue.path}: {issue.message}")
     if issues:
         return 1 if args.strict else 0
     print("No lint issues found.")
+    return 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    snapshot = _ensure_snapshot(workspace)
+    queue = build_review_queue(workspace, snapshot)
+    print(render_review_queue(queue, limit=args.limit))
+    print(f"Wrote review queue to {workspace.review_queue_manifest_path}")
     return 0
 
 
@@ -448,6 +458,11 @@ def build_parser() -> argparse.ArgumentParser:
     lint_parser.add_argument("--workspace", default=".")
     lint_parser.add_argument("--strict", action="store_true")
     lint_parser.set_defaults(func=cmd_lint)
+
+    review_parser = subparsers.add_parser("review", help="Render the graph-backed review queue")
+    review_parser.add_argument("--workspace", default=".")
+    review_parser.add_argument("--limit", type=int, default=20)
+    review_parser.set_defaults(func=cmd_review)
 
     query_parser = subparsers.add_parser("query", help="Search the workspace and render a research brief")
     query_parser.add_argument("--workspace", default=".")

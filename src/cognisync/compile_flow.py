@@ -65,7 +65,7 @@ def run_compile_cycle(
     final_snapshot = scan_workspace(workspace)
     workspace.write_index(final_snapshot)
     write_workspace_manifests(workspace, final_snapshot)
-    issues = lint_snapshot(final_snapshot)
+    issues = lint_snapshot(final_snapshot, workspace=workspace)
     run_manifest_path = write_run_manifest(
         workspace,
         "compile",

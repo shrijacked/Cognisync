@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import List
+from typing import List, Optional
 
+from cognisync.review_queue import build_review_queue, canonicalize_review_label
 from cognisync.types import IndexSnapshot, LintIssue
+from cognisync.workspace import Workspace
 
 
-def lint_snapshot(snapshot: IndexSnapshot) -> List[LintIssue]:
+def lint_snapshot(snapshot: IndexSnapshot, workspace: Optional[Workspace] = None) -> List[LintIssue]:
     issues: List[LintIssue] = []
     existing_paths = set(snapshot.artifact_paths())
 
@@ -77,4 +79,71 @@ def lint_snapshot(snapshot: IndexSnapshot) -> List[LintIssue]:
             )
         )
 
+    if workspace is not None:
+        issues.extend(_lint_graph_integrity(snapshot, workspace))
+
     return sorted(issues, key=lambda issue: (issue.severity, issue.kind, issue.path, issue.issue_id))
+
+
+def _lint_graph_integrity(snapshot: IndexSnapshot, workspace: Workspace) -> List[LintIssue]:
+    issues: List[LintIssue] = []
+
+    for artifact in snapshot.artifacts:
+        if artifact.collection != "raw":
+            continue
+        if artifact.kind not in {"markdown", "text", "data", "code"}:
+            continue
+        if artifact.tags or artifact.headings:
+            continue
+        issues.append(
+            LintIssue(
+                issue_id=f"missing-metadata:{artifact.path}",
+                kind="missing_metadata",
+                severity="warning",
+                path=artifact.path,
+                message=f"Raw source {artifact.path} lacks both tags and headings.",
+                suggestion="Add frontmatter tags or a top-level heading so retrieval and graph maintenance have metadata to work with.",
+            )
+        )
+
+    concept_paths = defaultdict(list)
+    for artifact in snapshot.artifacts:
+        if artifact.collection != "wiki" or artifact.kind != "markdown":
+            continue
+        if not artifact.path.startswith("wiki/concepts/"):
+            continue
+        canonical = canonicalize_review_label(artifact.title)
+        if canonical:
+            concept_paths[canonical].append(artifact.path)
+
+    for canonical, paths in concept_paths.items():
+        if len(paths) < 2:
+            continue
+        for path in sorted(paths):
+            issues.append(
+                LintIssue(
+                    issue_id=f"duplicate-concept:{canonical}:{path}",
+                    kind="duplicate_concept",
+                    severity="warning",
+                    path=path,
+                    message=f"Multiple concept pages map to the same canonical label '{canonical}'.",
+                    suggestion="Merge the concept pages or keep one as an alias so concept links stay stable.",
+                )
+            )
+
+    review_queue = build_review_queue(workspace, snapshot)
+    for item in review_queue["items"]:
+        if item["kind"] != "conflict_review":
+            continue
+        issues.append(
+            LintIssue(
+                issue_id=f"conflicting-claim:{item['review_id']}",
+                kind="conflicting_claim",
+                severity="warning",
+                path=str(item["path"]),
+                message=str(item["detail"]),
+                suggestion=str(item["suggestion"]),
+            )
+        )
+
+    return issues

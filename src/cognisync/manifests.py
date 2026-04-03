@@ -6,14 +6,16 @@ from typing import Dict, List, Optional, Tuple
 
 from cognisync.corpus import classify_source_kind, infer_extraction_status, pick_primary_artifact, source_group_key
 from cognisync.graph_intelligence import build_graph_semantics
+from cognisync.review_queue import build_review_queue
 from cognisync.types import ArtifactRecord, IndexSnapshot
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
 
 
-def write_workspace_manifests(workspace: Workspace, snapshot: IndexSnapshot) -> Tuple[Path, Path]:
+def write_workspace_manifests(workspace: Workspace, snapshot: IndexSnapshot) -> Tuple[Path, Path, Path]:
     source_path = workspace.sources_manifest_path
     graph_path = workspace.graph_manifest_path
+    review_path = workspace.review_queue_manifest_path
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text(
         json.dumps(build_source_manifest(snapshot), indent=2, sort_keys=True),
@@ -23,7 +25,11 @@ def write_workspace_manifests(workspace: Workspace, snapshot: IndexSnapshot) -> 
         json.dumps(build_graph_manifest(workspace, snapshot), indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    return source_path, graph_path
+    review_path.write_text(
+        json.dumps(build_review_queue(workspace, snapshot), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return source_path, graph_path, review_path
 
 
 def write_run_manifest(
