@@ -351,6 +351,119 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertIn("Research Plan", plan_text)
             self.assertIn("Execute the prompt packet through the selected adapter profile.", plan_text)
 
+    def test_research_job_profile_writes_note_artifacts_and_packet_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Job Profile Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            self.assertEqual(len(run_manifests), 1)
+            manifest = json.loads(run_manifests[0].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["job_profile"], "literature-review")
+            notes_dir = workspace.root / manifest["notes_dir"]
+            self.assertTrue(notes_dir.exists())
+            note_paths = [workspace.root / path for path in manifest["note_paths"]]
+            self.assertGreaterEqual(len(note_paths), 4)
+            self.assertTrue(any(path.name == "paper-matrix.md" for path in note_paths))
+            self.assertTrue(all(path.exists() for path in note_paths))
+
+            plan_text = (workspace.root / manifest["plan_path"]).read_text(encoding="utf-8")
+            packet_text = (workspace.root / manifest["packet_path"]).read_text(encoding="utf-8")
+            self.assertIn("Job profile: literature-review", plan_text)
+            self.assertIn("Build paper matrix", plan_text)
+            self.assertIn("Research job profile: literature-review", packet_text)
+
+    def test_research_resume_latest_preserves_job_profile_notes_and_validation_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Resume Profile Test")
+
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "contradiction-finding",
+                        "what is the deployment model",
+                    ]
+                ),
+                0,
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["researcher"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Conflict Answer\\n\\nThe sources disagree about the deployment model. Local first appears in [S1], while cloud only appears in [S2].')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--resume",
+                        "latest",
+                        "--profile",
+                        "researcher",
+                    ]
+                ),
+                0,
+            )
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            self.assertEqual(len(run_manifests), 1)
+            manifest = json.loads(run_manifests[0].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["job_profile"], "contradiction-finding")
+            self.assertTrue(manifest["validation"]["passed"])
+            self.assertTrue(any(path.endswith("claim-ledger.md") for path in manifest["note_paths"]))
+            validation_report_path = workspace.root / manifest["validation_report_path"]
+            self.assertTrue(validation_report_path.exists())
+            validation_text = validation_report_path.read_text(encoding="utf-8")
+            self.assertIn("Validation Status", validation_text)
+            self.assertIn("completed", validation_text.lower())
+
     def test_research_resume_latest_reuses_existing_packet_and_updates_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

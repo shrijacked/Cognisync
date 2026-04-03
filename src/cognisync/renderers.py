@@ -17,6 +17,27 @@ RESEARCH_MODE_INSTRUCTIONS = {
     "slides": "Write the final answer as a Marp slide deck with inline citations in slide bullets or notes.",
     "wiki": "Write the final answer as a reusable wiki page that can be filed back into `wiki/queries/`.",
 }
+RESEARCH_JOB_PROFILE_INSTRUCTIONS = {
+    "synthesis-report": (
+        "Work like a synthesis lead: map the working set, capture open questions, and converge on a tight outline "
+        "before answering."
+    ),
+    "literature-review": (
+        "Work like a literature review agent: compare sources explicitly, build a paper matrix, and call out gaps "
+        "or disagreements."
+    ),
+    "repo-analysis": (
+        "Work like a codebase analyst: isolate key modules, interfaces, and risks before making claims about the repo."
+    ),
+    "contradiction-finding": (
+        "Work like a contradiction analyst: surface competing claims, preserve both sides, and avoid collapsing "
+        "disagreements prematurely."
+    ),
+    "market-scan": (
+        "Work like a market scan operator: compare alternatives, track positioning signals, and separate evidence "
+        "from interpretation."
+    ),
+}
 
 
 def _literalize_snippet(text: str) -> str:
@@ -198,27 +219,46 @@ def render_query_packet(
     hits: Iterable[SearchHit],
     snapshot: Optional[IndexSnapshot] = None,
     mode: str = "wiki",
+    job_profile: str = "synthesis-report",
+    note_paths: Optional[Iterable[str]] = None,
 ) -> Path:
     output_path = workspace.prompts_dir / f"query-{slugify(question)}.md"
     hit_list = list(hits)
     artifact_map = _artifact_map(snapshot)
     mode_instruction = RESEARCH_MODE_INSTRUCTIONS.get(mode, RESEARCH_MODE_INSTRUCTIONS["wiki"])
+    profile_instruction = RESEARCH_JOB_PROFILE_INSTRUCTIONS.get(
+        job_profile, RESEARCH_JOB_PROFILE_INSTRUCTIONS["synthesis-report"]
+    )
     lines = [
         "# Query Packet",
         "",
         f"Question: {question}",
         f"Output mode: {mode}",
+        f"Research job profile: {job_profile}",
         "",
         "## Instructions",
         "",
         "Answer the question using the listed workspace sources.",
         mode_instruction,
+        profile_instruction,
         "Cite evidence inline as [S1], [S2], and suggest follow-up pages or concepts when useful.",
         "Do not invent citations. Every citation must map to one of the listed sources.",
         "",
-        "## Source Context",
-        "",
     ]
+    normalized_note_paths = [str(path).strip() for path in list(note_paths or []) if str(path).strip()]
+    if normalized_note_paths:
+        lines.extend(
+            [
+                "## Intermediate Artifacts",
+                "",
+                "Use the following job notes as intermediate checkpoints:",
+                "",
+            ]
+        )
+        lines.extend(f"- `{path}`" for path in normalized_note_paths)
+        lines.extend(["", "## Source Context", ""])
+    else:
+        lines.extend(["## Source Context", ""])
     if not hit_list:
         lines.extend(["No relevant sources were found by the deterministic search pass.", ""])
     else:

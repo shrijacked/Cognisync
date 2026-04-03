@@ -49,9 +49,11 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["question"], "how do agent loops use memory")
             self.assertEqual(records[0]["run_kind"], "research")
+            self.assertEqual(records[0]["job_profile"], "synthesis-report")
             self.assertIn("report_text", records[0])
             self.assertIn("source blocks", records[0]["report_text"].lower())
             self.assertIn("slide_path", records[0])
+            self.assertIn("note_paths", records[0])
             self.assertIn("Wrote JSONL export to", stdout.getvalue())
 
     def test_export_presentations_writes_bundle_manifest_and_assets(self) -> None:

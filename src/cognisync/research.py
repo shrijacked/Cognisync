@@ -28,6 +28,134 @@ CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 RESEARCH_OUTPUT_MODES = {"brief", "memo", "report", "slides", "wiki"}
+RESEARCH_JOB_PROFILES = {
+    "synthesis-report": {
+        "steps": [
+            (
+                "build-working-set",
+                "build_working_set",
+                "Build working set",
+                "Capture the current source set and the most relevant evidence in a working note.",
+                "working-set.md",
+            ),
+            (
+                "capture-open-questions",
+                "capture_open_questions",
+                "Capture open questions",
+                "List unresolved questions, missing evidence, and weak spots before drafting the answer.",
+                "open-questions.md",
+            ),
+            (
+                "shape-synthesis-outline",
+                "shape_synthesis_outline",
+                "Shape synthesis outline",
+                "Turn the evidence into a section outline before the final answer is executed.",
+                "synthesis-outline.md",
+            ),
+        ],
+    },
+    "literature-review": {
+        "steps": [
+            (
+                "build-working-set",
+                "build_working_set",
+                "Build working set",
+                "Capture the current source set and the most relevant evidence in a working note.",
+                "working-set.md",
+            ),
+            (
+                "build-paper-matrix",
+                "build_paper_matrix",
+                "Build paper matrix",
+                "Compare the retrieved sources across claims, methods, and limitations.",
+                "paper-matrix.md",
+            ),
+            (
+                "capture-open-questions",
+                "capture_open_questions",
+                "Capture open questions",
+                "List unresolved questions, gaps, and follow-up reading paths before writing the answer.",
+                "open-questions.md",
+            ),
+        ],
+    },
+    "repo-analysis": {
+        "steps": [
+            (
+                "build-working-set",
+                "build_working_set",
+                "Build working set",
+                "Capture the current source set and the most relevant evidence in a working note.",
+                "working-set.md",
+            ),
+            (
+                "map-code-surfaces",
+                "map_code_surfaces",
+                "Map code surfaces",
+                "Identify the main modules, packages, and interfaces that answer the question.",
+                "code-surfaces.md",
+            ),
+            (
+                "capture-risks-and-interfaces",
+                "capture_risks_and_interfaces",
+                "Capture risks and interfaces",
+                "Summarize important interfaces, constraints, and likely integration risks.",
+                "risks-and-interfaces.md",
+            ),
+        ],
+    },
+    "contradiction-finding": {
+        "steps": [
+            (
+                "build-working-set",
+                "build_working_set",
+                "Build working set",
+                "Capture the current source set and the most relevant evidence in a working note.",
+                "working-set.md",
+            ),
+            (
+                "build-claim-ledger",
+                "build_claim_ledger",
+                "Build claim ledger",
+                "List the competing claims and which sources support each side.",
+                "claim-ledger.md",
+            ),
+            (
+                "build-resolution-checklist",
+                "build_resolution_checklist",
+                "Build resolution checklist",
+                "Capture what the final answer must acknowledge before it can reconcile the disagreement.",
+                "resolution-checklist.md",
+            ),
+        ],
+    },
+    "market-scan": {
+        "steps": [
+            (
+                "build-working-set",
+                "build_working_set",
+                "Build working set",
+                "Capture the current source set and the most relevant evidence in a working note.",
+                "working-set.md",
+            ),
+            (
+                "build-competitor-grid",
+                "build_competitor_grid",
+                "Build competitor grid",
+                "Compare the retrieved subjects across product shape, strengths, and tradeoffs.",
+                "competitor-grid.md",
+            ),
+            (
+                "capture-positioning-questions",
+                "capture_positioning_questions",
+                "Capture positioning questions",
+                "List unresolved positioning questions or missing evidence before the final write-up.",
+                "positioning-questions.md",
+            ),
+        ],
+    },
+}
+DEFAULT_RESEARCH_JOB_PROFILE = "synthesis-report"
 CONFLICT_ACK_MARKERS = {"conflict", "disagree", "however", "contradict", "tension", "different", "vs"}
 
 
@@ -38,6 +166,8 @@ class ResearchRunResult:
     packet_path: Path
     answer_path: Optional[Path]
     slide_path: Optional[Path]
+    notes_dir: Path
+    validation_report_path: Path
     change_summary_path: Path
     run_manifest_path: Path
     hit_count: int
@@ -45,6 +175,13 @@ class ResearchRunResult:
     resumed: bool
     status: str
     warning_count: int
+
+
+@dataclass(frozen=True)
+class ResearchJobArtifacts:
+    notes_dir: Path
+    note_paths: List[Path]
+    validation_report_path: Path
 
 
 def run_research_cycle(
@@ -56,10 +193,15 @@ def run_research_cycle(
     slides: bool = False,
     mode: str = "wiki",
     resume: Optional[str] = None,
+    job_profile: str = DEFAULT_RESEARCH_JOB_PROFILE,
 ) -> ResearchRunResult:
     if mode not in RESEARCH_OUTPUT_MODES:
         raise ResearchError(
             f"Unsupported research mode '{mode}'. Expected one of: {', '.join(sorted(RESEARCH_OUTPUT_MODES))}."
+        )
+    if job_profile not in RESEARCH_JOB_PROFILES:
+        raise ResearchError(
+            f"Unsupported research job profile '{job_profile}'. Expected one of: {', '.join(sorted(RESEARCH_JOB_PROFILES))}."
         )
     if resume:
         return _resume_research_cycle(
@@ -67,6 +209,7 @@ def run_research_cycle(
             resume=resume,
             profile_name=profile_name,
             output_file=output_file,
+            job_profile=job_profile,
         )
     if not question:
         raise ResearchError("A question is required unless you resume an existing research run.")
@@ -80,10 +223,9 @@ def run_research_cycle(
     hits = engine.search(question, limit=limit)
 
     report_path = render_query_report(workspace, question, hits, snapshot=snapshot)
-    packet_path = render_query_packet(workspace, question, hits, snapshot=snapshot, mode=mode)
-    slide_path = render_marp_slides(workspace, question, hits) if slides or mode == "slides" else None
     answer_path = output_file or _default_answer_path(workspace, question, mode)
     sources = [_hit_to_manifest_entry(hit, index) for index, hit in enumerate(hits, start=1)]
+    initial_validation = _pending_validation_payload(_available_citations(sources))
 
     execution_status = "pending"
     validation_status = "pending"
@@ -93,9 +235,50 @@ def run_research_cycle(
         validation_status = "completed"
         filing_status = "completed"
 
+    base_payload = {
+        "run_label": question,
+        "question": question,
+        "mode": mode,
+        "profile": profile_name,
+        "job_profile": job_profile,
+        "status": "planned" if not profile_name else "running",
+        "resume_supported": True,
+        "attempt_count": 0,
+        "resume_count": 0,
+        "sources": sources,
+        "citations": {
+            "available": _available_citations(sources),
+            "used": [],
+        },
+        "validation": initial_validation,
+    }
+    run_manifest_path = write_run_manifest(workspace, "research", base_payload)
+    run_id = run_manifest_path.stem
+    job_artifacts = _write_research_job_artifacts(
+        workspace=workspace,
+        run_id=run_id,
+        question=question,
+        job_profile=job_profile,
+        sources=sources,
+        validation=initial_validation,
+    )
+    packet_path = render_query_packet(
+        workspace,
+        question,
+        hits,
+        snapshot=snapshot,
+        mode=mode,
+        job_profile=job_profile,
+        note_paths=[workspace.relative_path(path) for path in job_artifacts.note_paths],
+    )
+    slide_path = render_marp_slides(workspace, question, hits) if slides or mode == "slides" else None
     plan = _build_research_plan(
         question=question,
         mode=mode,
+        job_profile=job_profile,
+        notes_dir=workspace.relative_path(job_artifacts.notes_dir),
+        note_paths=[workspace.relative_path(path) for path in job_artifacts.note_paths],
+        validation_report_path=workspace.relative_path(job_artifacts.validation_report_path),
         sources=sources,
         report_path=workspace.relative_path(report_path),
         packet_path=workspace.relative_path(packet_path),
@@ -107,30 +290,6 @@ def run_research_cycle(
     )
     plan_path, plan_json_path = _write_research_plan(workspace, question, plan)
 
-    base_payload = {
-        "run_label": question,
-        "question": question,
-        "mode": mode,
-        "profile": profile_name,
-        "plan_path": workspace.relative_path(plan_path),
-        "plan_json_path": workspace.relative_path(plan_json_path),
-        "report_path": workspace.relative_path(report_path),
-        "packet_path": workspace.relative_path(packet_path),
-        "answer_path": workspace.relative_path(answer_path),
-        "slide_path": workspace.relative_path(slide_path) if slide_path else None,
-        "status": "planned" if not profile_name else "running",
-        "resume_supported": True,
-        "attempt_count": 0,
-        "resume_count": 0,
-        "sources": sources,
-        "citations": {
-            "available": _available_citations(sources),
-            "used": [],
-        },
-        "validation": _pending_validation_payload(_available_citations(sources)),
-    }
-    run_manifest_path = write_run_manifest(workspace, "research", base_payload)
-
     if not profile_name:
         change_summary_path = _write_research_change_summary(workspace, previous_state)
         run_manifest_path = _write_research_run_state(
@@ -139,16 +298,20 @@ def run_research_cycle(
             question=question,
             mode=mode,
             profile_name=profile_name,
+            job_profile=job_profile,
             plan_path=plan_path,
             plan_json_path=plan_json_path,
             report_path=report_path,
             packet_path=packet_path,
             answer_path=answer_path,
             slide_path=slide_path,
+            notes_dir=job_artifacts.notes_dir,
+            note_paths=job_artifacts.note_paths,
+            validation_report_path=job_artifacts.validation_report_path,
             change_summary_path=change_summary_path,
             status="planned",
             sources=sources,
-            validation=_pending_validation_payload(_available_citations(sources)),
+            validation=initial_validation,
             resume_count=0,
             attempt_count=0,
         )
@@ -158,6 +321,8 @@ def run_research_cycle(
             packet_path=packet_path,
             answer_path=None,
             slide_path=slide_path,
+            notes_dir=job_artifacts.notes_dir,
+            validation_report_path=job_artifacts.validation_report_path,
             change_summary_path=change_summary_path,
             run_manifest_path=run_manifest_path,
             hit_count=len(hits),
@@ -172,12 +337,16 @@ def run_research_cycle(
         question=question,
         mode=mode,
         profile_name=profile_name,
+        job_profile=job_profile,
         output_file=answer_path,
         report_path=report_path,
         packet_path=packet_path,
         plan_path=plan_path,
         plan_json_path=plan_json_path,
         slide_path=slide_path,
+        notes_dir=job_artifacts.notes_dir,
+        note_paths=job_artifacts.note_paths,
+        validation_report_path=job_artifacts.validation_report_path,
         run_manifest_path=run_manifest_path,
         run_id=run_manifest_path.stem,
         sources=sources,
@@ -193,6 +362,7 @@ def _resume_research_cycle(
     resume: str,
     profile_name: Optional[str],
     output_file: Optional[Path],
+    job_profile: str,
 ) -> ResearchRunResult:
     run_manifest_path = _resolve_research_manifest_path(workspace, resume)
     manifest = read_json_manifest(run_manifest_path)
@@ -202,6 +372,11 @@ def _resume_research_cycle(
     question = str(manifest.get("question", "")).strip()
     mode = str(manifest.get("mode", "wiki")).strip() or "wiki"
     effective_profile = profile_name or _optional_text(manifest.get("profile"))
+    effective_job_profile = _optional_text(manifest.get("job_profile")) or job_profile or DEFAULT_RESEARCH_JOB_PROFILE
+    if effective_job_profile not in RESEARCH_JOB_PROFILES:
+        raise ResearchError(
+            f"Unsupported research job profile '{effective_job_profile}'. Expected one of: {', '.join(sorted(RESEARCH_JOB_PROFILES))}."
+        )
     if not effective_profile:
         raise ResearchError("Resuming a research run requires a profile, either from the manifest or --profile.")
 
@@ -222,6 +397,26 @@ def _resume_research_cycle(
         raise ResearchError(f"Research plan JSON is missing for resume: {plan_json_path}")
 
     sources = list(manifest.get("sources", []))
+    notes_dir = _workspace_path(workspace, manifest.get("notes_dir")) or (workspace.research_jobs_dir / run_manifest_path.stem)
+    note_paths = [
+        _workspace_path(workspace, value)
+        for value in list(manifest.get("note_paths", []))
+        if _workspace_path(workspace, value) is not None
+    ]
+    validation_report_path = _workspace_path(workspace, manifest.get("validation_report_path")) or (
+        notes_dir / "validation-report.md"
+    )
+    job_artifacts = _write_research_job_artifacts(
+        workspace=workspace,
+        run_id=run_manifest_path.stem,
+        question=question,
+        job_profile=effective_job_profile,
+        sources=sources,
+        validation=dict(manifest.get("validation", _pending_validation_payload(_available_citations(sources)))),
+        existing_notes_dir=notes_dir,
+        existing_note_paths=[path for path in note_paths if path is not None],
+        validation_report_path=validation_report_path,
+    )
     resume_count = int(manifest.get("resume_count", 0)) + 1
     attempt_count = int(manifest.get("attempt_count", 0)) + 1
     previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
@@ -231,12 +426,16 @@ def _resume_research_cycle(
         question=question,
         mode=mode,
         profile_name=effective_profile,
+        job_profile=effective_job_profile,
         output_file=answer_path,
         report_path=report_path,
         packet_path=packet_path,
         plan_path=plan_path,
         plan_json_path=plan_json_path,
         slide_path=slide_path,
+        notes_dir=job_artifacts.notes_dir,
+        note_paths=job_artifacts.note_paths,
+        validation_report_path=job_artifacts.validation_report_path,
         run_manifest_path=run_manifest_path,
         run_id=run_manifest_path.stem,
         sources=sources,
@@ -252,12 +451,16 @@ def _execute_research_run(
     question: str,
     mode: str,
     profile_name: str,
+    job_profile: str,
     output_file: Path,
     report_path: Path,
     packet_path: Path,
     plan_path: Path,
     plan_json_path: Path,
     slide_path: Optional[Path],
+    notes_dir: Path,
+    note_paths: List[Path],
+    validation_report_path: Path,
     run_manifest_path: Path,
     run_id: str,
     sources: List[Dict[str, object]],
@@ -273,6 +476,10 @@ def _execute_research_run(
         failed_plan = _build_research_plan(
             question=question,
             mode=mode,
+            job_profile=job_profile,
+            notes_dir=workspace.relative_path(notes_dir),
+            note_paths=[workspace.relative_path(path) for path in note_paths],
+            validation_report_path=workspace.relative_path(validation_report_path),
             sources=sources,
             report_path=workspace.relative_path(report_path),
             packet_path=workspace.relative_path(packet_path),
@@ -289,12 +496,16 @@ def _execute_research_run(
             question=question,
             mode=mode,
             profile_name=profile_name,
+            job_profile=job_profile,
             plan_path=plan_path,
             plan_json_path=plan_json_path,
             report_path=report_path,
             packet_path=packet_path,
             answer_path=output_file,
             slide_path=slide_path,
+            notes_dir=notes_dir,
+            note_paths=note_paths,
+            validation_report_path=validation_report_path,
             change_summary_path=_write_research_change_summary(workspace, previous_state),
             status="adapter_failed",
             sources=sources,
@@ -308,6 +519,10 @@ def _execute_research_run(
     running_plan = _build_research_plan(
         question=question,
         mode=mode,
+        job_profile=job_profile,
+        notes_dir=workspace.relative_path(notes_dir),
+        note_paths=[workspace.relative_path(path) for path in note_paths],
+        validation_report_path=workspace.relative_path(validation_report_path),
         sources=sources,
         report_path=workspace.relative_path(report_path),
         packet_path=workspace.relative_path(packet_path),
@@ -324,12 +539,16 @@ def _execute_research_run(
         question=question,
         mode=mode,
         profile_name=profile_name,
+        job_profile=job_profile,
         plan_path=plan_path,
         plan_json_path=plan_json_path,
         report_path=report_path,
         packet_path=packet_path,
         answer_path=output_file,
         slide_path=slide_path,
+        notes_dir=notes_dir,
+        note_paths=note_paths,
+        validation_report_path=validation_report_path,
         change_summary_path=None,
         status="running",
         sources=sources,
@@ -343,6 +562,10 @@ def _execute_research_run(
         failed_plan = _build_research_plan(
             question=question,
             mode=mode,
+            job_profile=job_profile,
+            notes_dir=workspace.relative_path(notes_dir),
+            note_paths=[workspace.relative_path(path) for path in note_paths],
+            validation_report_path=workspace.relative_path(validation_report_path),
             sources=sources,
             report_path=workspace.relative_path(report_path),
             packet_path=workspace.relative_path(packet_path),
@@ -359,12 +582,16 @@ def _execute_research_run(
             question=question,
             mode=mode,
             profile_name=profile_name,
+            job_profile=job_profile,
             plan_path=plan_path,
             plan_json_path=plan_json_path,
             report_path=report_path,
             packet_path=packet_path,
             answer_path=output_file,
             slide_path=slide_path,
+            notes_dir=notes_dir,
+            note_paths=note_paths,
+            validation_report_path=validation_report_path,
             change_summary_path=_write_research_change_summary(workspace, previous_state),
             status="adapter_failed",
             sources=sources,
@@ -382,6 +609,7 @@ def _execute_research_run(
 
     answer_text = output_file.read_text(encoding="utf-8", errors="ignore") if output_file.exists() else ""
     validation = _verify_research_answer(workspace, answer_text, sources)
+    _write_validation_report(workspace, validation_report_path, question, job_profile, sources, validation)
     change_summary_path = _write_research_change_summary(workspace, previous_state)
 
     final_status = "completed"
@@ -396,6 +624,10 @@ def _execute_research_run(
     final_plan = _build_research_plan(
         question=question,
         mode=mode,
+        job_profile=job_profile,
+        notes_dir=workspace.relative_path(notes_dir),
+        note_paths=[workspace.relative_path(path) for path in note_paths],
+        validation_report_path=workspace.relative_path(validation_report_path),
         sources=sources,
         report_path=workspace.relative_path(report_path),
         packet_path=workspace.relative_path(packet_path),
@@ -412,12 +644,16 @@ def _execute_research_run(
         question=question,
         mode=mode,
         profile_name=profile_name,
+        job_profile=job_profile,
         plan_path=plan_path,
         plan_json_path=plan_json_path,
         report_path=report_path,
         packet_path=packet_path,
         answer_path=output_file,
         slide_path=slide_path,
+        notes_dir=notes_dir,
+        note_paths=note_paths,
+        validation_report_path=validation_report_path,
         change_summary_path=change_summary_path,
         status=final_status,
         sources=sources,
@@ -434,6 +670,8 @@ def _execute_research_run(
         packet_path=packet_path,
         answer_path=output_file,
         slide_path=slide_path,
+        notes_dir=notes_dir,
+        validation_report_path=validation_report_path,
         change_summary_path=change_summary_path,
         run_manifest_path=run_manifest_path,
         hit_count=len(sources),
@@ -450,12 +688,16 @@ def _write_research_run_state(
     question: str,
     mode: str,
     profile_name: Optional[str],
+    job_profile: str,
     plan_path: Path,
     plan_json_path: Path,
     report_path: Path,
     packet_path: Path,
     answer_path: Path,
     slide_path: Optional[Path],
+    notes_dir: Path,
+    note_paths: List[Path],
+    validation_report_path: Path,
     change_summary_path: Optional[Path],
     status: str,
     sources: List[Dict[str, object]],
@@ -471,12 +713,16 @@ def _write_research_run_state(
             "question": question,
             "mode": mode,
             "profile": profile_name,
+            "job_profile": job_profile,
             "plan_path": workspace.relative_path(plan_path),
             "plan_json_path": workspace.relative_path(plan_json_path),
             "report_path": workspace.relative_path(report_path),
             "packet_path": workspace.relative_path(packet_path),
             "answer_path": workspace.relative_path(answer_path),
             "slide_path": workspace.relative_path(slide_path) if slide_path else None,
+            "notes_dir": workspace.relative_path(notes_dir),
+            "note_paths": [workspace.relative_path(path) for path in note_paths],
+            "validation_report_path": workspace.relative_path(validation_report_path),
             "change_summary_path": workspace.relative_path(change_summary_path) if change_summary_path else None,
             "status": status,
             "resume_supported": True,
@@ -504,6 +750,10 @@ def _write_research_change_summary(workspace: Workspace, previous_state: ChangeS
 def _build_research_plan(
     question: str,
     mode: str,
+    job_profile: str,
+    notes_dir: str,
+    note_paths: List[str],
+    validation_report_path: str,
     sources: List[Dict[str, object]],
     report_path: str,
     packet_path: str,
@@ -513,29 +763,41 @@ def _build_research_plan(
     validation_status: str,
     filing_status: str,
 ) -> ResearchPlan:
-    return ResearchPlan(
-        generated_at=utc_timestamp(),
-        question=question,
-        mode=mode,
-        report_path=report_path,
-        packet_path=packet_path,
-        answer_path=answer_path,
-        slide_path=slide_path,
-        sources=sources,
-        steps=[
+    profile_definition = RESEARCH_JOB_PROFILES[job_profile]
+    note_lookup = {Path(path).name: path for path in note_paths}
+    steps = [
+        ResearchPlanStep(
+            step_id="retrieve-sources",
+            kind="retrieve_sources",
+            title="Retrieve relevant sources",
+            status="completed",
+            detail=f"Selected {len(sources)} source(s) from the current workspace snapshot.",
+        )
+    ]
+    for step_id, kind, title, detail, file_name in profile_definition["steps"]:
+        steps.append(
             ResearchPlanStep(
-                step_id="retrieve-sources",
-                kind="retrieve_sources",
-                title="Retrieve relevant sources",
+                step_id=step_id,
+                kind=kind,
+                title=title,
                 status="completed",
-                detail=f"Selected {len(sources)} source(s) from the current workspace snapshot.",
-            ),
+                detail=detail,
+                owner="planner",
+                output_path=note_lookup.get(file_name),
+                depends_on=["retrieve-sources"],
+            )
+        )
+    last_profile_step = profile_definition["steps"][-1][0]
+    steps.extend(
+        [
             ResearchPlanStep(
                 step_id="render-artifacts",
                 kind="render_artifacts",
                 title="Render report and prompt packet",
                 status="completed",
                 detail="The cited report and prompt packet are ready on disk.",
+                owner="planner",
+                depends_on=[last_profile_step],
             ),
             ResearchPlanStep(
                 step_id="execute-profile",
@@ -543,6 +805,8 @@ def _build_research_plan(
                 title="Execute adapter profile",
                 status=execution_status,
                 detail="Execute the prompt packet through the selected adapter profile.",
+                owner="adapter",
+                depends_on=["render-artifacts"],
             ),
             ResearchPlanStep(
                 step_id="validate-citations",
@@ -550,6 +814,9 @@ def _build_research_plan(
                 title="Validate inline citations",
                 status=validation_status,
                 detail="Every inline citation must resolve to one of the retrieved sources.",
+                owner="validator",
+                output_path=validation_report_path,
+                depends_on=["execute-profile"],
             ),
             ResearchPlanStep(
                 step_id="file-answer",
@@ -557,8 +824,25 @@ def _build_research_plan(
                 title="File the answer artifact",
                 status=filing_status,
                 detail="Persist the final research artifact back into the workspace.",
+                owner="filer",
+                depends_on=["validate-citations"],
             ),
-        ],
+        ]
+    )
+    return ResearchPlan(
+        generated_at=utc_timestamp(),
+        question=question,
+        mode=mode,
+        job_profile=job_profile,
+        report_path=report_path,
+        packet_path=packet_path,
+        answer_path=answer_path,
+        slide_path=slide_path,
+        notes_dir=notes_dir,
+        note_paths=note_paths,
+        validation_report_path=validation_report_path,
+        sources=sources,
+        steps=steps,
     )
 
 
@@ -587,6 +871,7 @@ def render_research_plan(plan: ResearchPlan) -> str:
         f"Generated: {plan.generated_at}",
         f"Question: {plan.question}",
         f"Mode: {plan.mode}",
+        f"Job profile: {plan.job_profile}",
         "",
         "## Artifacts",
         "",
@@ -596,6 +881,14 @@ def render_research_plan(plan: ResearchPlan) -> str:
     ]
     if plan.slide_path:
         lines.append(f"- Slides: `{plan.slide_path}`")
+    if plan.notes_dir:
+        lines.append(f"- Notes directory: `{plan.notes_dir}`")
+    if plan.validation_report_path:
+        lines.append(f"- Validation report: `{plan.validation_report_path}`")
+    if plan.note_paths:
+        lines.extend(["", "## Intermediate Notes", ""])
+        for path in plan.note_paths:
+            lines.append(f"- `{path}`")
     lines.extend(["", "## Sources", ""])
     if not plan.sources:
         lines.append("No sources were selected for this plan.")
@@ -615,11 +908,151 @@ def render_research_plan(plan: ResearchPlan) -> str:
                 "",
                 f"- Kind: `{step.kind}`",
                 f"- Status: `{step.status}`",
+                f"- Owner: `{step.owner}`",
                 f"- Detail: {step.detail}",
-                "",
             ]
         )
+        if step.output_path:
+            lines.append(f"- Output: `{step.output_path}`")
+        if step.depends_on:
+            lines.append(f"- Depends on: {', '.join(f'`{step_id}`' for step_id in step.depends_on)}")
+        lines.append("")
     return "\n".join(lines)
+
+
+def _write_research_job_artifacts(
+    workspace: Workspace,
+    run_id: str,
+    question: str,
+    job_profile: str,
+    sources: Sequence[Dict[str, object]],
+    validation: Dict[str, object],
+    existing_notes_dir: Optional[Path] = None,
+    existing_note_paths: Optional[Sequence[Path]] = None,
+    validation_report_path: Optional[Path] = None,
+) -> ResearchJobArtifacts:
+    profile_definition = RESEARCH_JOB_PROFILES[job_profile]
+    notes_dir = existing_notes_dir or (workspace.research_jobs_dir / run_id)
+    notes_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_lookup = {path.name: path for path in list(existing_note_paths or [])}
+    note_paths: List[Path] = []
+    for _, _, title, detail, file_name in profile_definition["steps"]:
+        note_path = existing_lookup.get(file_name) or (notes_dir / file_name)
+        if not note_path.exists():
+            note_path.write_text(
+                _render_research_note(question, job_profile, title, detail, sources, file_name),
+                encoding="utf-8",
+            )
+        note_paths.append(note_path)
+
+    validation_path = validation_report_path or (notes_dir / "validation-report.md")
+    _write_validation_report(workspace, validation_path, question, job_profile, sources, validation)
+    return ResearchJobArtifacts(
+        notes_dir=notes_dir,
+        note_paths=note_paths + [validation_path],
+        validation_report_path=validation_path,
+    )
+
+
+def _render_research_note(
+    question: str,
+    job_profile: str,
+    title: str,
+    detail: str,
+    sources: Sequence[Dict[str, object]],
+    file_name: str,
+) -> str:
+    lines = [
+        f"# {title}",
+        "",
+        f"Question: {question}",
+        f"Job profile: {job_profile}",
+        "",
+        detail,
+        "",
+        "## Source Coverage",
+        "",
+    ]
+    if not sources:
+        lines.append("No sources were selected for this run.")
+    else:
+        for source in sources:
+            lines.append(
+                f"- [{source['citation']}] {source['title']} "
+                f"(`{source['source_kind']}`) -> `{source['path']}`"
+            )
+    lines.extend(["", "## Working Notes", ""])
+    if file_name == "paper-matrix.md":
+        lines.extend(
+            [
+                "| Source | Main claim | Method | Limitation |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+    elif file_name == "claim-ledger.md":
+        lines.extend(
+            [
+                "| Claim | Source | Evidence | Counterpoint |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+    elif file_name == "competitor-grid.md":
+        lines.extend(
+            [
+                "| Subject | Positioning | Strength | Risk |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "- Fill this note with grounded observations only.",
+                "- Preserve source ids inline so later validation can trace the reasoning.",
+            ]
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _write_validation_report(
+    workspace: Workspace,
+    path: Path,
+    question: str,
+    job_profile: str,
+    sources: Sequence[Dict[str, object]],
+    validation: Dict[str, object],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Validation Report",
+        "",
+        f"Question: {question}",
+        f"Job profile: {job_profile}",
+        f"Validation Status: {validation.get('status', 'pending')}",
+        f"Passed: `{bool(validation.get('passed', False))}`",
+        "",
+        "## Citations",
+        "",
+        f"- Available: {', '.join(_available_citations(sources)) or '-'}",
+        f"- Used: {', '.join(list(validation.get('used', []))) or '-'}",
+        "",
+        "## Errors",
+        "",
+    ]
+    errors = list(validation.get("errors", []))
+    warnings = list(validation.get("warnings", []))
+    if errors:
+        lines.extend(f"- {error}" for error in errors)
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Warnings", ""])
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
+    else:
+        lines.append("- None")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _default_answer_path(workspace: Workspace, question: str, mode: str) -> Path:

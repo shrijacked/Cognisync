@@ -148,6 +148,9 @@ class ResearchPlanStep:
     title: str
     status: str
     detail: str
+    owner: str = "operator"
+    output_path: Optional[str] = None
+    depends_on: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -160,6 +163,9 @@ class ResearchPlanStep:
             title=str(data["title"]),
             status=str(data["status"]),
             detail=str(data.get("detail", "")),
+            owner=str(data.get("owner", "operator")),
+            output_path=str(data["output_path"]) if data.get("output_path") is not None else None,
+            depends_on=list(data.get("depends_on", [])),
         )
 
 
@@ -168,10 +174,14 @@ class ResearchPlan:
     generated_at: str
     question: str
     mode: str
+    job_profile: str
     report_path: str
     packet_path: str
     answer_path: str
     slide_path: Optional[str]
+    notes_dir: Optional[str]
+    note_paths: List[str]
+    validation_report_path: Optional[str]
     sources: List[Dict[str, object]]
     steps: List[ResearchPlanStep]
 
@@ -180,10 +190,14 @@ class ResearchPlan:
             "generated_at": self.generated_at,
             "question": self.question,
             "mode": self.mode,
+            "job_profile": self.job_profile,
             "report_path": self.report_path,
             "packet_path": self.packet_path,
             "answer_path": self.answer_path,
             "slide_path": self.slide_path,
+            "notes_dir": self.notes_dir,
+            "note_paths": self.note_paths,
+            "validation_report_path": self.validation_report_path,
             "sources": self.sources,
             "steps": [step.to_dict() for step in self.steps],
         }
@@ -194,10 +208,16 @@ class ResearchPlan:
             generated_at=str(data["generated_at"]),
             question=str(data["question"]),
             mode=str(data["mode"]),
+            job_profile=str(data.get("job_profile", "synthesis-report")),
             report_path=str(data["report_path"]),
             packet_path=str(data["packet_path"]),
             answer_path=str(data["answer_path"]),
             slide_path=str(data["slide_path"]) if data.get("slide_path") is not None else None,
+            notes_dir=str(data["notes_dir"]) if data.get("notes_dir") is not None else None,
+            note_paths=list(data.get("note_paths", [])),
+            validation_report_path=(
+                str(data["validation_report_path"]) if data.get("validation_report_path") is not None else None
+            ),
             sources=list(data.get("sources", [])),
             steps=[ResearchPlanStep.from_dict(item) for item in data.get("steps", [])],
         )

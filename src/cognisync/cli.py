@@ -41,7 +41,7 @@ from cognisync.maintenance import (
 )
 from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
-from cognisync.research import ResearchError, run_research_cycle
+from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, RESEARCH_JOB_PROFILES, ResearchError, run_research_cycle
 from cognisync.review_exports import write_review_export
 from cognisync.review_queue import build_review_queue, render_review_queue
 from cognisync.review_ui import create_review_ui_server, write_review_ui_bundle
@@ -543,6 +543,7 @@ def cmd_research(args: argparse.Namespace) -> int:
             slides=args.slides,
             mode=args.mode,
             resume=args.resume,
+            job_profile=args.job_profile,
         )
     except ResearchError as error:
         print(str(error), file=sys.stderr)
@@ -553,6 +554,8 @@ def cmd_research(args: argparse.Namespace) -> int:
     print(f"Wrote research plan to {result.plan_path}")
     print(f"Wrote report to {result.report_path}")
     print(f"Wrote prompt packet to {result.packet_path}")
+    print(f"Wrote research notes to {result.notes_dir}")
+    print(f"Wrote validation report to {result.validation_report_path}")
     print(f"Wrote change summary to {result.change_summary_path}")
     print(f"Wrote run manifest to {result.run_manifest_path}")
     if result.slide_path is not None:
@@ -818,6 +821,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="wiki",
         choices=["brief", "memo", "report", "slides", "wiki"],
         help="Shape the filed answer artifact.",
+    )
+    research_parser.add_argument(
+        "--job-profile",
+        default=DEFAULT_RESEARCH_JOB_PROFILE,
+        choices=sorted(RESEARCH_JOB_PROFILES),
+        help="Choose the orchestration plan used to scaffold intermediate research notes.",
     )
     research_parser.add_argument("--limit", type=int, default=5)
     research_parser.add_argument("--profile", default=None)

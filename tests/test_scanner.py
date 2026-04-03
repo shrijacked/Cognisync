@@ -122,6 +122,22 @@ Transformers rely on attention and influence [[agents]].
             self.assertIn("raw/note.md", snapshot.artifact_paths())
             self.assertNotIn("outputs/reports/exports/research-dataset-1.jsonl", snapshot.artifact_paths())
 
+    def test_scan_ignores_research_job_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Scanner Ignore Research Job Test")
+
+            (workspace.raw_dir / "note.md").write_text("# Note\n\nCorpus content.\n", encoding="utf-8")
+            job_dir = workspace.research_jobs_dir / "research-run-1"
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "working-set.md").write_text("# Working Set\n\nOperator note.\n", encoding="utf-8")
+
+            snapshot = scan_workspace(workspace)
+
+            self.assertIn("raw/note.md", snapshot.artifact_paths())
+            self.assertNotIn("outputs/reports/research-jobs/research-run-1/working-set.md", snapshot.artifact_paths())
+
 
 if __name__ == "__main__":
     unittest.main()

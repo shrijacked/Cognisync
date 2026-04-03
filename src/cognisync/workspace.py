@@ -80,6 +80,10 @@ class Workspace:
     def export_artifacts_dir(self) -> Path:
         return self.outputs_dir / "reports" / "exports"
 
+    @property
+    def research_jobs_dir(self) -> Path:
+        return self.outputs_dir / "reports" / "research-jobs"
+
     def initialize(self, name: Optional[str] = None, force: bool = False) -> None:
         directories = [
             self.raw_dir,
