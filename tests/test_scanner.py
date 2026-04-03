@@ -86,6 +86,23 @@ Transformers rely on attention and influence [[agents]].
             self.assertIn("raw/note.md", snapshot.artifact_paths())
             self.assertNotIn("outputs/reports/review-exports/review-export-1.json", snapshot.artifact_paths())
 
+    def test_scan_ignores_review_ui_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Scanner Ignore Review UI Test")
+
+            (workspace.raw_dir / "note.md").write_text("# Note\n\nCorpus content.\n", encoding="utf-8")
+            workspace.review_ui_dir.mkdir(parents=True, exist_ok=True)
+            (workspace.review_ui_dir / "index.html").write_text("<html><body>ui</body></html>", encoding="utf-8")
+            (workspace.review_ui_dir / "review-export.json").write_text("{\n  \"schema_version\": 1\n}\n", encoding="utf-8")
+
+            snapshot = scan_workspace(workspace)
+
+            self.assertIn("raw/note.md", snapshot.artifact_paths())
+            self.assertNotIn("outputs/reports/review-ui/index.html", snapshot.artifact_paths())
+            self.assertNotIn("outputs/reports/review-ui/review-export.json", snapshot.artifact_paths())
+
 
 if __name__ == "__main__":
     unittest.main()

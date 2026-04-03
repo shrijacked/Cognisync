@@ -43,6 +43,7 @@ from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.research import ResearchError, run_research_cycle
 from cognisync.review_exports import write_review_export
 from cognisync.review_queue import build_review_queue, render_review_queue
+from cognisync.review_ui import create_review_ui_server, write_review_ui_bundle
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
@@ -157,6 +158,40 @@ def cmd_review_export(args: argparse.Namespace) -> int:
     print(f"Wrote review export to {result.path}")
     print(f"Open review items: {result.item_count}")
     print(f"Dismissed review items: {result.dismissed_count}")
+    return 0
+
+
+def cmd_ui_review(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    snapshot = _ensure_snapshot(workspace)
+    output_file = None
+    if args.output_file:
+        output_file = Path(args.output_file).expanduser()
+        if not output_file.is_absolute():
+            output_file = workspace.root / output_file
+        output_file = output_file.resolve()
+
+    result = write_review_ui_bundle(workspace, snapshot, output_file=output_file)
+    print(f"Wrote review UI to {result.html_path}")
+    print(f"Wrote review UI export to {result.export_path}")
+
+    if not args.serve:
+        return 0
+
+    server = create_review_ui_server(
+        result.html_path.parent,
+        host=args.host,
+        port=args.port,
+        index_name=result.html_path.name,
+    )
+    host, port = server.server_address
+    print(f"Serving review UI at http://{host}:{port}/")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("Stopped review UI server.")
+    finally:
+        server.server_close()
     return 0
 
 
@@ -778,6 +813,17 @@ def build_parser() -> argparse.ArgumentParser:
     adapter_install_parser.add_argument("--profile", default=None)
     adapter_install_parser.add_argument("--force", action="store_true")
     adapter_install_parser.set_defaults(func=cmd_adapter_install)
+
+    ui_parser = subparsers.add_parser("ui", help="Generate or serve lightweight Cognisync web interfaces")
+    ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
+
+    ui_review_parser = ui_subparsers.add_parser("review", help="Build or serve the review dashboard")
+    ui_review_parser.add_argument("--workspace", default=".")
+    ui_review_parser.add_argument("--output-file", default=None)
+    ui_review_parser.add_argument("--serve", action="store_true")
+    ui_review_parser.add_argument("--host", default="127.0.0.1")
+    ui_review_parser.add_argument("--port", type=int, default=8765)
+    ui_review_parser.set_defaults(func=cmd_ui_review)
 
     return parser
 
