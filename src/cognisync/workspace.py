@@ -60,6 +60,10 @@ class Workspace:
     def review_queue_manifest_path(self) -> Path:
         return self.state_dir / "review-queue.json"
 
+    @property
+    def review_actions_manifest_path(self) -> Path:
+        return self.state_dir / "review-actions.json"
+
     def initialize(self, name: Optional[str] = None, force: bool = False) -> None:
         directories = [
             self.raw_dir,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-import re
 from typing import Dict, List, Sequence, Set
 
 from cognisync.graph_intelligence import (
@@ -10,18 +9,19 @@ from cognisync.graph_intelligence import (
     build_concept_candidates,
     build_graph_semantics,
 )
+from cognisync.review_state import canonicalize_review_label, normalize_review_label_variant, read_review_actions
 from cognisync.types import ArtifactRecord, IndexSnapshot
 from cognisync.workspace import Workspace
 
 
 TEXTUAL_REVIEW_KINDS = {"markdown", "text", "data", "code"}
-TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 def build_review_queue(workspace: Workspace, snapshot: IndexSnapshot) -> Dict[str, object]:
+    actions = read_review_actions(workspace)
     items = []
-    items.extend(_build_concept_candidate_items(snapshot))
-    items.extend(_build_entity_merge_items(workspace, snapshot))
+    items.extend(_build_concept_candidate_items(snapshot, actions))
+    items.extend(_build_entity_merge_items(workspace, snapshot, actions))
     items.extend(_build_conflict_review_items(workspace, snapshot))
     items.extend(_build_backlink_suggestion_items(workspace, snapshot))
     items.sort(key=lambda item: (_priority_rank(item["priority"]), item["kind"], item["title"]))
@@ -55,17 +55,11 @@ def render_review_queue(queue: Dict[str, object], limit: int | None = None) -> s
         lines.append("")
     return "\n".join(lines).rstrip()
 
-
-def canonicalize_review_label(value: str) -> str:
-    tokens = [token for token in TOKEN_RE.findall(value.lower()) if token]
-    normalized = [_singularize_token(token) for token in tokens]
-    return " ".join(normalized)
-
-
-def _build_concept_candidate_items(snapshot: IndexSnapshot) -> List[Dict[str, object]]:
+def _build_concept_candidate_items(snapshot: IndexSnapshot, actions: Dict[str, object]) -> List[Dict[str, object]]:
     items: List[Dict[str, object]] = []
+    accepted = dict(actions.get("accepted_concepts", {}))
     for candidate in build_concept_candidates(snapshot):
-        if candidate["resolved"]:
+        if candidate["resolved"] or str(candidate["slug"]) in accepted:
             continue
         support_paths = list(candidate["support_paths"])
         items.append(
@@ -89,8 +83,9 @@ def _build_concept_candidate_items(snapshot: IndexSnapshot) -> List[Dict[str, ob
     return items
 
 
-def _build_entity_merge_items(workspace: Workspace, snapshot: IndexSnapshot) -> List[Dict[str, object]]:
+def _build_entity_merge_items(workspace: Workspace, snapshot: IndexSnapshot, actions: Dict[str, object]) -> List[Dict[str, object]]:
     buckets: Dict[str, Dict[str, object]] = {}
+    resolved = dict(actions.get("resolved_entity_merges", {}))
     for artifact in snapshot.artifacts:
         if artifact.kind not in TEXTUAL_REVIEW_KINDS or artifact.collection not in {"raw", "wiki", "outputs"}:
             continue
@@ -98,18 +93,19 @@ def _build_entity_merge_items(workspace: Workspace, snapshot: IndexSnapshot) -> 
         if not text:
             continue
         for label in _extract_entity_labels(artifact, text):
-            canonical = canonicalize_review_label(label)
+            normalized_label = normalize_review_label_variant(label)
+            canonical = canonicalize_review_label(normalized_label)
             if not canonical:
                 continue
             entry = buckets.setdefault(canonical, {"labels": set(), "paths": set()})
-            entry["labels"].add(label)
+            entry["labels"].add(normalized_label)
             entry["paths"].add(artifact.path)
 
     items: List[Dict[str, object]] = []
     for canonical, bucket in sorted(buckets.items()):
         labels = sorted(bucket["labels"])
         paths = sorted(bucket["paths"])
-        if len(labels) < 2 or len(paths) < 2:
+        if len(labels) < 2 or len(paths) < 2 or canonical in resolved:
             continue
         items.append(
             {
@@ -226,11 +222,3 @@ def _artifact_signals(workspace: Workspace, artifact: ArtifactRecord) -> Set[str
 
 def _priority_rank(priority: str) -> int:
     return {"high": 0, "medium": 1, "low": 2}.get(priority, 3)
-
-
-def _singularize_token(token: str) -> str:
-    if len(token) > 3 and token.endswith("ies"):
-        return token[:-3] + "y"
-    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-        return token[:-1]
-    return token

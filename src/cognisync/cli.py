@@ -25,6 +25,12 @@ from cognisync.ingest import (
     ingest_urls,
 )
 from cognisync.linter import lint_snapshot
+from cognisync.maintenance import (
+    MaintenanceError,
+    accept_concept_candidate,
+    resolve_entity_merge,
+    run_maintenance_cycle,
+)
 from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.research import ResearchError, run_research_cycle
@@ -120,6 +126,45 @@ def cmd_review(args: argparse.Namespace) -> int:
     queue = build_review_queue(workspace, snapshot)
     print(render_review_queue(queue, limit=args.limit))
     print(f"Wrote review queue to {workspace.review_queue_manifest_path}")
+    return 0
+
+
+def cmd_review_accept_concept(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        path = accept_concept_candidate(workspace, args.slug)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Accepted concept candidate into {path}")
+    return 0
+
+
+def cmd_review_resolve_merge(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        path = resolve_entity_merge(workspace, args.canonical_label, preferred_label=args.preferred_label)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Resolved merge candidate into {path}")
+    return 0
+
+
+def cmd_maintain(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = run_maintenance_cycle(workspace, max_concepts=args.max_concepts, max_merges=args.max_merges)
+    except MaintenanceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(
+        "Maintenance applied "
+        f"{len(result.accepted_concept_paths)} concept(s) and {len(result.resolved_merge_keys)} merge resolution(s)."
+    )
+    print(f"Remaining review items: {result.remaining_review_count}")
+    print(f"Lint issue count after maintenance: {result.issue_count}")
+    print(f"Wrote maintenance run manifest to {result.run_manifest_path}")
     return 0
 
 
@@ -459,10 +504,28 @@ def build_parser() -> argparse.ArgumentParser:
     lint_parser.add_argument("--strict", action="store_true")
     lint_parser.set_defaults(func=cmd_lint)
 
-    review_parser = subparsers.add_parser("review", help="Render the graph-backed review queue")
+    review_parser = subparsers.add_parser("review", help="Render or apply the graph-backed review queue")
     review_parser.add_argument("--workspace", default=".")
     review_parser.add_argument("--limit", type=int, default=20)
     review_parser.set_defaults(func=cmd_review)
+    review_subparsers = review_parser.add_subparsers(dest="review_command", required=False)
+
+    review_accept_parser = review_subparsers.add_parser("accept-concept", help="Accept a concept candidate into wiki/concepts")
+    review_accept_parser.add_argument("slug")
+    review_accept_parser.add_argument("--workspace", default=".")
+    review_accept_parser.set_defaults(func=cmd_review_accept_concept)
+
+    review_merge_parser = review_subparsers.add_parser("resolve-merge", help="Resolve an entity merge candidate")
+    review_merge_parser.add_argument("canonical_label")
+    review_merge_parser.add_argument("--workspace", default=".")
+    review_merge_parser.add_argument("--preferred-label", default=None)
+    review_merge_parser.set_defaults(func=cmd_review_resolve_merge)
+
+    maintain_parser = subparsers.add_parser("maintain", help="Apply graph-driven maintenance actions automatically")
+    maintain_parser.add_argument("--workspace", default=".")
+    maintain_parser.add_argument("--max-concepts", type=int, default=10)
+    maintain_parser.add_argument("--max-merges", type=int, default=10)
+    maintain_parser.set_defaults(func=cmd_maintain)
 
     query_parser = subparsers.add_parser("query", help="Search the workspace and render a research brief")
     query_parser.add_argument("--workspace", default=".")

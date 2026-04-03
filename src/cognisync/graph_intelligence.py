@@ -4,13 +4,19 @@ from collections import defaultdict
 import re
 from typing import Dict, List, Sequence, Set, Tuple
 
+from cognisync.review_state import (
+    canonicalize_review_label,
+    normalize_review_label_variant,
+    preferred_review_label,
+    read_review_actions,
+    resolved_merge_preference,
+)
 from cognisync.types import ArtifactRecord, IndexSnapshot
 from cognisync.utils import slugify
 from cognisync.workspace import Workspace
 
 
 TEXTUAL_KINDS = {"markdown", "text", "data", "code"}
-TOKEN_RE = re.compile(r"[a-z0-9]+")
 ENTITY_RE = re.compile(
     r"\b(?:[A-Z][A-Za-z0-9]+|[A-Z]{2,})(?:\s+(?:[A-Z][A-Za-z0-9]+|[A-Z]{2,})){1,3}\b"
 )
@@ -86,7 +92,7 @@ def build_concept_candidates(snapshot: IndexSnapshot) -> List[Dict[str, object]]
         if artifact.collection not in {"raw", "wiki"} or artifact.kind != "markdown":
             continue
         for label, evidence_kind in _candidate_labels_from_artifact(artifact):
-            canonical = canonicalize_graph_label(label)
+            canonical = canonicalize_review_label(label)
             if not canonical:
                 continue
             entry = support.setdefault(
@@ -106,7 +112,7 @@ def build_concept_candidates(snapshot: IndexSnapshot) -> List[Dict[str, object]]
         support_paths = sorted(data["support_paths"])
         if len(support_paths) < 2:
             continue
-        title = _preferred_graph_label(data["labels"])
+        title = preferred_review_label(data["labels"])
         slug = slugify(title)
         output_path = f"wiki/concepts/{slug}.md"
         candidates.append(
@@ -129,6 +135,7 @@ def build_graph_semantics(workspace: Workspace, snapshot: IndexSnapshot) -> Dict
     artifact_mentions: Dict[str, Set[str]] = defaultdict(set)
     conflict_edges: List[Dict[str, object]] = []
     conflict_seen: Set[Tuple[str, str, str, str]] = set()
+    review_actions = read_review_actions(workspace)
 
     textual_artifacts = [
         artifact
@@ -143,7 +150,9 @@ def build_graph_semantics(workspace: Workspace, snapshot: IndexSnapshot) -> Dict
             continue
 
         for label in _extract_entity_labels(artifact, text):
-            slug = slugify(label)
+            normalized_label = normalize_review_label_variant(label)
+            resolved_label = resolved_merge_preference(review_actions, normalized_label) or normalized_label
+            slug = slugify(resolved_label)
             if not slug:
                 continue
             entry = entity_support.setdefault(
@@ -151,7 +160,7 @@ def build_graph_semantics(workspace: Workspace, snapshot: IndexSnapshot) -> Dict
                 {
                     "id": f"entity:{slug}",
                     "slug": slug,
-                    "title": label,
+                    "title": resolved_label,
                     "support_paths": set(),
                 },
             )
@@ -271,24 +280,6 @@ def _looks_named_token(word: str) -> bool:
     if word.isupper() and len(word) >= 2:
         return True
     return word[:1].isupper()
-
-
-def canonicalize_graph_label(value: str) -> str:
-    tokens = [token for token in TOKEN_RE.findall(value.lower()) if token]
-    normalized = [_singularize_graph_token(token) for token in tokens]
-    return " ".join(normalized)
-
-
-def _preferred_graph_label(labels: Sequence[str]) -> str:
-    return sorted(labels, key=lambda item: (-len(item.split()), -len(item), item))[0]
-
-
-def _singularize_graph_token(token: str) -> str:
-    if len(token) > 3 and token.endswith("ies"):
-        return token[:-3] + "y"
-    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-        return token[:-1]
-    return token
 
 
 def _read_artifact_text(workspace: Workspace, artifact: ArtifactRecord) -> str:
