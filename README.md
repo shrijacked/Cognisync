@@ -106,8 +106,10 @@ The richer ingest layer now makes the loop more useful before an LLM even runs:
 
 - `ingest pdf` preserves the source PDF and writes a sidecar Markdown file with extracted text and metadata
 - `ingest url` captures page metadata such as description, canonical URL, headings, discovered links, content stats, and local image captures
-- `ingest repo` captures repository stats, language signals, recent commits, and a nested tree snapshot in the repo manifest
-- `ingest batch` processes a JSON manifest so larger source sets can land in one deterministic pass
+- `ingest repo` captures repository stats, language signals, recent commits, and a nested tree snapshot in the repo manifest, whether the source is local or cloned from a remote Git URL
+- `ingest urls` reads a plain-text or JSON URL list into `raw/urls/`
+- `ingest sitemap` expands a sitemap into individual URL captures
+- `ingest batch` processes a JSON manifest so larger source sets can land in one deterministic pass, including URL lists and sitemaps
 
 Batch ingest accepts a JSON list or an object with an `items` list:
 
@@ -115,8 +117,10 @@ Batch ingest accepts a JSON list or an object with an `items` list:
 {
   "items": [
     {"kind": "url", "source": "https://example.com/article"},
+    {"kind": "urls", "source": "/path/to/urls.txt"},
+    {"kind": "sitemap", "source": "/path/to/sitemap.xml"},
     {"kind": "pdf", "source": "/path/to/paper.pdf"},
-    {"kind": "repo", "source": "/path/to/local/repo"}
+    {"kind": "repo", "source": "https://github.com/example/repo.git"}
   ]
 }
 ```

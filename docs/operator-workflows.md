@@ -46,6 +46,8 @@ Supported paths in this release:
 - `cognisync ingest file ...`
 - `cognisync ingest pdf ...`
 - `cognisync ingest url ...`
+- `cognisync ingest urls ...`
+- `cognisync ingest sitemap ...`
 - `cognisync ingest repo ...`
 - `cognisync ingest batch manifest.json`
 
@@ -53,7 +55,9 @@ The richer ingest pass extracts more structure up front so later compile and que
 
 - PDF ingest preserves the source file and writes a Markdown sidecar with extracted text plus ingest metadata
 - URL ingest records description, canonical URL, headings, discovered links, content stats, and local image captures
-- repo ingest records repository stats, language signals, recent commits, and a nested tree snapshot in the manifest
+- URL-list ingest expands text or JSON URL inventories into deterministic per-page captures
+- sitemap ingest expands a sitemap into URL captures without shell scripting around the CLI
+- repo ingest records repository stats, language signals, recent commits, and a nested tree snapshot in the manifest, even when the source is cloned from a remote Git URL
 
 ### `compile`
 
