@@ -14,7 +14,16 @@ from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import save_config
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
-from cognisync.ingest import IngestError, ingest_batch, ingest_file, ingest_pdf, ingest_repo, ingest_url
+from cognisync.ingest import (
+    IngestError,
+    ingest_batch,
+    ingest_file,
+    ingest_pdf,
+    ingest_repo,
+    ingest_sitemap,
+    ingest_url,
+    ingest_urls,
+)
 from cognisync.linter import lint_snapshot
 from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
@@ -155,7 +164,7 @@ def cmd_ingest_url(args: argparse.Namespace) -> int:
 def cmd_ingest_repo(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        result = ingest_repo(workspace, repo_path=Path(args.source), name=args.name, force=args.force)
+        result = ingest_repo(workspace, repo_path=args.source, name=args.name, force=args.force)
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -163,6 +172,38 @@ def cmd_ingest_repo(args: argparse.Namespace) -> int:
     workspace.write_index(snapshot)
     write_workspace_manifests(workspace, snapshot)
     print(f"Ingested repo manifest into {result.path}")
+    return 0
+
+
+def cmd_ingest_urls(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        results = ingest_urls(workspace, source_list=Path(args.source), force=args.force)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
+    print(f"Ingested {len(results)} URL source(s).")
+    for result in results:
+        print(f"- {result.path}")
+    return 0
+
+
+def cmd_ingest_sitemap(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        results = ingest_sitemap(workspace, source=args.source, force=args.force, limit=args.limit)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
+    print(f"Ingested {len(results)} URL source(s).")
+    for result in results:
+        print(f"- {result.path}")
     return 0
 
 
@@ -359,6 +400,19 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_repo_parser.add_argument("--name", default=None)
     ingest_repo_parser.add_argument("--force", action="store_true")
     ingest_repo_parser.set_defaults(func=cmd_ingest_repo)
+
+    ingest_urls_parser = ingest_subparsers.add_parser("urls", help="Ingest a text or JSON list of URLs into raw/urls")
+    ingest_urls_parser.add_argument("source")
+    ingest_urls_parser.add_argument("--workspace", default=".")
+    ingest_urls_parser.add_argument("--force", action="store_true")
+    ingest_urls_parser.set_defaults(func=cmd_ingest_urls)
+
+    ingest_sitemap_parser = ingest_subparsers.add_parser("sitemap", help="Ingest all URLs from a sitemap into raw/urls")
+    ingest_sitemap_parser.add_argument("source")
+    ingest_sitemap_parser.add_argument("--workspace", default=".")
+    ingest_sitemap_parser.add_argument("--limit", type=int, default=None)
+    ingest_sitemap_parser.add_argument("--force", action="store_true")
+    ingest_sitemap_parser.set_defaults(func=cmd_ingest_sitemap)
 
     ingest_batch_parser = ingest_subparsers.add_parser("batch", help="Ingest a manifest of sources into raw/")
     ingest_batch_parser.add_argument("manifest")

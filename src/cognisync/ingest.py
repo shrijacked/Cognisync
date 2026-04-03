@@ -11,9 +11,11 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote_to_bytes, urljoin, urlparse
 from urllib.request import urlopen
+from xml.etree import ElementTree
 
 from cognisync.utils import slugify
 from cognisync.workspace import Workspace
@@ -33,6 +35,12 @@ class IngestResult:
 class BatchIngestEntry:
     kind: str
     source: str
+    name: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class UrlListEntry:
+    url: str
     name: Optional[str] = None
 
 
@@ -290,94 +298,103 @@ def ingest_url(workspace: Workspace, url: str, name: Optional[str] = None, force
     return IngestResult(path=target_path, kind="url")
 
 
-def ingest_repo(workspace: Workspace, repo_path: Path, name: Optional[str] = None, force: bool = False) -> IngestResult:
-    source_dir = Path(repo_path).resolve()
-    if not source_dir.is_dir():
-        raise IngestError(f"Repository path does not exist: {source_dir}")
-
-    repo_name = name or source_dir.name
+def ingest_repo(workspace: Workspace, repo_path, name: Optional[str] = None, force: bool = False) -> IngestResult:
+    source_dir, cleanup_dir, source_repo = _prepare_repo_checkout(repo_path)
+    repo_name = name or _repo_name_from_source(repo_path, source_dir)
     target_dir = workspace.raw_dir / "repos"
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{slugify(repo_name)}.md"
     if target_path.exists() and not force:
         raise IngestError(f"Target already exists: {target_path}. Re-run with --force to overwrite it.")
 
-    branch = _git_output(source_dir, ["git", "branch", "--show-current"])
-    commit = _git_output(source_dir, ["git", "rev-parse", "--short", "HEAD"])
-    remote = _git_output(source_dir, ["git", "remote", "get-url", "origin"])
-    recent_commits = _git_output_lines(source_dir, ["git", "log", "--pretty=format:%h %s", "-n", "5"])
+    try:
+        branch = _git_output(source_dir, ["git", "branch", "--show-current"])
+        commit = _git_output(source_dir, ["git", "rev-parse", "--short", "HEAD"])
+        remote = _git_output(source_dir, ["git", "remote", "get-url", "origin"]) or source_repo or ""
+        recent_commits = _git_output_lines(source_dir, ["git", "log", "--pretty=format:%h %s", "-n", "5"])
 
-    top_level = sorted(path.name for path in source_dir.iterdir() if path.name != ".git")
-    repo_files = [
-        path
-        for path in source_dir.rglob("*")
-        if path.is_file() and ".git" not in path.parts
-    ]
-    directory_count = len(
-        {
-            path.parent.relative_to(source_dir).as_posix()
-            for path in repo_files
-            if path.parent != source_dir
-        }
-    )
-    file_count = len(repo_files)
-    languages = _language_counts(repo_files)
-    tree_snapshot = _render_repository_tree(source_dir)
-    readme_path = _find_readme(source_dir)
-    readme_excerpt = ""
-    if readme_path:
-        readme_excerpt = "\n".join(readme_path.read_text(encoding="utf-8", errors="ignore").splitlines()[:12]).strip()
-
-    lines = [
-        "---",
-        f"title: {repo_name}",
-        "tags: [repo-ingest]",
-        f"source_path: {source_dir}",
-    ]
-    if remote:
-        lines.append(f"origin_remote: {remote}")
-    if branch:
-        lines.append(f"current_branch: {branch}")
-    if commit:
-        lines.append(f"current_commit: {commit}")
-    lines.extend(
-        [
-            "---",
-            f"# {repo_name}",
-            "",
-            f"Source path: `{source_dir}`",
-            "",
-            "## Repository Stats",
-            "",
-            f"- File count: `{file_count}`",
-            f"- Directory count: `{directory_count}`",
+        top_level = sorted(path.name for path in source_dir.iterdir() if path.name != ".git")
+        repo_files = [
+            path
+            for path in source_dir.rglob("*")
+            if path.is_file() and ".git" not in path.parts
         ]
-    )
-    if branch:
-        lines.append(f"- Current branch: `{branch}`")
-    if commit:
-        lines.append(f"- Current commit: `{commit}`")
-    if remote:
-        lines.append(f"- Origin remote: `{remote}`")
-    lines.extend(["", "## Top-level tree", ""])
-    for entry in top_level[:30]:
-        lines.append(f"- `{entry}`")
-    if languages:
-        lines.extend(["", "## Language Signals", ""])
-        for language, count in languages:
-            lines.append(f"- `{language}`: {count} file(s)")
-    if recent_commits:
-        lines.extend(["", "## Recent Commits", ""])
-        for commit_line in recent_commits:
-            lines.append(f"- {commit_line}")
-    if tree_snapshot:
-        lines.extend(["", "## Repository Tree Snapshot", "", "```text"])
-        lines.extend(tree_snapshot)
-        lines.extend(["```"])
-    if readme_excerpt:
-        lines.extend(["", "## README excerpt", "", readme_excerpt, ""])
+        directory_count = len(
+            {
+                path.parent.relative_to(source_dir).as_posix()
+                for path in repo_files
+                if path.parent != source_dir
+            }
+        )
+        file_count = len(repo_files)
+        languages = _language_counts(repo_files)
+        tree_snapshot = _render_repository_tree(source_dir)
+        readme_path = _find_readme(source_dir)
+        readme_excerpt = ""
+        if readme_path:
+            readme_excerpt = "\n".join(readme_path.read_text(encoding="utf-8", errors="ignore").splitlines()[:12]).strip()
 
-    target_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        lines = [
+            "---",
+            f"title: {repo_name}",
+            "tags: [repo-ingest]",
+            f"source_path: {source_dir}",
+        ]
+        if source_repo:
+            lines.append(f"source_repo: {source_repo}")
+        if remote:
+            lines.append(f"origin_remote: {remote}")
+        if branch:
+            lines.append(f"current_branch: {branch}")
+        if commit:
+            lines.append(f"current_commit: {commit}")
+        lines.extend(
+            [
+                "---",
+                f"# {repo_name}",
+                "",
+                f"Source path: `{source_dir}`",
+                "",
+            ]
+        )
+        if source_repo:
+            lines.extend([f"Source repo: `{source_repo}`", ""])
+        lines.extend(
+            [
+                "## Repository Stats",
+                "",
+                f"- File count: `{file_count}`",
+                f"- Directory count: `{directory_count}`",
+            ]
+        )
+        if branch:
+            lines.append(f"- Current branch: `{branch}`")
+        if commit:
+            lines.append(f"- Current commit: `{commit}`")
+        if remote:
+            lines.append(f"- Origin remote: `{remote}`")
+        lines.extend(["", "## Top-level tree", ""])
+        for entry in top_level[:30]:
+            lines.append(f"- `{entry}`")
+        if languages:
+            lines.extend(["", "## Language Signals", ""])
+            for language, count in languages:
+                lines.append(f"- `{language}`: {count} file(s)")
+        if recent_commits:
+            lines.extend(["", "## Recent Commits", ""])
+            for commit_line in recent_commits:
+                lines.append(f"- {commit_line}")
+        if tree_snapshot:
+            lines.extend(["", "## Repository Tree Snapshot", "", "```text"])
+            lines.extend(tree_snapshot)
+            lines.extend(["```"])
+        if readme_excerpt:
+            lines.extend(["", "## README excerpt", "", readme_excerpt, ""])
+
+        target_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    finally:
+        if cleanup_dir is not None:
+            cleanup_dir.cleanup()
     return IngestResult(path=target_path, kind="repo")
 
 
@@ -391,12 +408,34 @@ def ingest_batch(workspace: Workspace, manifest_path: Path, force: bool = False)
             results.append(ingest_pdf(workspace, source=Path(entry.source), name=entry.name, force=force))
         elif entry.kind == "url":
             results.append(ingest_url(workspace, url=entry.source, name=entry.name, force=force))
+        elif entry.kind in {"urls", "url-list", "url_list"}:
+            results.extend(ingest_urls(workspace, source_list=Path(entry.source), force=force))
         elif entry.kind == "repo":
-            results.append(ingest_repo(workspace, repo_path=Path(entry.source), name=entry.name, force=force))
+            results.append(ingest_repo(workspace, repo_path=entry.source, name=entry.name, force=force))
+        elif entry.kind == "sitemap":
+            results.extend(ingest_sitemap(workspace, source=entry.source, force=force))
         else:
             raise IngestError(
-                f"Unsupported batch ingest kind '{entry.kind}'. Expected one of file, pdf, url, repo."
+                f"Unsupported batch ingest kind '{entry.kind}'. Expected one of file, pdf, url, urls, sitemap, repo."
             )
+    return results
+
+
+def ingest_urls(workspace: Workspace, source_list: Path, force: bool = False) -> List[IngestResult]:
+    entries = _load_url_list_entries(Path(source_list))
+    results: List[IngestResult] = []
+    for entry in entries:
+        results.append(ingest_url(workspace, url=entry.url, name=entry.name, force=force))
+    return results
+
+
+def ingest_sitemap(workspace: Workspace, source: str, force: bool = False, limit: Optional[int] = None) -> List[IngestResult]:
+    urls = _load_sitemap_urls(source)
+    if limit is not None:
+        urls = urls[:limit]
+    results: List[IngestResult] = []
+    for url in urls:
+        results.append(ingest_url(workspace, url=url, force=force))
     return results
 
 
@@ -640,6 +679,106 @@ def _slug_from_url(url: str) -> str:
         return tail
     host = parsed.netloc or "url-capture"
     return host.replace(":", "-")
+
+
+def _prepare_repo_checkout(repo_source) -> Tuple[Path, Optional[tempfile.TemporaryDirectory], Optional[str]]:
+    source_value = str(repo_source)
+    candidate_path = Path(source_value).expanduser()
+    if candidate_path.exists() and candidate_path.is_dir():
+        return candidate_path.resolve(), None, None
+
+    parsed = urlparse(source_value)
+    looks_remote = bool(parsed.scheme) or "://" in source_value or source_value.endswith(".git")
+    if not looks_remote:
+        raise IngestError(f"Repository path does not exist: {candidate_path.resolve()}")
+
+    temp_dir = tempfile.TemporaryDirectory(prefix="cognisync-repo-")
+    checkout_path = Path(temp_dir.name) / "repo"
+    result = subprocess.run(
+        ["git", "clone", "--depth", "1", source_value, str(checkout_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        temp_dir.cleanup()
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown git clone failure"
+        raise IngestError(f"Could not clone repository source '{source_value}': {stderr}")
+    return checkout_path, temp_dir, source_value
+
+
+def _repo_name_from_source(repo_source, source_dir: Path) -> str:
+    source_value = str(repo_source)
+    parsed = urlparse(source_value)
+    tail = parsed.path.rsplit("/", 1)[-1] if parsed.path else ""
+    if tail:
+        if tail.endswith(".git"):
+            tail = tail[:-4]
+        if tail:
+            return tail
+    return source_dir.name
+
+
+def _load_url_list_entries(path: Path) -> List[UrlListEntry]:
+    source_path = Path(path).resolve()
+    if not source_path.is_file():
+        raise IngestError(f"URL list does not exist: {source_path}")
+
+    text = source_path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = None
+
+    if payload is not None:
+        items = payload.get("items", payload.get("urls", [])) if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            raise IngestError("URL list JSON must be a list or an object with an `items` or `urls` list.")
+        entries: List[UrlListEntry] = []
+        for index, item in enumerate(items, start=1):
+            if isinstance(item, str):
+                entries.append(UrlListEntry(url=item))
+                continue
+            if not isinstance(item, dict):
+                raise IngestError(f"URL list entry {index} must be a string or object.")
+            url = str(item.get("url") or item.get("source") or "").strip()
+            name = str(item.get("name")).strip() if item.get("name") else None
+            if not url:
+                raise IngestError(f"URL list entry {index} is missing `url`.")
+            entries.append(UrlListEntry(url=url, name=name))
+        return entries
+
+    lines = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not lines:
+        raise IngestError(f"URL list is empty: {source_path}")
+    return [UrlListEntry(url=line) for line in lines]
+
+
+def _load_sitemap_urls(source: str) -> List[str]:
+    text = _read_text_source(source)
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError as error:
+        raise IngestError(f"Sitemap is not valid XML: {source}") from error
+
+    urls = [element.text.strip() for element in root.findall(".//{*}loc") if element.text and element.text.strip()]
+    urls = _dedupe_preserve_order(urls)
+    if not urls:
+        raise IngestError(f"No URLs found in sitemap: {source}")
+    return urls
+
+
+def _read_text_source(source: str) -> str:
+    candidate_path = Path(source).expanduser()
+    if candidate_path.exists() and candidate_path.is_file():
+        return candidate_path.read_text(encoding="utf-8")
+
+    try:
+        with urlopen(source) as response:  # nosec B310 - intentional CLI fetch helper
+            charset = response.headers.get_content_charset() if response.headers else "utf-8"
+            return response.read().decode(charset or "utf-8", errors="ignore")
+    except Exception as error:
+        raise IngestError(f"Could not read text source: {source}") from error
 
 
 def _load_batch_manifest(path: Path) -> List[BatchIngestEntry]:
