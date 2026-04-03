@@ -134,7 +134,7 @@ CLI overrides:
 
 Use the change summaries when you want a compact diff of the corpus after an operator action.
 
-`scan`, `ingest`, and `maintain` now write Markdown artifacts under `outputs/reports/change-summaries/` with:
+`scan`, `ingest`, `maintain`, and `research` now write Markdown artifacts under `outputs/reports/change-summaries/` with:
 
 - artifact count delta
 - source count delta
@@ -172,6 +172,7 @@ Research and scan now persist:
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
 Research now also writes a dedicated plan in `.cognisync/plans/` and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
+Every planned, resumed, or completed research run also writes a research-scoped change summary so operators can see what the question actually changed in the corpus.
 
 Before a research run is considered complete, Cognisync now checks:
 
@@ -200,4 +201,4 @@ The scan and compile loop also uses a richer graph substrate now:
 | O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups |
 | O9 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
 | O10 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
-| O11 | `research` | cited report, prompt packet, validated answer artifact, run manifest |
+| O11 | `research` | cited report, prompt packet, validated answer artifact, run manifest, change summary artifact |

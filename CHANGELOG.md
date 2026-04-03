@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
+
 ## v0.1.4 - 2026-04-03
 
 - added stable `.cognisync/sources.json` and `.cognisync/graph.json` manifests so scans persist grouped source and graph state

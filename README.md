@@ -56,7 +56,7 @@ workspace/
 - Stable source and graph manifests under `.cognisync/`
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
-- Deterministic corpus change summaries after scan, ingest, and maintenance runs
+- Deterministic corpus change summaries after scan, ingest, maintenance, and research runs
 - Markdown-aware search over `raw/` and `wiki/`
 - Compile planner for missing summaries, concept pages, and repair work
 - Knowledge-base linter for broken links, missing summaries, graph conflicts, and duplicate concepts
@@ -110,7 +110,7 @@ cognisync research "what changed in this corpus?" --profile codex --slides
 
 The operator-facing workflow is documented in [Operator Workflows](docs/operator-workflows.md).
 
-Each scan, ingest, and maintenance pass now also writes a small change artifact into `outputs/reports/change-summaries/` so the workspace records what moved:
+Each scan, ingest, maintenance, and research pass now also writes a small change artifact into `outputs/reports/change-summaries/` so the workspace records what moved:
 
 - artifact and source count deltas
 - orphan-page delta
@@ -164,6 +164,7 @@ Every research run now also writes:
 
 - a research plan in `.cognisync/plans/`
 - a run manifest in `.cognisync/runs/`
+- a research change summary in `outputs/reports/change-summaries/`
 - enough state to resume execution later without rebuilding the packet
 
 Research verification is now stricter too:
