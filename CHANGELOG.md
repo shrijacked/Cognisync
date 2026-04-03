@@ -11,6 +11,8 @@
 - added persisted research plans and `research --resume` so question-driven jobs can be planned first and executed or retried later
 - added stronger research verification for unsupported claims, answer lint, and conflicting source statements
 - enriched `.cognisync/graph.json` with entity nodes, concept candidates, and conflict edges, and taught compile planning to use concept candidates beyond explicit tags
+- added `.cognisync/review-queue.json` plus `cognisync review` so graph intelligence becomes a durable operator queue
+- added graph-aware lint checks for missing raw metadata, duplicate concept pages, and conflicting source claims
 
 ## v0.1.3 - 2026-04-03
 

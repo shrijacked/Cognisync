@@ -4,10 +4,11 @@
 
 This document describes the day-to-day operational loop for Cognisync.
 
-It focuses on four commands that make the framework feel like a product rather than a toolkit:
+It focuses on five commands that make the framework feel like a product rather than a toolkit:
 
 - `cognisync doctor`
 - `cognisync ingest ...`
+- `cognisync review`
 - `cognisync compile ...`
 - `cognisync research ...`
 
@@ -17,11 +18,12 @@ It focuses on four commands that make the framework feel like a product rather t
 flowchart TD
     A["doctor validates workspace and adapters"] --> B["ingest adds new raw material into raw/"]
     B --> C["scan updates the deterministic index"]
-    C --> D["compile builds a plan and prompt packet"]
-    D --> E["configured LLM profile executes compile work"]
-    E --> F["scan and lint run again on the updated workspace"]
-    F --> G["research turns the refreshed corpus into cited reports and filed answers"]
-    G --> H["run manifests, graph state, and source manifests persist the loop"]
+    C --> D["review surfaces concept, merge, and conflict follow-ups"]
+    D --> E["compile builds a plan and prompt packet"]
+    E --> F["configured LLM profile executes compile work"]
+    F --> G["scan and lint run again on the updated workspace"]
+    G --> H["research turns the refreshed corpus into cited reports and filed answers"]
+    H --> I["run manifests, graph state, and review queue persist the loop"]
 ```
 
 ## Command Roles
@@ -73,6 +75,18 @@ The command:
 
 Compile packets now include an `Input Context` section that excerpts the raw artifacts behind each task, including PDF sidecar text, URL image references, and repository tree snapshots. Compile runs also persist run metadata in `.cognisync/runs/`.
 
+### `review`
+
+Use `review` when you want the graph to suggest what should happen next before you burn tokens on a compile or research run.
+
+The command:
+
+1. refreshes the workspace manifests if needed
+2. materializes `.cognisync/review-queue.json`
+3. prints a queue of concept candidates, entity merge suggestions, conflict reviews, and backlink opportunities
+
+The queue is intentionally durable and machine-readable so later automation can consume it directly.
+
 ### `research`
 
 Use `research` when you want one command to turn a question into reusable workspace artifacts.
@@ -95,6 +109,7 @@ Research and scan now persist:
 
 - `.cognisync/sources.json` for grouped raw-source manifests
 - `.cognisync/graph.json` for artifact and tag graph state
+- `.cognisync/review-queue.json` for graph follow-up work
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
 Research now also writes a dedicated plan in `.cognisync/plans/` and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
@@ -111,6 +126,7 @@ The scan and compile loop also uses a richer graph substrate now:
 - `.cognisync/graph.json` materializes entities, concept candidates, and conflict edges
 - repeated headings, entity mentions, and tags can all feed concept-page planning
 - concept creation is no longer limited to explicit tag overlap
+- `cognisync review` turns that graph state into a usable operator queue
 
 ## Traceability
 
@@ -118,5 +134,6 @@ The scan and compile loop also uses a richer graph substrate now:
 | --- | --- | --- |
 | O6 | `doctor` | readiness report |
 | O7 | `ingest` | richer raw source artifacts plus updated index and grouped source manifest |
-| O8 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
-| O9 | `research` | cited report, prompt packet, validated answer artifact, run manifest |
+| O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups |
+| O9 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
+| O10 | `research` | cited report, prompt packet, validated answer artifact, run manifest |

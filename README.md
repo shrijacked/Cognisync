@@ -41,6 +41,7 @@ workspace/
     ├── config.json
     ├── graph.json
     ├── index.json
+    ├── review-queue.json
     ├── runs/
     ├── sources.json
     └── plans/
@@ -51,9 +52,10 @@ workspace/
 - Workspace scaffolding
 - Deterministic corpus scanner and manifest builder
 - Stable source and graph manifests under `.cognisync/`
+- Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Markdown-aware search over `raw/` and `wiki/`
 - Compile planner for missing summaries, concept pages, and repair work
-- Knowledge-base linter for broken links, missing summaries, and duplicate titles
+- Knowledge-base linter for broken links, missing summaries, graph conflicts, and duplicate concepts
 - Markdown and Marp report renderers
 - Research and compile run manifests with persisted validation state
 - Command adapter contracts for wiring in external LLM CLIs
@@ -96,6 +98,7 @@ Cognisync is strongest when you use it as a loop, not a bag of separate commands
 ```bash
 cognisync doctor --strict
 cognisync ingest batch sources.json
+cognisync review
 cognisync compile --profile codex --strict
 cognisync research "what changed in this corpus?" --profile codex --slides
 ```
@@ -131,7 +134,7 @@ The query and research outputs are now more citation-friendly by default:
 - source blocks include path, source kind, score, retrieval reason, snippet, and embedded-image hints
 - compile packets include input-context excerpts so external agents see richer raw context up front
 - research runs validate inline citations and persist their status into `.cognisync/runs/`
-- scans now materialize stable source and graph manifests at `.cognisync/sources.json` and `.cognisync/graph.json`
+- scans now materialize stable source, graph, and review manifests at `.cognisync/sources.json`, `.cognisync/graph.json`, and `.cognisync/review-queue.json`
 
 ## Research Command
 
@@ -162,6 +165,20 @@ The graph layer is richer now as well:
 - repeated entities and tags become concept candidates with support counts
 - compile planning can propose concept pages from those candidates even when explicit tags are missing
 - conflicting source claims are represented in the graph so downstream tools can inspect tensions in the corpus
+
+The operator loop now has a review layer too:
+
+- `cognisync review` renders concept-page candidates, entity merge suggestions, conflicting claims, and backlink opportunities
+- `.cognisync/review-queue.json` stores those items as a durable queue for follow-up automation or human review
+- lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
+
+```mermaid
+flowchart TD
+    A["scan builds index, source manifest, and graph manifest"] --> B["review queue materializes follow-up work"]
+    B --> C["operators inspect concept candidates, merges, and conflicts"]
+    C --> D["compile and research consume the cleaned corpus"]
+    D --> E["new artifacts feed the next scan"]
+```
 
 The research surface now supports explicit answer modes:
 
@@ -255,7 +272,7 @@ The implementation is documented in:
 
 - Multi-agent orchestration profiles
 - Native repository and dataset ingestion adapters
-- Richer semantic extraction and entity graphs
+- Richer semantic extraction, merge resolution, and entity graphs
 - Continuous health checks and auto-remediation loops
 - Fine-tuning and synthetic dataset export pipelines
 
