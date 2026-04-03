@@ -36,6 +36,7 @@ workspace/
 ├── outputs/
 │   ├── reports/
 │   │   ├── change-summaries/
+│   │   ├── exports/
 │   │   ├── review-exports/
 │   │   └── review-ui/
 │   └── slides/
@@ -59,6 +60,7 @@ workspace/
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
 - Deterministic corpus change summaries after scan, ingest, maintenance, and research runs
+- Export bridges for JSONL research datasets and presentation bundles
 - Markdown-aware search over `raw/` and `wiki/`
 - Compile planner for missing summaries, concept pages, and repair work
 - Knowledge-base linter for broken links, missing summaries, graph conflicts, and duplicate concepts
@@ -197,12 +199,15 @@ The operator loop now has a review layer too:
 - `cognisync review list-dismissed` shows the current dismissal ledger
 - `cognisync review clear-dismissed <review-id>` removes one dismissal record without reopening it through a separate queue action
 - `cognisync review export` writes a machine-readable artifact with the open queue, dismissal ledger, and review action state for other agents or tools
+- `cognisync export jsonl` writes research-run records into `outputs/reports/exports/` as a portable JSONL dataset artifact
+- `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync ui review` builds a lightweight browser dashboard from the same review state, with graph and run drilldowns, artifact previews, source coverage, compile health, run timelines, concept-graph views, and local review actions when served
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
 - review exports land under `outputs/reports/review-exports/` and are ignored by the scanner so operator telemetry does not leak back into retrieval
+- general export bundles land under `outputs/reports/exports/` and are also ignored by the scanner so bridge artifacts do not leak back into retrieval
 - the review dashboard lands under `outputs/reports/review-ui/`, writes stable `review-export.json` and `dashboard-state.json` sidecars, emits static graph-node, run-detail, and artifact-preview pages, and can be served with `cognisync ui review --serve`
 - when served locally, the dashboard can accept concepts, dismiss or reopen review items, apply backlinks, file conflict notes, and resolve merge candidates against the live workspace state
 - the dashboard now surfaces graph overview data from `.cognisync/graph.json`, connected artifact summaries, recent change summaries, filtered graph/run explorers, richer run history from `.cognisync/runs/`, and browser-readable previews for referenced artifacts
@@ -253,6 +258,20 @@ You can also plan first and execute later:
 cognisync research "map the open questions in this corpus"
 cognisync research --resume latest --profile codex
 ```
+
+## Export Bridges
+
+Once a workspace has real runs in `.cognisync/runs/`, Cognisync can export that file-native state into downstream-friendly bundles:
+
+```bash
+cognisync export jsonl
+cognisync export presentations
+```
+
+- `export jsonl` writes one JSONL row per research run with the question, run metadata, cited report text, prompt packet text, filed answer text, slide path, and validation state
+- `export presentations` copies generated slide decks and their companion reports or filed answers into a timestamped bundle with a stable `manifest.json`
+- both export surfaces write into `outputs/reports/exports/`
+- scanner ignores these bundles so dataset and sharing artifacts do not re-enter retrieval
 
 ## Built-In Adapter Example
 

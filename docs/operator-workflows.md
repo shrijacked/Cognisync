@@ -10,6 +10,7 @@ It focuses on seven commands that make the framework feel like a product rather 
 - `cognisync ingest ...`
 - `cognisync review`
 - `cognisync ui review`
+- `cognisync export ...`
 - `cognisync maintain`
 - `cognisync compile ...`
 - `cognisync research ...`
@@ -29,7 +30,8 @@ flowchart TD
     I --> J["configured LLM profile executes compile work"]
     J --> K["scan and lint run again on the updated workspace"]
     K --> L["research turns the refreshed corpus into cited reports and filed answers"]
-    L --> M["run manifests, graph state, review queue, review actions, and change summaries persist the loop"]
+    L --> M["export bridges package reports and slide decks for downstream systems"]
+    M --> N["run manifests, graph state, review queue, review actions, and change summaries persist the loop"]
 ```
 
 ## Command Roles
@@ -111,6 +113,27 @@ The command:
 4. can optionally serve that directory locally with `--serve`
 
 The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, and run history from `.cognisync/runs/`. It also writes static graph-node, run-detail, run-timeline, concept-graph, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, and run artifacts without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, and resolve merge candidates against the live workspace. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+
+### `export`
+
+Use `export` when you want the same workspace state to leave Cognisync in a portable bundle instead of staying only as Markdown and manifests.
+
+Supported paths in this release:
+
+- `cognisync export jsonl`
+- `cognisync export presentations`
+
+`export jsonl` walks `.cognisync/runs/`, selects research runs, and writes a JSONL dataset artifact under `outputs/reports/exports/` with:
+
+- question text
+- run status and mode
+- report, answer, and prompt-packet text
+- citations and validation state
+- paths back to the original workspace artifacts
+
+`export presentations` copies slide decks plus companion reports and answers into a timestamped bundle under `outputs/reports/exports/` and writes a stable `manifest.json` for downstream viewers or sharing flows.
+
+The scanner ignores `outputs/reports/exports/` so these bridge artifacts never pollute search or retrieval.
 
 ### `maintain`
 
@@ -216,6 +239,7 @@ The scan and compile loop also uses a richer graph substrate now:
 | O7 | `ingest` | richer raw source artifacts, updated index and grouped source manifest, change summary artifact |
 | O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups, plus export artifacts for other tools |
 | O9 | `ui review` | browser-ready dashboard bundle with review, graph, and run-history state |
-| O10 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
-| O11 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
-| O12 | `research` | cited report, prompt packet, validated answer artifact, run manifest, change summary artifact |
+| O10 | `export` | JSONL research datasets and timestamped presentation bundles under `outputs/reports/exports/` |
+| O11 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
+| O12 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
+| O13 | `research` | cited report, prompt packet, validated answer artifact, run manifest, change summary artifact |
