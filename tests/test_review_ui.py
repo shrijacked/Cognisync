@@ -81,6 +81,10 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Run History", html)
             self.assertIn("Graph Node Explorer", html)
             self.assertIn("Run Explorer", html)
+            self.assertIn("Source Coverage", html)
+            self.assertIn("Compile Health", html)
+            self.assertIn("Run Timeline", html)
+            self.assertIn("Concept Graph", html)
             self.assertIn("Filter nodes", html)
             self.assertIn("Filter runs", html)
             self.assertIn(".cognisync/graph.json", html)
@@ -88,6 +92,10 @@ class ReviewUiTests(unittest.TestCase):
             self.assertEqual(state["schema_version"], 1)
             self.assertGreaterEqual(state["graph"]["node_count"], 1)
             self.assertGreaterEqual(state["graph"]["edge_count"], 1)
+            self.assertGreaterEqual(state["source_coverage"]["source_count"], 1)
+            self.assertGreaterEqual(state["compile_health"]["pending_task_count"], 1)
+            self.assertGreaterEqual(state["run_timeline"]["total_count"], 1)
+            self.assertGreaterEqual(state["concept_graph"]["selected_node_count"], 1)
             self.assertGreaterEqual(len(state["graph"]["nodes"]), 1)
             self.assertTrue(any(item["detail_href"] for item in state["graph"]["nodes"]))
             self.assertTrue(any(item["run_kind"] == "research" for item in state["runs"]["items"]))
@@ -97,18 +105,28 @@ class ReviewUiTests(unittest.TestCase):
             graph_detail_href = state["graph"]["nodes"][0]["detail_href"]
             run_detail_href = next(item["detail_href"] for item in state["runs"]["items"] if item["run_kind"] == "research")
             change_detail_href = state["change_summaries"][0]["detail_href"]
+            concept_graph_href = state["concept_graph"]["map_href"]
+            run_timeline_href = state["run_timeline"]["detail_href"]
             graph_detail_path = workspace.review_ui_dir / graph_detail_href
             run_detail_path = workspace.review_ui_dir / run_detail_href
             change_detail_path = workspace.review_ui_dir / change_detail_href
+            concept_graph_path = workspace.review_ui_dir / concept_graph_href
+            run_timeline_path = workspace.review_ui_dir / run_timeline_href
             self.assertTrue(graph_detail_path.exists())
             self.assertTrue(run_detail_path.exists())
             self.assertTrue(change_detail_path.exists())
+            self.assertTrue(concept_graph_path.exists())
+            self.assertTrue(run_timeline_path.exists())
             self.assertIn("Graph Node Detail", graph_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Run Detail", run_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Artifact Preview", change_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("Concept Graph", concept_graph_path.read_text(encoding="utf-8"))
+            self.assertIn("Run Timeline", run_timeline_path.read_text(encoding="utf-8"))
             self.assertIn(graph_detail_href, html)
             self.assertIn(run_detail_href, html)
             self.assertIn(change_detail_href, html)
+            self.assertIn(concept_graph_href, html)
+            self.assertIn(run_timeline_href, html)
             self.assertIn("action=\"/api/review/dismiss\"", html)
             self.assertIn("action=\"/api/review/reopen\"", html)
             self.assertIn("Wrote review UI to", stdout.getvalue())

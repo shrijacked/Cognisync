@@ -22,6 +22,8 @@ from cognisync.maintenance import (
     resolve_entity_merge,
 )
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
+from cognisync.linter import lint_snapshot
+from cognisync.planner import build_compile_plan
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
 from cognisync.types import IndexSnapshot
@@ -54,6 +56,8 @@ def write_review_ui_bundle(
     _write_artifact_preview_pages(workspace, html_path.parent, state_payload)
     _write_graph_detail_pages(workspace, html_path.parent, state_payload)
     _write_run_detail_pages(workspace, html_path.parent, state_payload)
+    _write_run_timeline_page(html_path.parent, state_payload)
+    _write_concept_graph_page(html_path.parent, state_payload)
 
     html_path.write_text(
         render_review_ui_html(
@@ -93,10 +97,14 @@ def render_review_ui_html(
     open_items = list(review_payload.get("open_items", []))
     dismissed_items = list(review_payload.get("dismissed_items", []))
     counts_by_kind = dict(summary.get("open_item_counts_by_kind", {}))
+    source_coverage = dict(payload.get("source_coverage", {}))
+    compile_health = dict(payload.get("compile_health", {}))
     graph = dict(payload.get("graph", {}))
     graph_nodes = list(graph.get("nodes", []))
     runs = dict(payload.get("runs", {}))
     run_items = list(runs.get("items", []))
+    run_timeline = dict(payload.get("run_timeline", {}))
+    concept_graph = dict(payload.get("concept_graph", {}))
     recent_change_summaries = list(payload.get("change_summaries", []))
     serialized_payload = json.dumps(payload, indent=2, sort_keys=True)
 
@@ -107,6 +115,8 @@ def render_review_ui_html(
         ("Graph Edges", str(graph.get("edge_count", 0))),
         ("Recorded Runs", str(runs.get("total_count", 0))),
         ("Known Conflicts", str(graph.get("conflict_count", 0))),
+        ("Sources", str(source_coverage.get("source_count", 0))),
+        ("Pending Tasks", str(compile_health.get("pending_task_count", 0))),
     ]
 
     lines = [
@@ -210,9 +220,25 @@ def render_review_ui_html(
             "          <h2>Recent Change Summaries</h2>",
             _render_recent_links(recent_change_summaries, empty_label="No change summaries found."),
             "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Source Coverage</h2>",
+            _render_source_coverage(source_coverage),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Compile Health</h2>",
+            _render_compile_health(compile_health),
+            "        </article>",
             "      </div>",
             "    </section>",
             "    <section class=\"stack\" style=\"margin-top: 18px;\">",
+            "      <article class=\"panel\">",
+            "        <h2>Run Timeline</h2>",
+            _render_run_timeline(run_timeline),
+            "      </article>",
+            "      <article class=\"panel\">",
+            "        <h2>Concept Graph</h2>",
+            _render_concept_graph_panel(concept_graph),
+            "      </article>",
             "      <article class=\"panel\" data-filter-scope=\"graph-nodes\">",
             "        <div class=\"toolbar\">",
             "          <h2>Graph Node Explorer</h2>",
@@ -269,19 +295,25 @@ def build_review_ui_state(
     review_payload: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     review_payload = review_payload or build_review_export_payload(workspace, snapshot)
+    runs = _build_run_history(workspace)
     return {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
         "workspace": {
             "root": workspace.root.as_posix(),
+            "sources_manifest_path": workspace.relative_path(workspace.sources_manifest_path),
             "graph_manifest_path": workspace.relative_path(workspace.graph_manifest_path),
             "review_queue_manifest_path": workspace.relative_path(workspace.review_queue_manifest_path),
             "review_actions_manifest_path": workspace.relative_path(workspace.review_actions_manifest_path),
             "runs_dir": workspace.relative_path(workspace.runs_dir),
         },
         "review": review_payload,
+        "source_coverage": _build_source_coverage(workspace),
+        "compile_health": _build_compile_health(workspace, snapshot),
         "graph": _build_graph_summary(workspace),
-        "runs": _build_run_history(workspace),
+        "runs": runs,
+        "run_timeline": _build_run_timeline(workspace),
+        "concept_graph": _build_concept_graph(workspace),
         "change_summaries": _read_recent_change_summaries(workspace),
     }
 
@@ -369,6 +401,124 @@ def _render_recent_links(items: List[Dict[str, str]], empty_label: str) -> str:
             + label
             + "</a></strong><br><span class=\"muted\">"
             + meta
+            + "</span></li>"
+        )
+    lines.append("          </ul>")
+    return "\n".join(lines)
+
+
+def _render_source_coverage(coverage: Dict[str, object]) -> str:
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">sources <strong>{escape(str(coverage.get('source_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">assets <strong>{escape(str(coverage.get('captured_asset_count', 0)))}</strong></span>",
+        f"            <span class=\"pill\">summaries <strong>{escape(str(coverage.get('summary_target_count', 0)))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{escape(str(coverage.get('manifest_path', '')))}</code></p>",
+        _render_kind_table("Source Kinds", dict(coverage.get("counts_by_kind", {}))),
+        _render_kind_table("Extraction Status", dict(coverage.get("counts_by_status", {}))),
+        _render_tag_table(list(coverage.get("top_tags", []))),
+    ]
+    return "\n".join(lines)
+
+
+def _render_compile_health(health: Dict[str, object]) -> str:
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill danger\">issues <strong>{escape(str(health.get('issue_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">tasks <strong>{escape(str(health.get('pending_task_count', 0)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Issue Severities", dict(health.get("issue_counts_by_severity", {}))),
+        _render_kind_table("Issue Kinds", dict(health.get("issue_counts_by_kind", {}))),
+        _render_kind_table("Pending Task Kinds", dict(health.get("task_counts_by_kind", {}))),
+        _render_issue_preview(list(health.get("top_issues", []))),
+    ]
+    return "\n".join(lines)
+
+
+def _render_run_timeline(timeline: Dict[str, object]) -> str:
+    buckets = list(timeline.get("buckets", []))
+    detail_href = escape(str(timeline.get("detail_href", "")))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">days <strong>{escape(str(len(buckets)))}</strong></span>",
+        f"            <span class=\"pill warn\">runs <strong>{escape(str(timeline.get('total_count', 0)))}</strong></span>",
+        f"            <span><a class=\"mono-link\" href=\"{detail_href}\">open timeline page</a></span>",
+        "          </div>",
+    ]
+    if not buckets:
+        lines.append("          <p class=\"empty\">No run timeline data available.</p>")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "          <table>",
+            "            <thead><tr><th>Day</th><th>Runs</th><th>Statuses</th></tr></thead>",
+            "            <tbody>",
+        ]
+    )
+    for bucket in buckets[:8]:
+        lines.extend(
+            [
+                "              <tr>",
+                f"                <td>{escape(str(bucket.get('day', '')))}</td>",
+                f"                <td>{escape(str(bucket.get('count', 0)))}</td>",
+                f"                <td>{escape(_format_counts_inline(dict(bucket.get('statuses', {}))))}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_concept_graph_panel(concept_graph: Dict[str, object]) -> str:
+    map_href = escape(str(concept_graph.get("map_href", "")))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">nodes <strong>{escape(str(concept_graph.get('selected_node_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">edges <strong>{escape(str(concept_graph.get('selected_edge_count', 0)))}</strong></span>",
+        f"            <span><a class=\"mono-link\" href=\"{map_href}\">open concept graph</a></span>",
+        "          </div>",
+        _render_concept_graph_svg(concept_graph, current_href="index.html"),
+    ]
+    return "\n".join(lines)
+
+
+def _render_tag_table(items: List[Dict[str, object]]) -> str:
+    if not items:
+        return "          <p class=\"empty\">No source tags recorded.</p>"
+    lines = [
+        "          <h3>Top Tags</h3>",
+        "          <table>",
+        "            <thead><tr><th>Tag</th><th>Count</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for item in items:
+        lines.extend(
+            [
+                "              <tr>",
+                f"                <td>{escape(str(item.get('tag', '')))}</td>",
+                f"                <td>{escape(str(item.get('count', 0)))}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_issue_preview(items: List[Dict[str, object]]) -> str:
+    if not items:
+        return "          <p class=\"empty\">No compile or lint issues detected.</p>"
+    lines = ["          <h3>Top Issues</h3>", "          <ul>"]
+    for item in items:
+        lines.append(
+            "            <li><strong>"
+            + escape(str(item.get("severity", "")))
+            + "</strong> "
+            + escape(str(item.get("kind", "")))
+            + " <code>"
+            + escape(str(item.get("path", "")))
+            + "</code><br><span class=\"muted\">"
+            + escape(str(item.get("message", "")))
             + "</span></li>"
         )
     lines.append("          </ul>")
@@ -758,6 +908,71 @@ def _read_recent_change_summaries(workspace: Workspace, limit: int = 6) -> List[
     return items
 
 
+def _build_source_coverage(workspace: Workspace, limit: int = 6) -> Dict[str, object]:
+    if not workspace.sources_manifest_path.exists():
+        return {
+            "manifest_path": workspace.relative_path(workspace.sources_manifest_path),
+            "source_count": 0,
+            "counts_by_kind": {},
+            "counts_by_status": {},
+            "captured_asset_count": 0,
+            "summary_target_count": 0,
+            "total_word_count": 0,
+            "top_tags": [],
+        }
+
+    manifest = read_json_manifest(workspace.sources_manifest_path)
+    sources = list(manifest.get("sources", []))
+    kind_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    tag_counts: Counter[str] = Counter()
+    captured_asset_count = 0
+    summary_target_count = 0
+    total_word_count = 0
+    for source in sources:
+        kind_counts[str(source.get("source_kind", "unknown"))] += 1
+        status_counts[str(source.get("extraction_status", "unknown"))] += 1
+        captured_asset_count += len(list(source.get("captured_assets", [])))
+        summary_target_count += len(list(source.get("summary_targets", [])))
+        total_word_count += int(source.get("word_count", 0) or 0)
+        for tag in list(source.get("tags", [])):
+            tag_counts[str(tag)] += 1
+    return {
+        "manifest_path": workspace.relative_path(workspace.sources_manifest_path),
+        "source_count": len(sources),
+        "counts_by_kind": dict(kind_counts),
+        "counts_by_status": dict(status_counts),
+        "captured_asset_count": captured_asset_count,
+        "summary_target_count": summary_target_count,
+        "total_word_count": total_word_count,
+        "top_tags": [{"tag": tag, "count": count} for tag, count in tag_counts.most_common(limit)],
+    }
+
+
+def _build_compile_health(workspace: Workspace, snapshot: IndexSnapshot, limit: int = 6) -> Dict[str, object]:
+    issues = lint_snapshot(snapshot, workspace=workspace)
+    plan = build_compile_plan(snapshot)
+    issue_kind_counts: Counter[str] = Counter(issue.kind for issue in issues)
+    issue_severity_counts: Counter[str] = Counter(issue.severity for issue in issues)
+    task_kind_counts: Counter[str] = Counter(task.kind for task in plan.tasks)
+    return {
+        "issue_count": len(issues),
+        "pending_task_count": len(plan.tasks),
+        "issue_counts_by_kind": dict(issue_kind_counts),
+        "issue_counts_by_severity": dict(issue_severity_counts),
+        "task_counts_by_kind": dict(task_kind_counts),
+        "top_issues": [
+            {
+                "severity": issue.severity,
+                "kind": issue.kind,
+                "path": issue.path,
+                "message": issue.message,
+            }
+            for issue in issues[:limit]
+        ],
+    }
+
+
 def _build_run_history(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
     items: List[Dict[str, str]] = []
     counts_by_kind: Counter[str] = Counter()
@@ -797,6 +1012,49 @@ def _build_run_history(workspace: Workspace, limit: int = 24) -> Dict[str, objec
         "counts_by_kind": dict(counts_by_kind),
         "counts_by_status": dict(counts_by_status),
         "items": items[:limit],
+    }
+
+
+def _build_run_timeline(workspace: Workspace, limit: int = 12) -> Dict[str, object]:
+    buckets: Dict[str, Dict[str, object]] = {}
+    manifests = sorted(workspace.runs_dir.glob("*.json"), reverse=True)
+    for path in manifests:
+        manifest = read_json_manifest(path)
+        generated_at = str(manifest.get("generated_at", ""))
+        day = generated_at[:10] if len(generated_at) >= 10 else "unknown"
+        entry = buckets.setdefault(day, {"day": day, "count": 0, "statuses": Counter(), "kinds": Counter(), "items": []})
+        entry["count"] = int(entry["count"]) + 1
+        status = str(manifest.get("status", "unknown"))
+        kind = str(manifest.get("run_kind", "unknown"))
+        entry["statuses"][status] += 1
+        entry["kinds"][kind] += 1
+        entry["items"].append(
+            {
+                "label": str(manifest.get("run_label", path.stem)),
+                "path": workspace.relative_path(path),
+                "detail_href": _run_detail_href(workspace.relative_path(path)),
+                "status": status,
+                "run_kind": kind,
+                "generated_at": generated_at,
+            }
+        )
+
+    ordered = []
+    for day in sorted(buckets, reverse=True)[:limit]:
+        bucket = buckets[day]
+        ordered.append(
+            {
+                "day": day,
+                "count": bucket["count"],
+                "statuses": dict(bucket["statuses"]),
+                "kinds": dict(bucket["kinds"]),
+                "items": bucket["items"][:8],
+            }
+        )
+    return {
+        "detail_href": "runs/timeline.html",
+        "total_count": len(manifests),
+        "buckets": ordered,
     }
 
 
@@ -880,6 +1138,99 @@ def _build_graph_summary(workspace: Workspace, limit: int = 6) -> Dict[str, obje
         "top_connected_artifacts": top_connected_artifacts,
         "conflicts": conflicts[:limit],
         "nodes": graph_nodes,
+    }
+
+
+def _build_concept_graph(workspace: Workspace, limit: int = 18) -> Dict[str, object]:
+    if not workspace.graph_manifest_path.exists():
+        return {
+            "map_href": "graph/concept-map.html",
+            "selected_node_count": 0,
+            "selected_edge_count": 0,
+            "nodes": [],
+            "edges": [],
+        }
+
+    manifest = read_json_manifest(workspace.graph_manifest_path)
+    nodes = list(manifest.get("nodes", []))
+    edges = list(manifest.get("edges", []))
+    node_index = {str(node.get("id", "")): node for node in nodes}
+    degree_counts: Counter[str] = Counter()
+    for edge in edges:
+        degree_counts[str(edge.get("source", ""))] += 1
+        degree_counts[str(edge.get("target", ""))] += 1
+
+    interesting_nodes = [
+        node
+        for node in nodes
+        if str(node.get("kind", "")) in {"tag", "entity", "concept_candidate", "artifact"}
+    ]
+    interesting_nodes.sort(
+        key=lambda node: (
+            str(node.get("kind", "")) == "artifact",
+            -degree_counts[str(node.get("id", ""))],
+            str(node.get("title", node.get("id", ""))).lower(),
+        )
+    )
+    selected = interesting_nodes[:limit]
+    if not selected:
+        return {
+            "map_href": "graph/concept-map.html",
+            "selected_node_count": 0,
+            "selected_edge_count": 0,
+            "nodes": [],
+            "edges": [],
+        }
+
+    lanes = {"tag": 120, "entity": 360, "concept_candidate": 620, "artifact": 900}
+    lane_groups: Dict[str, List[Dict[str, object]]] = {key: [] for key in lanes}
+    for node in selected:
+        kind = str(node.get("kind", "artifact"))
+        lane_groups.setdefault(kind, []).append(node)
+
+    laid_out_nodes: List[Dict[str, object]] = []
+    selected_ids = {str(node.get("id", "")) for node in selected}
+    for kind, x in lanes.items():
+        group = sorted(lane_groups.get(kind, []), key=lambda node: (-degree_counts[str(node.get("id", ""))], str(node.get("title", node.get("id", ""))).lower()))
+        for index, node in enumerate(group):
+            node_id = str(node.get("id", ""))
+            y = 90 + (index * 90)
+            laid_out_nodes.append(
+                {
+                    "id": node_id,
+                    "title": _node_title(node),
+                    "kind": kind,
+                    "x": x,
+                    "y": y,
+                    "detail_href": _node_detail_href(node_id, kind),
+                }
+            )
+
+    selected_edges = []
+    seen = set()
+    for edge in edges:
+        source = str(edge.get("source", ""))
+        target = str(edge.get("target", ""))
+        if source not in selected_ids or target not in selected_ids:
+            continue
+        key = (source, target, str(edge.get("kind", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        selected_edges.append(
+            {
+                "source": source,
+                "target": target,
+                "kind": str(edge.get("kind", "")),
+            }
+        )
+
+    return {
+        "map_href": "graph/concept-map.html",
+        "selected_node_count": len(laid_out_nodes),
+        "selected_edge_count": len(selected_edges),
+        "nodes": laid_out_nodes,
+        "edges": selected_edges,
     }
 
 
@@ -991,6 +1342,32 @@ def _write_run_detail_pages(workspace: Workspace, bundle_dir: Path, state_payloa
         )
 
 
+def _write_run_timeline_page(bundle_dir: Path, state_payload: Dict[str, object]) -> None:
+    timeline = dict(state_payload.get("run_timeline", {}))
+    detail_href = str(timeline.get("detail_href", "")).strip()
+    if not detail_href:
+        return
+    detail_path = bundle_dir / detail_href
+    detail_path.parent.mkdir(parents=True, exist_ok=True)
+    detail_path.write_text(
+        _render_run_timeline_page_html(current_href=detail_href, timeline=timeline),
+        encoding="utf-8",
+    )
+
+
+def _write_concept_graph_page(bundle_dir: Path, state_payload: Dict[str, object]) -> None:
+    concept_graph = dict(state_payload.get("concept_graph", {}))
+    map_href = str(concept_graph.get("map_href", "")).strip()
+    if not map_href:
+        return
+    map_path = bundle_dir / map_href
+    map_path.parent.mkdir(parents=True, exist_ok=True)
+    map_path.write_text(
+        _render_concept_graph_page_html(current_href=map_href, concept_graph=concept_graph),
+        encoding="utf-8",
+    )
+
+
 def _render_graph_node_detail_html(
     current_href: str,
     node_summary: Dict[str, object],
@@ -1099,6 +1476,56 @@ def _render_run_detail_html(
     )
 
 
+def _render_run_timeline_page_html(current_href: str, timeline: Dict[str, object]) -> str:
+    body_lines = [
+        "<article class=\"panel\">",
+        "  <h2>Timeline Overview</h2>",
+        _render_detail_fields(
+            [
+                ("Days", _render_code_value(str(len(list(timeline.get("buckets", [])))))),
+                ("Runs", _render_code_value(str(timeline.get("total_count", 0)))),
+            ]
+        ),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Timeline Buckets</h2>",
+        _render_run_timeline_buckets(list(timeline.get("buckets", [])), current_href=current_href),
+        "</article>",
+    ]
+    return _render_detail_page(
+        title="Run Timeline",
+        heading="Run Timeline",
+        subtitle="chronological run ledger",
+        current_href=current_href,
+        body_html="\n".join(body_lines),
+    )
+
+
+def _render_concept_graph_page_html(current_href: str, concept_graph: Dict[str, object]) -> str:
+    body_lines = [
+        "<article class=\"panel\">",
+        "  <h2>Graph Overview</h2>",
+        _render_detail_fields(
+            [
+                ("Selected Nodes", _render_code_value(str(concept_graph.get("selected_node_count", 0)))),
+                ("Selected Edges", _render_code_value(str(concept_graph.get("selected_edge_count", 0)))),
+            ]
+        ),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Concept Graph</h2>",
+        _render_concept_graph_svg(concept_graph, current_href=current_href),
+        "</article>",
+    ]
+    return _render_detail_page(
+        title="Concept Graph",
+        heading="Concept Graph",
+        subtitle="filesystem-backed graph map",
+        current_href=current_href,
+        body_html="\n".join(body_lines),
+    )
+
+
 def _render_detail_page(title: str, heading: str, subtitle: str, current_href: str, body_html: str) -> str:
     dashboard_href = escape(_relative_href(current_href, "index.html"))
     return "\n".join(
@@ -1170,6 +1597,97 @@ def _render_preview_value(current_href: str, relative_path: str) -> str:
     if not normalized:
         return _render_code_value("-")
     return _render_link_value(current_href, normalized, _artifact_preview_href(normalized))
+
+
+def _render_run_timeline_buckets(buckets: List[Dict[str, object]], current_href: str) -> str:
+    if not buckets:
+        return "  <p class=\"muted\">No run timeline buckets found.</p>"
+    lines = [
+        "  <table>",
+        "    <thead><tr><th>Day</th><th>Runs</th><th>Statuses</th><th>Recent Items</th></tr></thead>",
+        "    <tbody>",
+    ]
+    for bucket in buckets:
+        items = list(bucket.get("items", []))
+        recent = "<br>".join(
+            [
+                "<a href=\""
+                + escape(_relative_href(current_href, str(item.get("detail_href", ""))))
+                + "\">"
+                + escape(str(item.get("label", "")))
+                + "</a>"
+                for item in items[:3]
+            ]
+        ) or "-"
+        lines.extend(
+            [
+                "      <tr>",
+                f"        <td>{escape(str(bucket.get('day', '')))}</td>",
+                f"        <td>{escape(str(bucket.get('count', 0)))}</td>",
+                f"        <td>{escape(_format_counts_inline(dict(bucket.get('statuses', {}))))}</td>",
+                f"        <td>{recent}</td>",
+                "      </tr>",
+            ]
+        )
+    lines.extend(["    </tbody>", "  </table>"])
+    return "\n".join(lines)
+
+
+def _render_concept_graph_svg(concept_graph: Dict[str, object], current_href: str) -> str:
+    nodes = list(concept_graph.get("nodes", []))
+    edges = list(concept_graph.get("edges", []))
+    if not nodes:
+        return "<p class=\"empty\">No concept graph data available.</p>"
+
+    by_id = {str(node.get("id", "")): node for node in nodes}
+    max_y = max(int(node.get("y", 0)) for node in nodes) + 70
+    parts = [
+        f"<svg viewBox=\"0 0 1020 {max(240, max_y)}\" width=\"100%\" role=\"img\" aria-label=\"Concept graph\">",
+        "<rect x=\"0\" y=\"0\" width=\"1020\" height=\"100%\" fill=\"#fffaf0\"></rect>",
+    ]
+    for edge in edges:
+        source = by_id.get(str(edge.get("source", "")))
+        target = by_id.get(str(edge.get("target", "")))
+        if source is None or target is None:
+            continue
+        parts.append(
+            "<line x1=\""
+            + escape(str(int(source.get("x", 0)) + 70))
+            + "\" y1=\""
+            + escape(str(int(source.get("y", 0)) + 18))
+            + "\" x2=\""
+            + escape(str(int(target.get("x", 0)) - 10))
+            + "\" y2=\""
+            + escape(str(int(target.get("y", 0)) + 18))
+            + "\" stroke=\"#d8d2c2\" stroke-width=\"2\"></line>"
+        )
+    for node in nodes:
+        x = int(node.get("x", 0))
+        y = int(node.get("y", 0))
+        fill = {"tag": "#dff2ec", "entity": "#fdf0e3", "concept_candidate": "#fbeaea", "artifact": "#e9eef4"}.get(
+            str(node.get("kind", "")),
+            "#f3efe4",
+        )
+        href = escape(_relative_href(current_href, str(node.get("detail_href", ""))))
+        title = escape(str(node.get("title", "")))
+        kind = escape(str(node.get("kind", "")))
+        parts.extend(
+            [
+                f"<a href=\"{href}\">",
+                f"<rect x=\"{x}\" y=\"{y}\" width=\"150\" height=\"38\" rx=\"14\" fill=\"{fill}\" stroke=\"#d8d2c2\"></rect>",
+                f"<text x=\"{x + 12}\" y=\"{y + 16}\" font-size=\"12\" fill=\"#1f2933\">{title}</text>",
+                f"<text x=\"{x + 12}\" y=\"{y + 30}\" font-size=\"10\" fill=\"#5c6b73\">{kind}</text>",
+                "</a>",
+            ]
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _format_counts_inline(values: Dict[str, object]) -> str:
+    if not values:
+        return "none"
+    return ", ".join(f"{key}:{value}" for key, value in sorted(values.items()))
 
 
 def _render_artifact_preview_html(current_href: str, relative_path: str, artifact_path: Path) -> str:
