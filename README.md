@@ -156,6 +156,13 @@ Research verification is now stricter too:
 - malformed answers, such as missing top-level headings, fail the run
 - conflicting source statements are surfaced as run warnings and downgrade the run to `completed_with_warnings`
 
+The graph layer is richer now as well:
+
+- `.cognisync/graph.json` includes entity nodes and mention edges, not just artifacts and tags
+- repeated entities and tags become concept candidates with support counts
+- compile planning can propose concept pages from those candidates even when explicit tags are missing
+- conflicting source claims are represented in the graph so downstream tools can inspect tensions in the corpus
+
 The research surface now supports explicit answer modes:
 
 - `--mode wiki` for reusable filed answers in `wiki/queries/`

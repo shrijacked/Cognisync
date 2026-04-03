@@ -106,6 +106,12 @@ Before a research run is considered complete, Cognisync now checks:
 - answer lint, such as missing top-level headings
 - conflicting source statements, which are recorded as warnings when the answer does not acknowledge them
 
+The scan and compile loop also uses a richer graph substrate now:
+
+- `.cognisync/graph.json` materializes entities, concept candidates, and conflict edges
+- repeated headings, entity mentions, and tags can all feed concept-page planning
+- concept creation is no longer limited to explicit tag overlap
+
 ## Traceability
 
 | Task | Command Surface | Output |
