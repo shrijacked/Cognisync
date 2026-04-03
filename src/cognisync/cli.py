@@ -184,6 +184,7 @@ def cmd_ui_review(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         index_name=result.html_path.name,
+        workspace=workspace,
     )
     host, port = server.server_address
     print(f"Serving review UI at http://{host}:{port}/")

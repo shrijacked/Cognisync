@@ -9,10 +9,21 @@ import hashlib
 import json
 from pathlib import Path
 import posixpath
+from urllib.parse import parse_qs, urlparse
 from typing import Dict, List, Optional, Sequence
 
-from cognisync.manifests import read_json_manifest
+from cognisync.maintenance import (
+    MaintenanceError,
+    accept_concept_candidate,
+    apply_backlink_suggestion,
+    dismiss_review_item,
+    file_conflict_review,
+    reopen_review_item,
+    resolve_entity_merge,
+)
+from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.review_exports import build_review_export_payload
+from cognisync.scanner import scan_workspace
 from cognisync.types import IndexSnapshot
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
@@ -40,6 +51,7 @@ def write_review_ui_bundle(
 
     export_path.write_text(json.dumps(review_payload, indent=2, sort_keys=True), encoding="utf-8")
     state_path.write_text(json.dumps(state_payload, indent=2, sort_keys=True), encoding="utf-8")
+    _write_artifact_preview_pages(workspace, html_path.parent, state_payload)
     _write_graph_detail_pages(workspace, html_path.parent, state_payload)
     _write_run_detail_pages(workspace, html_path.parent, state_payload)
 
@@ -59,9 +71,15 @@ def create_review_ui_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     index_name: str = "index.html",
+    workspace: Optional[Workspace] = None,
 ) -> ThreadingHTTPServer:
     directory = Path(directory).resolve()
-    handler = partial(_ReviewUiHandler, directory=str(directory), index_name=index_name)
+    handler = partial(
+        _ReviewUiHandler,
+        directory=str(directory),
+        index_name=index_name,
+        workspace=workspace,
+    )
     return ThreadingHTTPServer((host, port), handler)
 
 
@@ -122,6 +140,10 @@ def render_review_ui_html(
         "    .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 16px 0; }",
         "    .filter-grid label { display: grid; gap: 6px; color: var(--muted); font-size: 0.9rem; }",
         "    .filter-grid input, .filter-grid select { width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: rgba(255, 253, 247, 0.95); color: var(--ink); font: inherit; }",
+        "    form { display: grid; gap: 6px; margin-top: 8px; }",
+        "    button { border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; background: rgba(22, 93, 82, 0.08); color: var(--accent); font: inherit; cursor: pointer; }",
+        "    button:hover { background: rgba(22, 93, 82, 0.14); }",
+        "    input[type=\"text\"] { width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: rgba(255, 253, 247, 0.95); color: var(--ink); font: inherit; }",
         "    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.82rem; }",
         "    .pill.warn { background: var(--warn-soft); color: var(--warn); }",
         "    .pill.danger { background: var(--danger-soft); color: var(--danger); }",
@@ -144,7 +166,7 @@ def render_review_ui_html(
         "  <main>",
         "    <header>",
         "      <h1>Cognisync Review UI</h1>",
-        "      <p class=\"lede\">A lightweight browser surface over the filesystem-native review loop. This dashboard is generated from the current workspace manifests and keeps the queue, dismissals, graph activity, and operator runs readable without scraping terminal output.</p>",
+        "      <p class=\"lede\">A lightweight browser surface over the filesystem-native review loop. This dashboard is generated from the current workspace manifests and keeps the queue, dismissals, graph activity, and operator runs readable without scraping terminal output. When served locally, review actions write straight back into the same filesystem state.</p>",
         "    </header>",
         "    <section class=\"cards\">",
     ]
@@ -283,7 +305,7 @@ def _render_open_items(items: List[Dict[str, object]]) -> str:
         return "          <p class=\"empty\">No open review items.</p>"
     lines = [
         "          <table>",
-        "            <thead><tr><th>Item</th><th>Path</th><th>Priority</th></tr></thead>",
+        "            <thead><tr><th>Item</th><th>Path</th><th>Priority</th><th>Actions</th></tr></thead>",
         "            <tbody>",
     ]
     for item in items:
@@ -298,6 +320,7 @@ def _render_open_items(items: List[Dict[str, object]]) -> str:
                 f"                <td><strong>{title}</strong><br><span class=\"muted\">{detail}</span><br><span class=\"muted\">{suggestion}</span></td>",
                 f"                <td><code>{path}</code></td>",
                 f"                <td>{priority}</td>",
+                f"                <td>{_render_open_item_actions(item)}</td>",
                 "              </tr>",
             ]
         )
@@ -321,6 +344,7 @@ def _render_dismissed_items(items: List[Dict[str, object]]) -> str:
                 f"            <p><code>{review_id}</code></p>",
                 f"            <p>{reason}</p>",
                 f"            <p class=\"muted\">path: <code>{path}</code></p>",
+                f"            {_render_inline_form('/api/review/reopen', [('review_id', str(item.get('review_id', '')))], 'Reopen')}",
                 "          </details>",
             ]
         )
@@ -335,9 +359,74 @@ def _render_recent_links(items: List[Dict[str, str]], empty_label: str) -> str:
         label = escape(item["label"])
         href = escape(item["href"])
         meta = escape(item["meta"])
-        lines.append(f"            <li><span class=\"mono-link\">{href}</span><br><strong>{label}</strong><br><span class=\"muted\">{meta}</span></li>")
+        detail_href = escape(item.get("detail_href", ""))
+        lines.append(
+            "            <li><span class=\"mono-link\">"
+            + href
+            + "</span><br><strong><a href=\""
+            + detail_href
+            + "\">"
+            + label
+            + "</a></strong><br><span class=\"muted\">"
+            + meta
+            + "</span></li>"
+        )
     lines.append("          </ul>")
     return "\n".join(lines)
+
+
+def _render_open_item_actions(item: Dict[str, object]) -> str:
+    forms: List[str] = []
+    kind = str(item.get("kind", ""))
+    if kind == "concept_candidate" and str(item.get("slug", "")).strip():
+        forms.append(_render_inline_form("/api/review/accept-concept", [("slug", str(item["slug"]))], "Accept"))
+    elif kind == "backlink_suggestion" and str(item.get("path", "")).strip():
+        forms.append(_render_inline_form("/api/review/apply-backlink", [("target_path", str(item["path"]))], "Apply backlink"))
+    elif kind == "entity_merge_candidate" and str(item.get("canonical_label", "")).strip():
+        forms.append(
+            _render_inline_form(
+                "/api/review/resolve-merge",
+                [("canonical_label", str(item["canonical_label"]))],
+                "Resolve merge",
+            )
+        )
+    elif kind == "conflict_review" and str(item.get("subject", "")).strip():
+        forms.append(_render_inline_form("/api/review/file-conflict", [("subject", str(item["subject"]))], "File conflict"))
+
+    review_id = str(item.get("review_id", "")).strip()
+    if review_id:
+        forms.append(
+            _render_inline_form(
+                "/api/review/dismiss",
+                [("review_id", review_id)],
+                "Dismiss",
+                text_input=("reason", "reason", "later"),
+            )
+        )
+    if not forms:
+        return "<span class=\"muted\">No actions</span>"
+    return "<div class=\"stack\">" + "".join(forms) + "</div>"
+
+
+def _render_inline_form(
+    action: str,
+    hidden_fields: Sequence[tuple[str, str]],
+    button_label: str,
+    text_input: Optional[tuple[str, str, str]] = None,
+) -> str:
+    lines = [f"<form method=\"post\" action=\"{escape(action)}\">"]
+    for name, value in hidden_fields:
+        lines.append(
+            f"<input type=\"hidden\" name=\"{escape(name)}\" value=\"{escape(value)}\">"
+        )
+    if text_input:
+        name, label, default = text_input
+        lines.append(
+            f"<label class=\"muted\">{escape(label)}<br><input type=\"text\" name=\"{escape(name)}\" value=\"{escape(default)}\"></label>"
+        )
+    lines.append(f"<button type=\"submit\">{escape(button_label)}</button>")
+    lines.append("</form>")
+    return "".join(lines)
 
 
 def _render_graph_overview(graph: Dict[str, object]) -> str:
@@ -662,6 +751,7 @@ def _read_recent_change_summaries(workspace: Workspace, limit: int = 6) -> List[
             {
                 "label": path.stem,
                 "href": relative,
+                "detail_href": _artifact_preview_href(relative),
                 "meta": path.name,
             }
         )
@@ -793,6 +883,62 @@ def _build_graph_summary(workspace: Workspace, limit: int = 6) -> Dict[str, obje
     }
 
 
+def _write_artifact_preview_pages(workspace: Workspace, bundle_dir: Path, state_payload: Dict[str, object]) -> None:
+    for relative_path in _collect_preview_targets(workspace, state_payload):
+        artifact_path = _resolve_workspace_relative(workspace, relative_path)
+        if not artifact_path.exists():
+            continue
+        preview_path = bundle_dir / _artifact_preview_href(relative_path)
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        preview_path.write_text(
+            _render_artifact_preview_html(
+                current_href=_artifact_preview_href(relative_path),
+                relative_path=relative_path,
+                artifact_path=artifact_path,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _collect_preview_targets(workspace: Workspace, state_payload: Dict[str, object]) -> List[str]:
+    targets: List[str] = []
+    seen = set()
+
+    def add_target(relative_path: str) -> None:
+        normalized = relative_path.strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        targets.append(normalized)
+
+    for item in list(state_payload.get("change_summaries", [])):
+        add_target(str(item.get("href", "")))
+
+    graph = dict(state_payload.get("graph", {}))
+    for node in list(graph.get("nodes", [])):
+        add_target(str(node.get("path", "")))
+
+    runs = dict(state_payload.get("runs", {}))
+    for item in list(runs.get("items", [])):
+        add_target(str(item.get("path", "")))
+        manifest_path = _resolve_workspace_relative(workspace, str(item.get("path", "")))
+        if not manifest_path.exists():
+            continue
+        manifest = read_json_manifest(manifest_path)
+        for key in (
+            "plan_path",
+            "plan_json_path",
+            "report_path",
+            "packet_path",
+            "answer_path",
+            "slide_path",
+            "change_summary_path",
+        ):
+            add_target(str(manifest.get(key, "") or ""))
+
+    return targets
+
+
 def _write_graph_detail_pages(workspace: Workspace, bundle_dir: Path, state_payload: Dict[str, object]) -> None:
     graph = dict(state_payload.get("graph", {}))
     nodes = list(graph.get("nodes", []))
@@ -851,6 +997,12 @@ def _render_graph_node_detail_html(
     node_manifest: Dict[str, object],
     relationships: List[Dict[str, str]],
 ) -> str:
+    artifact_path = str(node_summary.get("path", "")).strip()
+    artifact_preview = (
+        _render_link_value(current_href, artifact_path, _artifact_preview_href(artifact_path))
+        if artifact_path
+        else "-"
+    )
     title = escape(str(node_summary.get("title", node_summary.get("id", "Graph Node"))))
     subtitle = escape(str(node_summary.get("kind", "node")))
     body_lines = [
@@ -858,11 +1010,12 @@ def _render_graph_node_detail_html(
         "  <h2>Node Metadata</h2>",
         _render_detail_fields(
             [
-                ("ID", str(node_summary.get("id", ""))),
-                ("Kind", str(node_summary.get("kind", ""))),
-                ("Collection", str(node_summary.get("collection", "")) or "-"),
-                ("Path", str(node_summary.get("path", "")) or "-"),
-                ("Degree", str(node_summary.get("degree", 0))),
+                ("ID", _render_code_value(str(node_summary.get("id", "")))),
+                ("Kind", _render_code_value(str(node_summary.get("kind", "")))),
+                ("Collection", _render_code_value(str(node_summary.get("collection", "")) or "-")),
+                ("Path", _render_code_value(str(node_summary.get("path", "")) or "-")),
+                ("Artifact Preview", artifact_preview),
+                ("Degree", _render_code_value(str(node_summary.get("degree", 0)))),
             ]
         ),
         "</article>",
@@ -899,17 +1052,19 @@ def _render_run_detail_html(
         "  <h2>Run Metadata</h2>",
         _render_detail_fields(
             [
-                ("Label", str(item.get("label", ""))),
-                ("Kind", str(item.get("run_kind", ""))),
-                ("Status", str(item.get("status", ""))),
-                ("Generated", str(item.get("generated_at", ""))),
-                ("Mode", str(manifest.get("mode", "")) or "-"),
-                ("Question", str(manifest.get("question", "")) or "-"),
-                ("Plan", str(manifest.get("plan_path", "")) or "-"),
-                ("Report", str(manifest.get("report_path", "")) or "-"),
-                ("Packet", str(manifest.get("packet_path", "")) or "-"),
-                ("Answer", str(manifest.get("answer_path", "")) or "-"),
-                ("Change Summary", str(manifest.get("change_summary_path", "")) or "-"),
+                ("Label", _render_code_value(str(item.get("label", "")))),
+                ("Kind", _render_code_value(str(item.get("run_kind", "")))),
+                ("Status", _render_code_value(str(item.get("status", "")))),
+                ("Generated", _render_code_value(str(item.get("generated_at", "")))),
+                ("Mode", _render_code_value(str(manifest.get("mode", "")) or "-")),
+                ("Question", _render_code_value(str(manifest.get("question", "")) or "-")),
+                ("Plan", _render_preview_value(current_href, str(manifest.get("plan_path", "")))),
+                ("Plan JSON", _render_preview_value(current_href, str(manifest.get("plan_json_path", "")))),
+                ("Report", _render_preview_value(current_href, str(manifest.get("report_path", "")))),
+                ("Packet", _render_preview_value(current_href, str(manifest.get("packet_path", "")))),
+                ("Answer", _render_preview_value(current_href, str(manifest.get("answer_path", "")))),
+                ("Slides", _render_preview_value(current_href, str(manifest.get("slide_path", "")))),
+                ("Change Summary", _render_preview_value(current_href, str(manifest.get("change_summary_path", "")))),
             ]
         ),
         "</article>",
@@ -917,13 +1072,13 @@ def _render_run_detail_html(
         "  <h2>Validation and Citations</h2>",
         _render_detail_fields(
             [
-                ("Validation Passed", str(validation.get("passed", False))),
-                ("Validation Errors", str(len(list(validation.get("errors", []))))),
-                ("Validation Warnings", str(len(list(validation.get("warnings", []))))),
-                ("Available Citations", str(len(list(citations.get("available", []))))),
-                ("Used Citations", str(len(list(citations.get("used", []))))),
-                ("Resume Count", str(manifest.get("resume_count", 0))),
-                ("Attempt Count", str(manifest.get("attempt_count", 0))),
+                ("Validation Passed", _render_code_value(str(validation.get("passed", False)))),
+                ("Validation Errors", _render_code_value(str(len(list(validation.get("errors", [])))))),
+                ("Validation Warnings", _render_code_value(str(len(list(validation.get("warnings", [])))))),
+                ("Available Citations", _render_code_value(str(len(list(citations.get("available", [])))))),
+                ("Used Citations", _render_code_value(str(len(list(citations.get("used", [])))))),
+                ("Resume Count", _render_code_value(str(manifest.get("resume_count", 0)))),
+                ("Attempt Count", _render_code_value(str(manifest.get("attempt_count", 0)))),
             ]
         ),
         "</article>",
@@ -994,12 +1149,69 @@ def _render_detail_fields(rows: Sequence[tuple[str, str]]) -> str:
             [
                 "      <tr>",
                 f"        <th>{escape(label)}</th>",
-                f"        <td><code>{escape(value)}</code></td>",
+                f"        <td>{value}</td>",
                 "      </tr>",
             ]
         )
     lines.extend(["    </tbody>", "  </table>"])
     return "\n".join(lines)
+
+
+def _render_code_value(value: str) -> str:
+    return f"<code>{escape(value)}</code>"
+
+
+def _render_link_value(current_href: str, label: str, target_href: str) -> str:
+    return f"<a href=\"{escape(_relative_href(current_href, target_href))}\"><code>{escape(label)}</code></a>"
+
+
+def _render_preview_value(current_href: str, relative_path: str) -> str:
+    normalized = relative_path.strip()
+    if not normalized:
+        return _render_code_value("-")
+    return _render_link_value(current_href, normalized, _artifact_preview_href(normalized))
+
+
+def _render_artifact_preview_html(current_href: str, relative_path: str, artifact_path: Path) -> str:
+    preview_text, binary = _read_artifact_preview(artifact_path)
+    body_lines = [
+        "<article class=\"panel\">",
+        "  <h2>Artifact Metadata</h2>",
+        _render_detail_fields(
+            [
+                ("Relative Path", _render_code_value(relative_path)),
+                ("Absolute Path", _render_code_value(artifact_path.as_posix())),
+                ("Suffix", _render_code_value(artifact_path.suffix or "-")),
+                ("Bytes", _render_code_value(str(artifact_path.stat().st_size))),
+                ("Binary", _render_code_value(str(binary))),
+            ]
+        ),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Artifact Preview</h2>",
+        "  <pre>" + escape(preview_text) + "</pre>",
+        "</article>",
+    ]
+    return _render_detail_page(
+        title="Artifact Preview",
+        heading=escape(artifact_path.name),
+        subtitle=escape(relative_path),
+        current_href=current_href,
+        body_html="\n".join(body_lines),
+    )
+
+
+def _read_artifact_preview(path: Path, max_chars: int = 20000) -> tuple[str, bool]:
+    suffix = path.suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf"}:
+        return "Binary artifact preview is not rendered inline. Open the original file from the workspace if needed.", True
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return "Could not read artifact preview.", True
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n[truncated]"
+    return text, False
 
 
 def _render_relationships_table(relationships: List[Dict[str, str]]) -> str:
@@ -1103,6 +1315,14 @@ def _node_detail_href(node_id: str, kind: str) -> str:
     return f"graph/{slug}-{digest}.html"
 
 
+def _artifact_preview_href(relative_path: str) -> str:
+    normalized = relative_path.strip()
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
+    stem = Path(normalized).stem or "artifact"
+    slug = slugify(f"{stem}-{normalized}")[:64] or "artifact"
+    return f"artifacts/{slug}-{digest}.html"
+
+
 def _run_detail_href(relative_path: str) -> str:
     stem = Path(relative_path).stem
     return f"runs/{stem}.html"
@@ -1115,15 +1335,78 @@ def _relative_href(from_href: str, to_href: Optional[str]) -> str:
     return posixpath.relpath(to_href, base)
 
 
+def _refresh_review_ui_bundle(workspace: Workspace, bundle_dir: Path, index_name: str) -> None:
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
+    write_review_ui_bundle(workspace, snapshot, output_file=bundle_dir / index_name)
+
+
 class _ReviewUiHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, index_name: str = "index.html", **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        index_name: str = "index.html",
+        workspace: Optional[Workspace] = None,
+        **kwargs,
+    ) -> None:
         self._index_name = index_name
+        self._workspace = workspace
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
         if self.path in {"", "/"}:
             self.path = f"/{self._index_name}"
         super().do_GET()
+
+    def do_POST(self) -> None:
+        if self._workspace is None:
+            self.send_error(405, "Review actions are only available when serving a live workspace.")
+            return
+
+        parsed = urlparse(self.path)
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw_body = self.rfile.read(length).decode("utf-8", errors="ignore")
+        payload = {key: values[-1] for key, values in parse_qs(raw_body, keep_blank_values=True).items()}
+
+        try:
+            self._apply_review_action(parsed.path, payload)
+            _refresh_review_ui_bundle(self._workspace, Path(self.directory), self._index_name)
+        except MaintenanceError as error:
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(str(error).encode("utf-8"))
+            return
+
+        self.send_response(303)
+        self.send_header("Location", f"/{self._index_name}")
+        self.end_headers()
+
+    def _apply_review_action(self, path: str, payload: Dict[str, str]) -> None:
+        workspace = self._workspace
+        if workspace is None:
+            raise MaintenanceError("No workspace is attached to the review UI server.")
+
+        if path == "/api/review/accept-concept":
+            accept_concept_candidate(workspace, payload.get("slug", ""))
+            return
+        if path == "/api/review/apply-backlink":
+            apply_backlink_suggestion(workspace, payload.get("target_path", ""))
+            return
+        if path == "/api/review/resolve-merge":
+            resolve_entity_merge(workspace, payload.get("canonical_label", ""))
+            return
+        if path == "/api/review/file-conflict":
+            file_conflict_review(workspace, payload.get("subject", ""))
+            return
+        if path == "/api/review/dismiss":
+            dismiss_review_item(workspace, payload.get("review_id", ""), payload.get("reason", ""))
+            return
+        if path == "/api/review/reopen":
+            reopen_review_item(workspace, payload.get("review_id", ""))
+            return
+        raise MaintenanceError(f"Unknown review action endpoint: {path}")
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")

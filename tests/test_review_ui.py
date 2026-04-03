@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from http.client import HTTPConnection
 from pathlib import Path
+from urllib.parse import urlencode
 
 from tests import support  # noqa: F401
 
@@ -95,14 +96,21 @@ class ReviewUiTests(unittest.TestCase):
             self.assertGreaterEqual(payload["summary"]["open_item_count"], 1)
             graph_detail_href = state["graph"]["nodes"][0]["detail_href"]
             run_detail_href = next(item["detail_href"] for item in state["runs"]["items"] if item["run_kind"] == "research")
+            change_detail_href = state["change_summaries"][0]["detail_href"]
             graph_detail_path = workspace.review_ui_dir / graph_detail_href
             run_detail_path = workspace.review_ui_dir / run_detail_href
+            change_detail_path = workspace.review_ui_dir / change_detail_href
             self.assertTrue(graph_detail_path.exists())
             self.assertTrue(run_detail_path.exists())
+            self.assertTrue(change_detail_path.exists())
             self.assertIn("Graph Node Detail", graph_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Run Detail", run_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("Artifact Preview", change_detail_path.read_text(encoding="utf-8"))
             self.assertIn(graph_detail_href, html)
             self.assertIn(run_detail_href, html)
+            self.assertIn(change_detail_href, html)
+            self.assertIn("action=\"/api/review/dismiss\"", html)
+            self.assertIn("action=\"/api/review/reopen\"", html)
             self.assertIn("Wrote review UI to", stdout.getvalue())
             self.assertIn("Wrote review UI state to", stdout.getvalue())
 
@@ -137,6 +145,98 @@ class ReviewUiTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(payload["schema_version"], 1)
                 connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_review_ui_server_applies_actions_and_refreshes_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Review UI Action Test")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["ui", "review", "--workspace", str(root)]), 0)
+
+            server = create_review_ui_server(
+                workspace.review_ui_dir,
+                host="127.0.0.1",
+                port=0,
+                index_name="index.html",
+                workspace=workspace,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode({"review_id": "concept-candidate:agents", "reason": "later"})
+                connection.request(
+                    "POST",
+                    "/api/review/dismiss",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                state = json.loads((workspace.review_ui_dir / "dashboard-state.json").read_text(encoding="utf-8"))
+                self.assertEqual(state["review"]["summary"]["dismissed_item_count"], 1)
+
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode({"review_id": "concept-candidate:agents"})
+                connection.request(
+                    "POST",
+                    "/api/review/reopen",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                state = json.loads((workspace.review_ui_dir / "dashboard-state.json").read_text(encoding="utf-8"))
+                self.assertEqual(state["review"]["summary"]["dismissed_item_count"], 0)
+
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode({"slug": "agent-memory"})
+                connection.request(
+                    "POST",
+                    "/api/review/accept-concept",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                self.assertTrue((workspace.wiki_dir / "concepts" / "agent-memory.md").exists())
+                html = (workspace.review_ui_dir / "index.html").read_text(encoding="utf-8")
+                self.assertIn("action=\"/api/review/accept-concept\"", html)
             finally:
                 server.shutdown()
                 server.server_close()
