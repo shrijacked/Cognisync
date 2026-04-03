@@ -52,6 +52,26 @@ def build_compile_plan(snapshot: IndexSnapshot) -> CompilePlan:
     for issue in lint_snapshot(snapshot):
         if issue.kind == "broken_link":
             repair_targets[issue.path].append(issue.message)
+        elif issue.kind == "stale_summary":
+            source_path = next(
+                (
+                    artifact.path
+                    for artifact in snapshot.artifacts
+                    if artifact.collection == "raw" and artifact.summary_target == issue.path
+                ),
+                issue.path,
+            )
+            tasks.append(
+                PlanTask(
+                    task_id=f"refresh-summary:{issue.path}",
+                    kind="refresh_source_summary",
+                    title=f"Refresh summary {issue.path}",
+                    inputs=[source_path, issue.path],
+                    output_path=issue.path,
+                    rationale=issue.message,
+                    prompt_hint="Refresh the compiled summary so it reflects the latest source content and preserves backlinks.",
+                )
+            )
         elif issue.kind == "orphan_page":
             tasks.append(
                 PlanTask(

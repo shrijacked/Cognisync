@@ -87,6 +87,13 @@ class RuntimeContractsTests(unittest.TestCase):
             summary_texts = [path.read_text(encoding="utf-8") for path in summary_files]
             self.assertTrue(any("New conflicts" in text and "the deployment model is" in text for text in summary_texts))
             self.assertTrue(any("Orphan pages: `0 -> 1` (`+1`)" in text for text in summary_texts))
+            self.assertTrue(any("## Graph Delta" in text for text in summary_texts))
+            self.assertTrue(
+                any(
+                    "## Suggested Follow-Up Questions" in text and "deployment model" in text.lower()
+                    for text in summary_texts
+                )
+            )
             self.assertIn("Wrote change summary", stdout.getvalue())
 
     def test_scan_writes_source_and_graph_manifests(self) -> None:

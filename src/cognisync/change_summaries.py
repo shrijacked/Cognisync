@@ -18,6 +18,12 @@ class ChangeState:
     artifact_count: int
     source_count: int
     orphan_count: int
+    graph_node_count: int
+    graph_edge_count: int
+    entity_count: int
+    assertion_count: int
+    tag_count: int
+    concept_candidate_count: int
     concept_paths: Set[str]
     resolved_merges: Dict[str, str]
     dismissed_reviews: Dict[str, str]
@@ -66,18 +72,31 @@ def _build_change_state(
     artifact_count = 0
     source_count = 0
     orphan_count = 0
+    graph_node_count = 0
+    graph_edge_count = 0
+    entity_count = 0
+    assertion_count = 0
+    tag_count = 0
+    concept_candidate_count = 0
     conflicts: Dict[str, str] = {}
 
     if snapshot is not None:
         artifact_count = len(snapshot.artifacts)
         source_count = len(build_source_manifest(snapshot)["sources"])
         orphan_count = sum(1 for issue in lint_snapshot(snapshot) if issue.kind == "orphan_page")
+        graph_manifest = build_graph_manifest(workspace, snapshot)
+        graph_node_count = len(graph_manifest["nodes"])
+        graph_edge_count = len(graph_manifest["edges"])
+        entity_count = sum(1 for node in graph_manifest["nodes"] if node["kind"] == "entity")
+        assertion_count = sum(1 for node in graph_manifest["nodes"] if node["kind"] == "assertion")
+        tag_count = sum(1 for node in graph_manifest["nodes"] if node["kind"] == "tag")
+        concept_candidate_count = sum(1 for node in graph_manifest["nodes"] if node["kind"] == "concept_candidate")
         concept_paths = {
             artifact.path
             for artifact in snapshot.artifacts
             if artifact.collection == "wiki" and artifact.path.startswith("wiki/concepts/") and artifact.kind == "markdown"
         }
-        conflicts = _conflict_descriptions(workspace, snapshot)
+        conflicts = _conflict_descriptions(graph_manifest)
 
     resolved_merges = {
         str(key): str(dict(value).get("preferred_label", ""))
@@ -91,6 +110,12 @@ def _build_change_state(
         artifact_count=artifact_count,
         source_count=source_count,
         orphan_count=orphan_count,
+        graph_node_count=graph_node_count,
+        graph_edge_count=graph_edge_count,
+        entity_count=entity_count,
+        assertion_count=assertion_count,
+        tag_count=tag_count,
+        concept_candidate_count=concept_candidate_count,
         concept_paths=concept_paths,
         resolved_merges=resolved_merges,
         dismissed_reviews=dismissed_reviews,
@@ -98,8 +123,7 @@ def _build_change_state(
     )
 
 
-def _conflict_descriptions(workspace: Workspace, snapshot: IndexSnapshot) -> Dict[str, str]:
-    graph_manifest = build_graph_manifest(workspace, snapshot)
+def _conflict_descriptions(graph_manifest: Dict[str, object]) -> Dict[str, str]:
     conflicts: Dict[str, str] = {}
     for edge in graph_manifest["edges"]:
         if edge["kind"] != "conflict":
@@ -151,10 +175,28 @@ def _render_change_summary(
         _format_delta_line("Orphan pages", previous_state.orphan_count, current_state.orphan_count),
         "",
     ]
+    lines.extend(
+        [
+            "## Graph Delta",
+            "",
+            _format_delta_line("Graph nodes", previous_state.graph_node_count, current_state.graph_node_count),
+            _format_delta_line("Graph edges", previous_state.graph_edge_count, current_state.graph_edge_count),
+            _format_delta_line("Entity nodes", previous_state.entity_count, current_state.entity_count),
+            _format_delta_line("Assertion nodes", previous_state.assertion_count, current_state.assertion_count),
+            _format_delta_line("Tag nodes", previous_state.tag_count, current_state.tag_count),
+            _format_delta_line(
+                "Concept candidates",
+                previous_state.concept_candidate_count,
+                current_state.concept_candidate_count,
+            ),
+            "",
+        ]
+    )
     lines.extend(_render_list_section("New concept pages", new_concepts))
     lines.extend(_render_mapping_section("Resolved merge decisions", resolved_merges, arrow=True))
     lines.extend(_render_mapping_section("Dismissed review items", dismissed_reviews))
     lines.extend(_render_mapping_section("New conflicts", new_conflicts))
+    lines.extend(_render_follow_up_section(new_concepts, resolved_merges, new_conflicts, previous_state, current_state))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -179,6 +221,40 @@ def _render_mapping_section(title: str, values: Dict[str, str], arrow: bool = Fa
                 lines.append(f"- `{key} -> {value}`")
             else:
                 lines.append(f"- `{key}`: {value}")
+    lines.append("")
+    return lines
+
+
+def _render_follow_up_section(
+    new_concepts: list[str],
+    resolved_merges: Dict[str, str],
+    new_conflicts: Dict[str, str],
+    previous_state: ChangeState,
+    current_state: ChangeState,
+) -> list[str]:
+    questions: list[str] = []
+    if current_state.orphan_count > previous_state.orphan_count:
+        questions.append(
+            "Which orphaned pages should gain backlinks so the new graph coverage becomes navigable?"
+        )
+    if new_concepts:
+        questions.append(
+            f"Which existing pages should link to the new concept pages: {', '.join(f'`{path}`' for path in new_concepts[:3])}?"
+        )
+    if resolved_merges:
+        questions.append(
+            "Do the resolved merge decisions require alias or navigation updates across existing concept pages?"
+        )
+    for description in list(new_conflicts.values())[:2]:
+        subject = description.split(":", 1)[0].strip()
+        questions.append(f"How should the corpus acknowledge the disagreement around {subject}?")
+    if current_state.assertion_count > previous_state.assertion_count and len(questions) < 5:
+        questions.append("Which new assertions deserve promotion into concept pages or operator-facing reports?")
+    if not questions:
+        questions.append("Should this graph delta trigger a new compile or research pass?")
+
+    lines = ["## Suggested Follow-Up Questions", ""]
+    lines.extend(f"- {question}" for question in questions[:5])
     lines.append("")
     return lines
 

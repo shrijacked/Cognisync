@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,29 @@ Patterns include planning and execution.
             self.assertIn("missing_summary", issue_kinds)
             self.assertIn("broken_link", issue_kinds)
             self.assertIn("duplicate_title", issue_kinds)
+
+    def test_plan_and_lint_surface_stale_source_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Stale Summary Test")
+
+            raw_path = workspace.raw_dir / "memory.md"
+            summary_path = workspace.wiki_dir / "sources" / "memory.md"
+            raw_path.write_text("# Memory\n\nInitial source content.\n", encoding="utf-8")
+            summary_path.write_text("# Memory\n\nInitial summary.\n", encoding="utf-8")
+            os.utime(summary_path, (1000, 1000))
+            os.utime(raw_path, (2000, 2000))
+
+            snapshot = scan_workspace(workspace)
+            plan = build_compile_plan(snapshot)
+            issues = lint_snapshot(snapshot)
+
+            task_kinds = [task.kind for task in plan.tasks]
+            issue_kinds = [issue.kind for issue in issues]
+
+            self.assertIn("stale_summary", issue_kinds)
+            self.assertIn("refresh_source_summary", task_kinds)
 
 
 if __name__ == "__main__":

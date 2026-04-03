@@ -40,6 +40,23 @@ def lint_snapshot(snapshot: IndexSnapshot, workspace: Optional[Workspace] = None
                     suggestion=f"Create {artifact.summary_target} to summarize the source.",
                 )
             )
+        if artifact.collection != "raw" or not artifact.summary_target or artifact.summary_target not in existing_paths:
+            continue
+        summary_artifact = snapshot.artifact_by_path(artifact.summary_target)
+        if artifact.modified_at <= summary_artifact.modified_at:
+            continue
+        issues.append(
+            LintIssue(
+                issue_id=f"stale-summary:{artifact.path}",
+                kind="stale_summary",
+                severity="warning",
+                path=artifact.summary_target,
+                message=(
+                    f"Summary page {artifact.summary_target} appears older than its source artifact {artifact.path}."
+                ),
+                suggestion="Refresh the summary so the compiled wiki reflects the latest source content.",
+            )
+        )
 
     titles = defaultdict(list)
     for artifact in snapshot.artifacts:
