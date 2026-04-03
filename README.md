@@ -160,7 +160,7 @@ Research verification is now stricter too:
 - unknown citations fail the run
 - uncited narrative claims fail the run
 - malformed answers, such as missing top-level headings, fail the run
-- conflicting source statements are surfaced as run warnings and downgrade the run to `completed_with_warnings`
+- conflicting source statements now fail the run unless the answer explicitly acknowledges the disagreement and cites both sides
 
 The graph layer is richer now as well:
 
@@ -179,6 +179,7 @@ The operator loop now has a review layer too:
 - `cognisync review apply-backlink <wiki/path.md>` routes orphan pages back into stable navigation pages without mutating raw source material
 - `cognisync review file-conflict "<subject>"` files a deterministic conflict note under `wiki/queries/conflicts/`
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
+- `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
 
 ```mermaid

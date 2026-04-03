@@ -105,7 +105,7 @@ The command:
 5. files a bounded number of conflict notes
 6. re-scans the workspace and writes a maintenance run manifest
 
-The current maintenance surface is intentionally conservative. It only applies deterministic scaffolds and routing actions, then leaves richer synthesis to compile and research.
+The current maintenance surface is intentionally conservative. It only applies deterministic scaffolds and routing actions, and it skips low-signal concept candidates so generic one-word tags do not silently turn into weak concept pages.
 
 ### `research`
 
@@ -140,7 +140,7 @@ Before a research run is considered complete, Cognisync now checks:
 - citation validity against the retrieved source set
 - unsupported uncited claims in the answer body
 - answer lint, such as missing top-level headings
-- conflicting source statements, which are recorded as warnings when the answer does not acknowledge them
+- conflicting source statements, which now fail validation unless the answer acknowledges the disagreement and cites both sides
 
 The scan and compile loop also uses a richer graph substrate now:
 

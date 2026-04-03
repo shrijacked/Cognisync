@@ -17,6 +17,8 @@
 - added `cognisync maintain` to auto-apply open concept and merge actions and persist a maintenance run manifest
 - added `review apply-backlink` and `review file-conflict` so the remaining deterministic queue items are actionable too
 - expanded `maintain` to apply backlink routing and conflict filing before writing its run manifest
+- tightened `maintain` so low-signal concept candidates stay in the queue instead of being auto-accepted
+- upgraded research conflict validation so conflicting retrieved sources must be surfaced with citations from both sides
 
 ## v0.1.3 - 2026-04-03
 
