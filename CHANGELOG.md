@@ -20,6 +20,7 @@
 - tightened `maintain` so low-signal concept candidates stay in the queue instead of being auto-accepted
 - upgraded research conflict validation so conflicting retrieved sources must be surfaced with citations from both sides
 - added `review dismiss` with persisted reasons so operators can intentionally close low-value queue items and keep them out of future maintenance runs
+- added workspace change-summary artifacts after `scan`, `ingest`, and `maintain` so corpus deltas are readable without diffing manifests by hand
 
 ## v0.1.3 - 2026-04-03
 

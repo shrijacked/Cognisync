@@ -35,6 +35,7 @@ workspace/
 │   └── queries/
 ├── outputs/
 │   ├── reports/
+│   │   └── change-summaries/
 │   └── slides/
 ├── prompts/
 └── .cognisync/
@@ -55,6 +56,7 @@ workspace/
 - Stable source and graph manifests under `.cognisync/`
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
+- Deterministic corpus change summaries after scan, ingest, and maintenance runs
 - Markdown-aware search over `raw/` and `wiki/`
 - Compile planner for missing summaries, concept pages, and repair work
 - Knowledge-base linter for broken links, missing summaries, graph conflicts, and duplicate concepts
@@ -107,6 +109,15 @@ cognisync research "what changed in this corpus?" --profile codex --slides
 ```
 
 The operator-facing workflow is documented in [Operator Workflows](docs/operator-workflows.md).
+
+Each scan, ingest, and maintenance pass now also writes a small change artifact into `outputs/reports/change-summaries/` so the workspace records what moved:
+
+- artifact and source count deltas
+- orphan-page delta
+- new concept pages
+- newly resolved merges
+- newly dismissed review items
+- newly surfaced conflicts
 
 The richer ingest layer now makes the loop more useful before an LLM even runs:
 
@@ -182,6 +193,7 @@ The operator loop now has a review layer too:
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
+- `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
 - lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
 
 ```mermaid

@@ -22,11 +22,12 @@ flowchart TD
     C --> D["review surfaces concept, merge, and conflict follow-ups"]
     D --> E["review actions accept concepts or resolve merges"]
     E --> F["maintain can apply the same actions automatically"]
-    F --> G["compile builds a plan and prompt packet"]
-    G --> H["configured LLM profile executes compile work"]
-    H --> I["scan and lint run again on the updated workspace"]
-    I --> J["research turns the refreshed corpus into cited reports and filed answers"]
-    J --> K["run manifests, graph state, review queue, and review actions persist the loop"]
+    F --> G["change summaries capture corpus deltas"]
+    G --> H["compile builds a plan and prompt packet"]
+    H --> I["configured LLM profile executes compile work"]
+    I --> J["scan and lint run again on the updated workspace"]
+    J --> K["research turns the refreshed corpus into cited reports and filed answers"]
+    K --> L["run manifests, graph state, review queue, review actions, and change summaries persist the loop"]
 ```
 
 ## Command Roles
@@ -107,6 +108,21 @@ The command:
 6. re-scans the workspace and writes a maintenance run manifest
 
 The current maintenance surface is intentionally conservative. It only applies deterministic scaffolds and routing actions, and it skips low-signal concept candidates so generic one-word tags do not silently turn into weak concept pages.
+It also writes a change-summary artifact so you can see what the maintenance pass actually changed without inspecting JSON manifests directly.
+
+### Change summaries
+
+Use the change summaries when you want a compact diff of the corpus after an operator action.
+
+`scan`, `ingest`, and `maintain` now write Markdown artifacts under `outputs/reports/change-summaries/` with:
+
+- artifact count delta
+- source count delta
+- orphan-page delta
+- new concept pages
+- newly resolved merge decisions
+- newly dismissed review items
+- newly surfaced conflict edges
 
 ### `research`
 
@@ -160,8 +176,8 @@ The scan and compile loop also uses a richer graph substrate now:
 | Task | Command Surface | Output |
 | --- | --- | --- |
 | O6 | `doctor` | readiness report |
-| O7 | `ingest` | richer raw source artifacts plus updated index and grouped source manifest |
+| O7 | `ingest` | richer raw source artifacts, updated index and grouped source manifest, change summary artifact |
 | O8 | `review` | durable review queue with concept, merge, conflict, and backlink follow-ups |
-| O9 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest |
+| O9 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
 | O10 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
 | O11 | `research` | cited report, prompt packet, validated answer artifact, run manifest |
