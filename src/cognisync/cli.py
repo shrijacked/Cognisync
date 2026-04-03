@@ -49,6 +49,7 @@ from cognisync.review_ui import create_review_ui_server, write_review_ui_bundle
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
+from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
 from cognisync.workspace import Workspace
 
 
@@ -262,6 +263,38 @@ def cmd_eval_research(args: argparse.Namespace) -> int:
     print(f"Wrote research evaluation report to {result.report_path}")
     print(f"Wrote research evaluation payload to {result.payload_path}")
     print(f"Evaluated {result.run_count} research run(s).")
+    return 0
+
+
+def cmd_synth_qa(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_synthetic_qa_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote synthetic QA bundle to {result.directory}")
+    print(f"Wrote synthetic dataset to {result.dataset_path}")
+    print(f"Wrote synthetic manifest to {result.manifest_path}")
+    print(f"Generated {result.record_count} synthetic QA record(s).")
+    return 0
+
+
+def cmd_synth_contrastive(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_synthetic_contrastive_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote synthetic contrastive bundle to {result.directory}")
+    print(f"Wrote synthetic dataset to {result.dataset_path}")
+    print(f"Wrote synthetic manifest to {result.manifest_path}")
+    print(f"Generated {result.record_count} synthetic contrastive record(s).")
     return 0
 
 
@@ -929,6 +962,23 @@ def build_parser() -> argparse.ArgumentParser:
     eval_research_parser.add_argument("--output-file", default=None)
     eval_research_parser.add_argument("--payload-file", default=None)
     eval_research_parser.set_defaults(func=cmd_eval_research)
+
+    synth_parser = subparsers.add_parser("synth", help="Generate synthetic datasets from persisted corpus structure")
+    synth_subparsers = synth_parser.add_subparsers(dest="synth_command", required=True)
+
+    synth_qa_parser = synth_subparsers.add_parser(
+        "qa", help="Generate assertion-grounded synthetic QA examples from the graph"
+    )
+    synth_qa_parser.add_argument("--workspace", default=".")
+    synth_qa_parser.add_argument("--output-dir", default=None)
+    synth_qa_parser.set_defaults(func=cmd_synth_qa)
+
+    synth_contrastive_parser = synth_subparsers.add_parser(
+        "contrastive", help="Generate contrastive retrieval pairs from assertion support paths"
+    )
+    synth_contrastive_parser.add_argument("--workspace", default=".")
+    synth_contrastive_parser.add_argument("--output-dir", default=None)
+    synth_contrastive_parser.set_defaults(func=cmd_synth_contrastive)
 
     ui_parser = subparsers.add_parser("ui", help="Generate or serve lightweight Cognisync web interfaces")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)

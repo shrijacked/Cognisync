@@ -1,0 +1,86 @@
+import io
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+
+from tests import support  # noqa: F401
+
+from cognisync.cli import main
+
+
+class SyntheticDataTests(unittest.TestCase):
+    def test_synth_qa_writes_assertion_grounded_dataset_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Synthetic QA Workspace"]), 0)
+
+            (root / "raw" / "memory-a.md").write_text(
+                "# Memory A\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory-b.md").write_text(
+                "# Memory B\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["synth", "qa", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            bundle_dirs = sorted((root / "outputs" / "reports" / "exports").glob("synthetic-qa-*"))
+            self.assertTrue(bundle_dirs)
+            dataset_path = bundle_dirs[-1] / "dataset.jsonl"
+            manifest_path = bundle_dirs[-1] / "manifest.json"
+            self.assertTrue(dataset_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            records = [json.loads(line) for line in dataset_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertTrue(records)
+            self.assertEqual(records[0]["task_type"], "synthetic_qa")
+            self.assertIn("agent memory", records[0]["question"].lower())
+            self.assertIn("[S1]", records[0]["answer"])
+            self.assertEqual(records[0]["support_count"], 2)
+            self.assertIn("Wrote synthetic QA bundle to", stdout.getvalue())
+
+    def test_synth_contrastive_writes_positive_negative_pairs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Synthetic Contrastive Workspace"]), 0)
+
+            (root / "raw" / "memory-a.md").write_text(
+                "# Memory A\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory-b.md").write_text(
+                "# Memory B\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "planning.md").write_text(
+                "# Planning\n\nAgent planning prefers explicit checkpoints.\n",
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["synth", "contrastive", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            bundle_dirs = sorted((root / "outputs" / "reports" / "exports").glob("synthetic-contrastive-*"))
+            self.assertTrue(bundle_dirs)
+            dataset_path = bundle_dirs[-1] / "dataset.jsonl"
+            manifest_path = bundle_dirs[-1] / "manifest.json"
+            self.assertTrue(dataset_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            records = [json.loads(line) for line in dataset_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertTrue(records)
+            self.assertEqual(records[0]["task_type"], "contrastive_retrieval")
+            self.assertNotEqual(records[0]["positive_path"], records[0]["negative_path"])
+            self.assertIn("Wrote synthetic contrastive bundle to", stdout.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()
