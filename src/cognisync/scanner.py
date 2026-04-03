@@ -58,6 +58,7 @@ def _build_inventory(root: Path) -> Dict[str, Path]:
     allowed_roots = {"raw", "wiki", "outputs", "prompts"}
     ignored_roots = {
         "outputs/reports/change-summaries",
+        "outputs/reports/exports",
         "outputs/reports/review-exports",
         "outputs/reports/review-ui",
     }

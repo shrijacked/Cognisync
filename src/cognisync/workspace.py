@@ -76,6 +76,10 @@ class Workspace:
     def review_ui_dir(self) -> Path:
         return self.outputs_dir / "reports" / "review-ui"
 
+    @property
+    def export_artifacts_dir(self) -> Path:
+        return self.outputs_dir / "reports" / "exports"
+
     def initialize(self, name: Optional[str] = None, force: bool = False) -> None:
         directories = [
             self.raw_dir,

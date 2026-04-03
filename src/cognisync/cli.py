@@ -15,6 +15,7 @@ from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import MaintenancePolicy, save_config
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
+from cognisync.exports import export_presentations_bundle, export_research_jsonl
 from cognisync.ingest import (
     IngestError,
     ingest_batch,
@@ -194,6 +195,35 @@ def cmd_ui_review(args: argparse.Namespace) -> int:
         print("Stopped review UI server.")
     finally:
         server.server_close()
+    return 0
+
+
+def cmd_export_jsonl(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_file = None
+    if args.output_file:
+        output_file = Path(args.output_file).expanduser()
+        if not output_file.is_absolute():
+            output_file = workspace.root / output_file
+        output_file = output_file.resolve()
+    result = export_research_jsonl(workspace, output_file=output_file)
+    print(f"Wrote JSONL export to {result.path}")
+    print(f"Exported {result.record_count} research run(s).")
+    return 0
+
+
+def cmd_export_presentations(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_presentations_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote presentation export to {result.directory}")
+    print(f"Wrote presentation manifest to {result.manifest_path}")
+    print(f"Bundled {result.presentation_count} presentation(s).")
     return 0
 
 
@@ -815,6 +845,23 @@ def build_parser() -> argparse.ArgumentParser:
     adapter_install_parser.add_argument("--profile", default=None)
     adapter_install_parser.add_argument("--force", action="store_true")
     adapter_install_parser.set_defaults(func=cmd_adapter_install)
+
+    export_parser = subparsers.add_parser("export", help="Export workspace artifacts into bridge-friendly bundles")
+    export_subparsers = export_parser.add_subparsers(dest="export_command", required=True)
+
+    export_jsonl_parser = export_subparsers.add_parser(
+        "jsonl", help="Export research runs as a JSONL dataset artifact"
+    )
+    export_jsonl_parser.add_argument("--workspace", default=".")
+    export_jsonl_parser.add_argument("--output-file", default=None)
+    export_jsonl_parser.set_defaults(func=cmd_export_jsonl)
+
+    export_presentations_parser = export_subparsers.add_parser(
+        "presentations", help="Bundle generated slide decks and companion reports"
+    )
+    export_presentations_parser.add_argument("--workspace", default=".")
+    export_presentations_parser.add_argument("--output-dir", default=None)
+    export_presentations_parser.set_defaults(func=cmd_export_presentations)
 
     ui_parser = subparsers.add_parser("ui", help="Generate or serve lightweight Cognisync web interfaces")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
