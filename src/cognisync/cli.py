@@ -174,6 +174,7 @@ def cmd_ui_review(args: argparse.Namespace) -> int:
     result = write_review_ui_bundle(workspace, snapshot, output_file=output_file)
     print(f"Wrote review UI to {result.html_path}")
     print(f"Wrote review UI export to {result.export_path}")
+    print(f"Wrote review UI state to {result.state_path}")
 
     if not args.serve:
         return 0

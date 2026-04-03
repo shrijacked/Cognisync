@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from functools import partial
 from html import escape
@@ -11,6 +12,7 @@ from typing import Dict, List, Optional
 from cognisync.manifests import read_json_manifest
 from cognisync.review_exports import build_review_export_payload
 from cognisync.types import IndexSnapshot
+from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
 
@@ -18,6 +20,7 @@ from cognisync.workspace import Workspace
 class ReviewUiResult:
     html_path: Path
     export_path: Path
+    state_path: Path
 
 
 def write_review_ui_bundle(
@@ -27,21 +30,24 @@ def write_review_ui_bundle(
 ) -> ReviewUiResult:
     html_path = output_file or (workspace.review_ui_dir / "index.html")
     export_path = html_path.parent / "review-export.json"
+    state_path = html_path.parent / "dashboard-state.json"
     html_path.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = build_review_export_payload(workspace, snapshot)
-    export_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    review_payload = build_review_export_payload(workspace, snapshot)
+    state_payload = build_review_ui_state(workspace, snapshot, review_payload=review_payload)
+
+    export_path.write_text(json.dumps(review_payload, indent=2, sort_keys=True), encoding="utf-8")
+    state_path.write_text(json.dumps(state_payload, indent=2, sort_keys=True), encoding="utf-8")
 
     html_path.write_text(
         render_review_ui_html(
-            payload=payload,
+            payload=state_payload,
             export_href=export_path.name,
-            recent_runs=_read_recent_runs(workspace),
-            recent_change_summaries=_read_recent_change_summaries(workspace),
+            state_href=state_path.name,
         ),
         encoding="utf-8",
     )
-    return ReviewUiResult(html_path=html_path, export_path=export_path)
+    return ReviewUiResult(html_path=html_path, export_path=export_path, state_path=state_path)
 
 
 def create_review_ui_server(
@@ -58,20 +64,25 @@ def create_review_ui_server(
 def render_review_ui_html(
     payload: Dict[str, object],
     export_href: str,
-    recent_runs: List[Dict[str, str]],
-    recent_change_summaries: List[Dict[str, str]],
+    state_href: str,
 ) -> str:
-    summary = dict(payload.get("summary", {}))
-    open_items = list(payload.get("open_items", []))
-    dismissed_items = list(payload.get("dismissed_items", []))
+    review_payload = dict(payload.get("review", {}))
+    summary = dict(review_payload.get("summary", {}))
+    open_items = list(review_payload.get("open_items", []))
+    dismissed_items = list(review_payload.get("dismissed_items", []))
     counts_by_kind = dict(summary.get("open_item_counts_by_kind", {}))
+    graph = dict(payload.get("graph", {}))
+    runs = dict(payload.get("runs", {}))
+    recent_change_summaries = list(payload.get("change_summaries", []))
     serialized_payload = json.dumps(payload, indent=2, sort_keys=True)
 
     cards = [
         ("Open Review Items", str(summary.get("open_item_count", 0))),
         ("Dismissed Review Items", str(summary.get("dismissed_item_count", 0))),
-        ("Kinds In Queue", str(len(counts_by_kind))),
-        ("Action Records", str(sum(int(value) for value in dict(summary.get("action_counts", {})).values()))),
+        ("Graph Nodes", str(graph.get("node_count", 0))),
+        ("Graph Edges", str(graph.get("edge_count", 0))),
+        ("Recorded Runs", str(runs.get("total_count", 0))),
+        ("Known Conflicts", str(graph.get("conflict_count", 0))),
     ]
 
     lines = [
@@ -142,7 +153,7 @@ def render_review_ui_html(
             "        <article class=\"panel\">",
             "          <div class=\"toolbar\">",
             "            <h2>Open Review Items</h2>",
-            f"            <a class=\"mono-link\" href=\"{escape(export_href)}\">review-export.json</a>",
+            f"            <span><a class=\"mono-link\" href=\"{escape(export_href)}\">review-export.json</a> <span class=\"muted\">|</span> <a class=\"mono-link\" href=\"{escape(state_href)}\">dashboard-state.json</a></span>",
             "          </div>",
             _render_counts_by_kind(counts_by_kind),
             _render_open_items(open_items),
@@ -154,12 +165,16 @@ def render_review_ui_html(
             "      </div>",
             "      <div class=\"stack\">",
             "        <article class=\"panel\">",
-            "          <h2>Recent Change Summaries</h2>",
-            _render_recent_links(recent_change_summaries, empty_label="No change summaries found."),
+            "          <h2>Graph Overview</h2>",
+            _render_graph_overview(graph),
             "        </article>",
             "        <article class=\"panel\">",
-            "          <h2>Recent Runs</h2>",
-            _render_recent_runs(recent_runs),
+            "          <h2>Run History</h2>",
+            _render_run_history(runs),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Recent Change Summaries</h2>",
+            _render_recent_links(recent_change_summaries, empty_label="No change summaries found."),
             "        </article>",
             "        <article class=\"panel\">",
             "          <h2>Embedded Payload</h2>",
@@ -177,6 +192,29 @@ def render_review_ui_html(
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def build_review_ui_state(
+    workspace: Workspace,
+    snapshot: IndexSnapshot,
+    review_payload: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    review_payload = review_payload or build_review_export_payload(workspace, snapshot)
+    return {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "workspace": {
+            "root": workspace.root.as_posix(),
+            "graph_manifest_path": workspace.relative_path(workspace.graph_manifest_path),
+            "review_queue_manifest_path": workspace.relative_path(workspace.review_queue_manifest_path),
+            "review_actions_manifest_path": workspace.relative_path(workspace.review_actions_manifest_path),
+            "runs_dir": workspace.relative_path(workspace.runs_dir),
+        },
+        "review": review_payload,
+        "graph": _build_graph_summary(workspace),
+        "runs": _build_run_history(workspace),
+        "change_summaries": _read_recent_change_summaries(workspace),
+    }
 
 
 def _render_counts_by_kind(counts_by_kind: Dict[str, object]) -> str:
@@ -255,21 +293,81 @@ def _render_recent_links(items: List[Dict[str, str]], empty_label: str) -> str:
     return "\n".join(lines)
 
 
-def _render_recent_runs(items: List[Dict[str, str]]) -> str:
+def _render_graph_overview(graph: Dict[str, object]) -> str:
+    node_counts = dict(graph.get("node_counts_by_kind", {}))
+    edge_counts = dict(graph.get("edge_counts_by_kind", {}))
+    manifest_path = escape(str(graph.get("manifest_path", "")))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">nodes <strong>{escape(str(graph.get('node_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">edges <strong>{escape(str(graph.get('edge_count', 0)))}</strong></span>",
+        f"            <span class=\"pill danger\">conflicts <strong>{escape(str(graph.get('conflict_count', 0)))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{manifest_path}</code></p>",
+        _render_kind_table("Node Kinds", node_counts),
+        _render_kind_table("Edge Kinds", edge_counts),
+        "          <h3>Connected Artifacts</h3>",
+        _render_connected_artifacts(list(graph.get("top_connected_artifacts", []))),
+        "          <h3>Conflict Edges</h3>",
+        _render_conflict_edges(list(graph.get("conflicts", []))),
+    ]
+    return "\n".join(lines)
+
+
+def _render_run_history(runs: Dict[str, object]) -> str:
+    items = list(runs.get("items", []))
     if not items:
         return "          <p class=\"empty\">No run manifests found.</p>"
+    counts_by_kind = dict(runs.get("counts_by_kind", {}))
+    counts_by_status = dict(runs.get("counts_by_status", {}))
     lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">runs <strong>{escape(str(runs.get('total_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">kinds <strong>{escape(str(len(counts_by_kind)))}</strong></span>",
+        f"            <span class=\"pill danger\">statuses <strong>{escape(str(len(counts_by_status)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Run Kinds", counts_by_kind),
+        _render_kind_table("Run Statuses", counts_by_status),
         "          <table>",
-        "            <thead><tr><th>Run</th><th>Status</th><th>Path</th></tr></thead>",
+        "            <thead><tr><th>Run</th><th>Kind</th><th>Status</th><th>Generated</th></tr></thead>",
         "            <tbody>",
     ]
     for item in items:
         lines.extend(
             [
                 "              <tr>",
-                f"                <td><strong>{escape(item['label'])}</strong></td>",
-                f"                <td>{escape(item['status'])}</td>",
-                f"                <td><code>{escape(item['path'])}</code></td>",
+                (
+                    "                <td><strong>"
+                    + escape(str(item.get("label", "")))
+                    + "</strong><br><span class=\"muted\"><code>"
+                    + escape(str(item.get("path", "")))
+                    + "</code></span></td>"
+                ),
+                f"                <td>{escape(str(item.get('run_kind', '')))}</td>",
+                f"                <td>{escape(str(item.get('status', '')))}</td>",
+                f"                <td>{escape(str(item.get('generated_at', '')))}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_kind_table(title: str, values: Dict[str, object]) -> str:
+    if not values:
+        return f"          <p class=\"empty\">{escape(title)}: none.</p>"
+    lines = [
+        f"          <h3>{escape(title)}</h3>",
+        "          <table>",
+        "            <thead><tr><th>Kind</th><th>Count</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for key, value in sorted(values.items()):
+        lines.extend(
+            [
+                "              <tr>",
+                f"                <td>{escape(str(key))}</td>",
+                f"                <td>{escape(str(value))}</td>",
                 "              </tr>",
             ]
         )
@@ -291,18 +389,147 @@ def _read_recent_change_summaries(workspace: Workspace, limit: int = 6) -> List[
     return items
 
 
-def _read_recent_runs(workspace: Workspace, limit: int = 6) -> List[Dict[str, str]]:
+def _build_run_history(workspace: Workspace, limit: int = 12) -> Dict[str, object]:
     items: List[Dict[str, str]] = []
+    counts_by_kind: Counter[str] = Counter()
+    counts_by_status: Counter[str] = Counter()
     for path in sorted(workspace.runs_dir.glob("*.json"), reverse=True)[:limit]:
         manifest = read_json_manifest(path)
+        run_kind = str(manifest.get("run_kind", "unknown"))
+        status = str(manifest.get("status", "unknown"))
+        counts_by_kind[run_kind] += 1
+        counts_by_status[status] += 1
         items.append(
             {
                 "label": str(manifest.get("run_label", manifest.get("run_kind", path.stem))),
-                "status": str(manifest.get("status", "unknown")),
+                "run_kind": run_kind,
+                "status": status,
+                "generated_at": str(manifest.get("generated_at", "")),
+                "mode": str(manifest.get("mode", "")),
                 "path": workspace.relative_path(path),
             }
         )
-    return items
+    return {
+        "total_count": len(items),
+        "counts_by_kind": dict(counts_by_kind),
+        "counts_by_status": dict(counts_by_status),
+        "items": items,
+    }
+
+
+def _build_graph_summary(workspace: Workspace, limit: int = 6) -> Dict[str, object]:
+    if not workspace.graph_manifest_path.exists():
+        return {
+            "manifest_path": workspace.relative_path(workspace.graph_manifest_path),
+            "node_count": 0,
+            "edge_count": 0,
+            "conflict_count": 0,
+            "node_counts_by_kind": {},
+            "edge_counts_by_kind": {},
+            "top_connected_artifacts": [],
+            "conflicts": [],
+        }
+
+    manifest = read_json_manifest(workspace.graph_manifest_path)
+    nodes = list(manifest.get("nodes", []))
+    edges = list(manifest.get("edges", []))
+    node_counts: Counter[str] = Counter(str(node.get("kind", "unknown")) for node in nodes)
+    edge_counts: Counter[str] = Counter(str(edge.get("kind", "unknown")) for edge in edges)
+    artifact_index = {
+        str(node.get("path", "")): {
+            "title": str(node.get("title", "")),
+            "collection": str(node.get("collection", "")),
+        }
+        for node in nodes
+        if str(node.get("kind", "")) == "artifact" and str(node.get("path", "")).strip()
+    }
+    degrees: Counter[str] = Counter()
+    conflicts: List[Dict[str, str]] = []
+    for edge in edges:
+        source = str(edge.get("source", ""))
+        target = str(edge.get("target", ""))
+        if source in artifact_index:
+            degrees[source] += 1
+        if target in artifact_index:
+            degrees[target] += 1
+        if str(edge.get("kind", "")) == "conflict":
+            conflicts.append(
+                {
+                    "subject": str(edge.get("subject", "")),
+                    "verb": str(edge.get("verb", "")),
+                    "source": source,
+                    "target": target,
+                    "left_value": str(edge.get("left_value", "")),
+                    "right_value": str(edge.get("right_value", "")),
+                }
+            )
+    top_connected_artifacts = []
+    for path, degree in degrees.most_common(limit):
+        info = artifact_index.get(path, {})
+        top_connected_artifacts.append(
+            {
+                "path": path,
+                "title": str(info.get("title", path)),
+                "collection": str(info.get("collection", "")),
+                "degree": degree,
+            }
+        )
+    return {
+        "manifest_path": workspace.relative_path(workspace.graph_manifest_path),
+        "generated_at": str(manifest.get("generated_at", "")),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "conflict_count": len(conflicts),
+        "node_counts_by_kind": dict(node_counts),
+        "edge_counts_by_kind": dict(edge_counts),
+        "top_connected_artifacts": top_connected_artifacts,
+        "conflicts": conflicts[:limit],
+    }
+
+
+def _render_connected_artifacts(items: List[Dict[str, object]]) -> str:
+    if not items:
+        return "          <p class=\"empty\">No connected artifact data available.</p>"
+    lines = [
+        "          <table>",
+        "            <thead><tr><th>Artifact</th><th>Collection</th><th>Degree</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for item in items:
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong>"
+                    + escape(str(item.get("title", "")))
+                    + "</strong><br><span class=\"muted\"><code>"
+                    + escape(str(item.get("path", "")))
+                    + "</code></span></td>"
+                ),
+                f"                <td>{escape(str(item.get('collection', '')))}</td>",
+                f"                <td>{escape(str(item.get('degree', 0)))}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_conflict_edges(items: List[Dict[str, str]]) -> str:
+    if not items:
+        return "          <p class=\"empty\">No conflict edges recorded.</p>"
+    lines: List[str] = []
+    for item in items:
+        lines.extend(
+            [
+                "          <details>",
+                f"            <summary>{escape(item['subject'])} {escape(item['verb'])}</summary>",
+                f"            <p class=\"muted\"><code>{escape(item['source'])}</code> says {escape(item['left_value'])}</p>",
+                f"            <p class=\"muted\"><code>{escape(item['target'])}</code> says {escape(item['right_value'])}</p>",
+                "          </details>",
+            ]
+        )
+    return "\n".join(lines)
 
 
 class _ReviewUiHandler(SimpleHTTPRequestHandler):

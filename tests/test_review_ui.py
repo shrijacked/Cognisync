@@ -53,6 +53,10 @@ class ReviewUiTests(unittest.TestCase):
                 main(["review", "dismiss", review_id, "--reason", "tracking this manually", "--workspace", str(root)]),
                 0,
             )
+            self.assertEqual(
+                main(["research", "--workspace", str(root), "how do agent loops use memory"]),
+                0,
+            )
 
             stdout = io.StringIO()
             with redirect_stdout(stdout):
@@ -61,17 +65,29 @@ class ReviewUiTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             html_path = workspace.review_ui_dir / "index.html"
             export_path = workspace.review_ui_dir / "review-export.json"
+            state_path = workspace.review_ui_dir / "dashboard-state.json"
             self.assertTrue(html_path.exists())
             self.assertTrue(export_path.exists())
+            self.assertTrue(state_path.exists())
 
             html = html_path.read_text(encoding="utf-8")
             payload = json.loads(export_path.read_text(encoding="utf-8"))
+            state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertIn("Cognisync Review UI", html)
             self.assertIn("Open Review Items", html)
             self.assertIn("Dismissed Review Items", html)
+            self.assertIn("Graph Overview", html)
+            self.assertIn("Run History", html)
+            self.assertIn(".cognisync/graph.json", html)
+            self.assertIn("how do agent loops use memory", html)
+            self.assertEqual(state["schema_version"], 1)
+            self.assertGreaterEqual(state["graph"]["node_count"], 1)
+            self.assertGreaterEqual(state["graph"]["edge_count"], 1)
+            self.assertTrue(any(item["run_kind"] == "research" for item in state["runs"]["items"]))
             self.assertEqual(payload["summary"]["dismissed_item_count"], 1)
             self.assertGreaterEqual(payload["summary"]["open_item_count"], 1)
             self.assertIn("Wrote review UI to", stdout.getvalue())
+            self.assertIn("Wrote review UI state to", stdout.getvalue())
 
     def test_review_ui_server_serves_dashboard_and_export_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
