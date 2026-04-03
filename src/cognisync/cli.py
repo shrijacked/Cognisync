@@ -274,6 +274,8 @@ def cmd_research(args: argparse.Namespace) -> int:
         print(f"Wrote filed answer to {result.answer_path}")
     elif not result.ran_profile:
         print("No profile provided. Research report and prompt packet generated but not executed.")
+    if result.warning_count:
+        print(f"Research verification reported {result.warning_count} warning(s).")
     return 0
 
 

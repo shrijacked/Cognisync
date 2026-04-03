@@ -20,7 +20,14 @@ class ResearchError(RuntimeError):
 
 
 CITATION_RE = re.compile(r"\[(S\d+)\]")
+CLAIM_RE = re.compile(
+    r"^\s*(?:[-*]\s+)?([A-Za-z][A-Za-z0-9 /_-]{2,60}?)\s+"
+    r"(is|are|uses|supports|requires|prefers)\s+"
+    r"([A-Za-z][A-Za-z0-9 /_-]{2,80}?)(?:[.!?]|$)",
+    re.IGNORECASE,
+)
 RESEARCH_OUTPUT_MODES = {"brief", "memo", "report", "slides", "wiki"}
+CONFLICT_ACK_MARKERS = {"conflict", "disagree", "however", "contradict", "tension", "different", "vs"}
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,8 @@ class ResearchRunResult:
     hit_count: int
     ran_profile: bool
     resumed: bool
+    status: str
+    warning_count: int
 
 
 def run_research_cycle(
@@ -115,11 +124,7 @@ def run_research_cycle(
             "available": _available_citations(sources),
             "used": [],
         },
-        "validation": {
-            "passed": False,
-            "errors": [],
-            "status": "pending",
-        },
+        "validation": _pending_validation_payload(_available_citations(sources)),
     }
     run_manifest_path = write_run_manifest(workspace, "research", base_payload)
 
@@ -134,6 +139,8 @@ def run_research_cycle(
             hit_count=len(hits),
             ran_profile=False,
             resumed=False,
+            status="planned",
+            warning_count=0,
         )
 
     return _execute_research_run(
@@ -262,10 +269,7 @@ def _execute_research_run(
             slide_path=slide_path,
             status="adapter_failed",
             sources=sources,
-            citations_used=[],
-            validation_passed=False,
-            validation_errors=[str(error)],
-            validation_status="pending",
+            validation=_failed_validation_payload(_available_citations(sources), [str(error)]),
             resume_count=resume_count,
             attempt_count=attempt_count,
         )
@@ -299,10 +303,7 @@ def _execute_research_run(
         slide_path=slide_path,
         status="running",
         sources=sources,
-        citations_used=[],
-        validation_passed=False,
-        validation_errors=[],
-        validation_status="pending",
+        validation=_pending_validation_payload(_available_citations(sources)),
         resume_count=resume_count,
         attempt_count=attempt_count,
     )
@@ -336,10 +337,10 @@ def _execute_research_run(
             slide_path=slide_path,
             status="adapter_failed",
             sources=sources,
-            citations_used=[],
-            validation_passed=False,
-            validation_errors=[f"Adapter '{profile_name}' exited with code {result.returncode}."],
-            validation_status="pending",
+            validation=_failed_validation_payload(
+                _available_citations(sources),
+                [f"Adapter '{profile_name}' exited with code {result.returncode}."],
+            ),
             resume_count=resume_count,
             attempt_count=attempt_count,
         )
@@ -349,11 +350,20 @@ def _execute_research_run(
         output_file.write_text(result.stdout, encoding="utf-8")
 
     answer_text = output_file.read_text(encoding="utf-8", errors="ignore") if output_file.exists() else ""
-    validation = _validate_citations(answer_text, _available_citations(sources))
+    validation = _verify_research_answer(workspace, answer_text, sources)
 
     final_snapshot = scan_workspace(workspace)
     workspace.write_index(final_snapshot)
     write_workspace_manifests(workspace, final_snapshot)
+
+    final_status = "completed"
+    validation_step_status = "completed"
+    if validation["errors"]:
+        final_status = "failed_validation"
+        validation_step_status = "failed"
+    elif validation["warnings"]:
+        final_status = "completed_with_warnings"
+        validation_step_status = "warning"
 
     final_plan = _build_research_plan(
         question=question,
@@ -364,7 +374,7 @@ def _execute_research_run(
         answer_path=workspace.relative_path(output_file),
         slide_path=workspace.relative_path(slide_path) if slide_path else None,
         execution_status="completed",
-        validation_status="completed" if validation["passed"] else "failed",
+        validation_status=validation_step_status,
         filing_status="completed" if output_file.exists() else "pending",
     )
     _persist_existing_research_plan(workspace, plan_path, plan_json_path, final_plan)
@@ -380,17 +390,14 @@ def _execute_research_run(
         packet_path=packet_path,
         answer_path=output_file,
         slide_path=slide_path,
-        status="completed" if validation["passed"] else "failed_validation",
+        status=final_status,
         sources=sources,
-        citations_used=validation["used"],
-        validation_passed=validation["passed"],
-        validation_errors=validation["errors"],
-        validation_status="completed" if validation["passed"] else "failed",
+        validation=validation,
         resume_count=resume_count,
         attempt_count=attempt_count,
     )
     if not validation["passed"]:
-        raise ResearchError("Citation validation failed: " + "; ".join(validation["errors"]))
+        raise ResearchError("Research verification failed: " + "; ".join(validation["errors"]))
 
     return ResearchRunResult(
         plan_path=plan_path,
@@ -402,6 +409,8 @@ def _execute_research_run(
         hit_count=len(sources),
         ran_profile=True,
         resumed=resumed,
+        status=final_status,
+        warning_count=len(validation["warnings"]),
     )
 
 
@@ -419,10 +428,7 @@ def _write_research_run_state(
     slide_path: Optional[Path],
     status: str,
     sources: List[Dict[str, object]],
-    citations_used: List[str],
-    validation_passed: bool,
-    validation_errors: List[str],
-    validation_status: str,
+    validation: Dict[str, object],
     resume_count: int,
     attempt_count: int,
 ) -> Path:
@@ -447,13 +453,9 @@ def _write_research_run_state(
             "sources": sources,
             "citations": {
                 "available": _available_citations(sources),
-                "used": citations_used,
+                "used": list(validation.get("used", [])),
             },
-            "validation": {
-                "passed": validation_passed,
-                "errors": validation_errors,
-                "status": validation_status,
-            },
+            "validation": validation,
         },
         run_id=run_id,
     )
@@ -593,6 +595,29 @@ def _default_answer_path(workspace: Workspace, question: str, mode: str) -> Path
     return workspace.wiki_dir / "queries" / f"{slug}.md"
 
 
+def _verify_research_answer(workspace: Workspace, answer_text: str, sources: Sequence[Dict[str, object]]) -> Dict[str, object]:
+    available_citations = _available_citations(sources)
+    citations = _validate_citations(answer_text, available_citations)
+    answer_lint = _lint_answer(answer_text)
+    unsupported_claims = _detect_unsupported_claims(answer_text)
+    source_conflicts = _detect_source_conflicts(workspace, sources, answer_text)
+    errors = citations["errors"] + answer_lint["errors"] + unsupported_claims["errors"] + source_conflicts["errors"]
+    warnings = citations["warnings"] + answer_lint["warnings"] + unsupported_claims["warnings"] + source_conflicts["warnings"]
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "status": "failed" if errors else ("warning" if warnings else "completed"),
+        "used": citations["used"],
+        "checks": {
+            "citations": citations,
+            "answer_lint": answer_lint,
+            "unsupported_claims": unsupported_claims,
+            "source_conflicts": source_conflicts,
+        },
+    }
+
+
 def _validate_citations(answer_text: str, available_citations: Sequence[str]) -> dict:
     available = set(available_citations)
     used = CITATION_RE.findall(answer_text)
@@ -606,7 +631,111 @@ def _validate_citations(answer_text: str, available_citations: Sequence[str]) ->
     return {
         "passed": not errors,
         "errors": errors,
+        "warnings": [],
+        "status": "failed" if errors else "completed",
         "used": unique_used,
+    }
+
+
+def _lint_answer(answer_text: str) -> Dict[str, object]:
+    errors: List[str] = []
+    warnings: List[str] = []
+    stripped = answer_text.strip()
+    if not stripped:
+        errors.append("The answer is empty.")
+    if stripped and not re.search(r"(?m)^#\s+\S+", stripped):
+        errors.append("The answer is missing a top-level Markdown heading.")
+    if stripped.count("```") % 2 != 0:
+        errors.append("The answer has an unmatched fenced code block.")
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "status": "failed" if errors else "completed",
+    }
+
+
+def _detect_unsupported_claims(answer_text: str) -> Dict[str, object]:
+    errors: List[str] = []
+    warnings: List[str] = []
+    in_code = False
+    for raw_line in answer_text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or not line:
+            continue
+        if line.startswith("#") or line.startswith(">"):
+            continue
+        normalized = line[2:].strip() if line.startswith(("- ", "* ")) else line
+        lowered = normalized.lower()
+        if lowered.startswith(("source:", "generated:", "open questions", "follow-up", "follow up", "next steps")):
+            continue
+        if len(re.findall(r"[A-Za-z0-9_]+", normalized)) < 5:
+            continue
+        if CITATION_RE.search(normalized):
+            continue
+        errors.append(f"Unsupported claim without citation: {normalized}")
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "status": "failed" if errors else "completed",
+    }
+
+
+def _detect_source_conflicts(
+    workspace: Workspace,
+    sources: Sequence[Dict[str, object]],
+    answer_text: str,
+) -> Dict[str, object]:
+    errors: List[str] = []
+    warnings: List[str] = []
+    claims: Dict[tuple[str, str], Dict[str, List[str]]] = {}
+    for source in sources:
+        citation = str(source.get("citation", ""))
+        path = str(source.get("path", "")).strip()
+        if not path:
+            continue
+        absolute_path = workspace.root / path
+        if not absolute_path.exists():
+            continue
+        text = _strip_frontmatter(absolute_path.read_text(encoding="utf-8", errors="ignore"))
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = CLAIM_RE.match(line)
+            if not match:
+                continue
+            subject = " ".join(match.group(1).lower().split())
+            verb = match.group(2).lower()
+            obj = " ".join(match.group(3).lower().split())
+            claims.setdefault((subject, verb), {}).setdefault(obj, []).append(citation)
+
+    narrative_text = "\n".join(
+        line.strip()
+        for line in answer_text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ).lower()
+    acknowledged = any(marker in narrative_text for marker in CONFLICT_ACK_MARKERS)
+    for (subject, verb), objects in sorted(claims.items()):
+        if len(objects) < 2:
+            continue
+        if acknowledged:
+            continue
+        variants = []
+        for obj, citations in sorted(objects.items()):
+            variants.append(f"{obj} ({', '.join(sorted(set(citations)))})")
+        warnings.append(
+            f"Retrieved sources disagree about '{subject} {verb}': " + "; ".join(variants) + "."
+        )
+    return {
+        "passed": True,
+        "errors": errors,
+        "warnings": warnings,
+        "status": "warning" if warnings else "completed",
     }
 
 
@@ -623,6 +752,29 @@ def _hit_to_manifest_entry(hit: SearchHit, index: int) -> dict:
 
 def _available_citations(sources: Sequence[Dict[str, object]]) -> List[str]:
     return [str(source["citation"]) for source in sources]
+
+
+def _pending_validation_payload(available_citations: Sequence[str]) -> Dict[str, object]:
+    return {
+        "passed": False,
+        "errors": [],
+        "warnings": [],
+        "status": "pending",
+        "used": [],
+        "checks": {
+            "citations": {"passed": False, "errors": [], "warnings": [], "status": "pending", "used": []},
+            "answer_lint": {"passed": False, "errors": [], "warnings": [], "status": "pending"},
+            "unsupported_claims": {"passed": False, "errors": [], "warnings": [], "status": "pending"},
+            "source_conflicts": {"passed": False, "errors": [], "warnings": [], "status": "pending"},
+        },
+    }
+
+
+def _failed_validation_payload(available_citations: Sequence[str], errors: List[str]) -> Dict[str, object]:
+    payload = _pending_validation_payload(available_citations)
+    payload["errors"] = errors
+    payload["status"] = "failed"
+    return payload
 
 
 def _resolve_research_manifest_path(workspace: Workspace, resume: str) -> Path:
@@ -654,3 +806,12 @@ def _optional_text(value: object) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _strip_frontmatter(text: str) -> str:
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return text
+    return text[end + 5 :]

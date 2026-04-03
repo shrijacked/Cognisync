@@ -359,6 +359,132 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertFalse(manifest["validation"]["passed"])
             self.assertIn("S9", " ".join(manifest["validation"]["errors"]))
 
+    def test_research_fails_when_answer_contains_unsupported_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Unsupported Claims Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory. [seed]\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["unsupported"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Unsupported Answer\\n\\nAgent loops always require a vector database.')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            exit_code = main(
+                [
+                    "research",
+                    "--workspace",
+                    str(root),
+                    "--profile",
+                    "unsupported",
+                    "how do agent loops use memory",
+                ]
+            )
+
+            self.assertEqual(exit_code, 2)
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            self.assertFalse(manifest["validation"]["passed"])
+            self.assertIn("unsupported_claims", manifest["validation"]["checks"])
+            self.assertTrue(manifest["validation"]["checks"]["unsupported_claims"]["errors"])
+
+    def test_research_fails_answer_lint_when_missing_heading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Answer Lint Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["lintfail"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('Agent loops use structured memory. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            exit_code = main(
+                [
+                    "research",
+                    "--workspace",
+                    str(root),
+                    "--profile",
+                    "lintfail",
+                    "how do agent loops use memory",
+                ]
+            )
+
+            self.assertEqual(exit_code, 2)
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            self.assertFalse(manifest["validation"]["passed"])
+            self.assertTrue(manifest["validation"]["checks"]["answer_lint"]["errors"])
+
+    def test_research_marks_conflicting_sources_as_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Conflict Detection Test")
+
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["conflict"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Conflict Answer\\n\\nThe deployment model is local first. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "conflict",
+                        "what is the deployment model",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            self.assertTrue(manifest["validation"]["passed"])
+            self.assertTrue(manifest["validation"]["warnings"])
+            self.assertEqual(manifest["status"], "completed_with_warnings")
+            self.assertTrue(manifest["validation"]["checks"]["source_conflicts"]["warnings"])
+
 
 if __name__ == "__main__":
     unittest.main()
