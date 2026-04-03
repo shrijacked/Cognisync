@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from cognisync.graph_intelligence import extract_claim_tuples
 from cognisync.planner import render_compile_plan
 from cognisync.types import ArtifactRecord, CompilePlan, IndexSnapshot, SearchHit
 from cognisync.utils import relative_markdown_path, slugify, utc_timestamp
@@ -64,6 +65,35 @@ def _artifact_map(snapshot: Optional[IndexSnapshot]) -> Dict[str, ArtifactRecord
     if snapshot is None:
         return {}
     return {artifact.path: artifact for artifact in snapshot.artifacts}
+
+
+def _fact_blocks_for_hits(workspace: Workspace, hits: List[SearchHit]) -> List[Dict[str, object]]:
+    support: Dict[tuple[str, str, str], Dict[str, object]] = {}
+    for index, hit in enumerate(hits, start=1):
+        citation = f"S{index}"
+        path = workspace.root / hit.path
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for subject, verb, obj in extract_claim_tuples(text):
+            key = (subject, verb, obj)
+            entry = support.setdefault(
+                key,
+                {
+                    "subject": subject,
+                    "verb": verb,
+                    "object": obj,
+                    "citations": [],
+                    "paths": [],
+                },
+            )
+            if citation not in entry["citations"]:
+                entry["citations"].append(citation)
+            if hit.path not in entry["paths"]:
+                entry["paths"].append(hit.path)
+    fact_blocks = list(support.values())
+    fact_blocks.sort(key=lambda item: (-len(item["citations"]), item["subject"], item["verb"], item["object"]))
+    return fact_blocks
 
 
 def _input_context_lines(workspace: Workspace, plan: CompilePlan, snapshot: IndexSnapshot) -> List[str]:
@@ -128,6 +158,25 @@ def render_query_report(
                     "",
                 ]
             )
+
+        fact_blocks = _fact_blocks_for_hits(workspace, hit_list)
+        lines.extend(["## Fact Blocks", ""])
+        if not fact_blocks:
+            lines.extend(["No source-backed fact blocks were extracted from the retrieved hits.", ""])
+        else:
+            for block in fact_blocks:
+                claim = f"{block['subject']} {block['verb']} {block['object']}"
+                display_claim = claim[:1].upper() + claim[1:]
+                lines.extend(
+                    [
+                        f"### {display_claim}",
+                        "",
+                        f"- Claim: `{claim}`",
+                        f"- Supported by: {', '.join(f'[{citation}]' for citation in block['citations'])}",
+                        f"- Support count: `{len(block['citations'])}`",
+                        "",
+                    ]
+                )
 
         lines.extend(["## Source Blocks", ""])
         for index, hit in enumerate(hit_list, start=1):
@@ -246,6 +295,7 @@ def render_query_packet(
         "",
     ]
     normalized_note_paths = [str(path).strip() for path in list(note_paths or []) if str(path).strip()]
+    fact_blocks = _fact_blocks_for_hits(workspace, hit_list)
     if normalized_note_paths:
         lines.extend(
             [
@@ -256,9 +306,20 @@ def render_query_packet(
             ]
         )
         lines.extend(f"- `{path}`" for path in normalized_note_paths)
-        lines.extend(["", "## Source Context", ""])
+        lines.extend(["", "## Fact Blocks", ""])
     else:
-        lines.extend(["## Source Context", ""])
+        lines.extend(["## Fact Blocks", ""])
+    if not fact_blocks:
+        lines.extend(["No source-backed fact blocks were extracted from the retrieved hits.", "", "## Source Context", ""])
+    else:
+        for block in fact_blocks:
+            claim = f"{block['subject']} {block['verb']} {block['object']}"
+            lines.extend(
+                [
+                    f"- `{claim}` supported by {', '.join(f'[{citation}]' for citation in block['citations'])}",
+                ]
+            )
+        lines.extend(["", "## Source Context", ""])
     if not hit_list:
         lines.extend(["No relevant sources were found by the deterministic search pass.", ""])
     else:

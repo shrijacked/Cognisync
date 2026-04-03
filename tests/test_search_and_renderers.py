@@ -53,6 +53,38 @@ class SearchAndRenderersTests(unittest.TestCase):
             self.assertIn("marp: true", slides_text)
             self.assertIn("Agent Loops", slides_text)
 
+    def test_query_report_renders_fact_blocks_from_grounded_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Fact Block Test")
+
+            (workspace.raw_dir / "memory-a.md").write_text(
+                "# Memory A\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory-b.md").write_text(
+                "# Memory B\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+
+            snapshot = scan_workspace(workspace)
+            engine = SearchEngine.from_workspace(workspace, snapshot)
+            hits = engine.search("agent memory vector databases", limit=2)
+
+            report_path = render_query_report(
+                workspace,
+                question="How does agent memory work?",
+                hits=hits,
+                snapshot=snapshot,
+            )
+
+            report_text = report_path.read_text(encoding="utf-8")
+
+            self.assertIn("## Fact Blocks", report_text)
+            self.assertIn("Agent memory uses vector databases", report_text)
+            self.assertIn("Supported by: [S1], [S2]", report_text)
+
 
 if __name__ == "__main__":
     unittest.main()
