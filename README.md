@@ -176,13 +176,15 @@ The operator loop now has a review layer too:
 - `.cognisync/review-actions.json` records accepted concept pages and resolved entity merges so the graph stays cleaner on the next scan
 - `cognisync review accept-concept <slug>` turns a concept candidate into a deterministic concept page scaffold
 - `cognisync review resolve-merge "<canonical label>"` records a preferred label, updates concept metadata, and collapses future graph nodes into the resolved entity
-- `cognisync maintain` applies open concept and merge actions automatically, then writes a maintenance run manifest
+- `cognisync review apply-backlink <wiki/path.md>` routes orphan pages back into stable navigation pages without mutating raw source material
+- `cognisync review file-conflict "<subject>"` files a deterministic conflict note under `wiki/queries/conflicts/`
+- `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
 
 ```mermaid
 flowchart TD
     A["scan builds index, source manifest, and graph manifest"] --> B["review queue materializes follow-up work"]
-    B --> C["operators accept concepts and resolve merges"]
+    B --> C["operators accept concepts, resolve merges, apply backlinks, and file conflicts"]
     C --> D["review actions persist in review-actions.json"]
     D --> E["compile and research consume the cleaned corpus"]
     E --> F["maintain can replay the same actions automatically"]

@@ -15,6 +15,8 @@
 - added graph-aware lint checks for missing raw metadata, duplicate concept pages, and conflicting source claims
 - added `.cognisync/review-actions.json`, `review accept-concept`, and `review resolve-merge` so review items can be applied deterministically
 - added `cognisync maintain` to auto-apply open concept and merge actions and persist a maintenance run manifest
+- added `review apply-backlink` and `review file-conflict` so the remaining deterministic queue items are actionable too
+- expanded `maintain` to apply backlink routing and conflict filing before writing its run manifest
 
 ## v0.1.3 - 2026-04-03
 

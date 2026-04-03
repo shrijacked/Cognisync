@@ -87,6 +87,8 @@ The command:
 1. refreshes the workspace manifests if needed
 2. materializes `.cognisync/review-queue.json`
 3. prints a queue of concept candidates, entity merge suggestions, conflict reviews, and backlink opportunities
+4. can apply deterministic actions directly through subcommands:
+   `accept-concept`, `resolve-merge`, `apply-backlink`, and `file-conflict`
 
 The queue is intentionally durable and machine-readable so later automation can consume it directly.
 
@@ -97,11 +99,13 @@ Use `maintain` when you want Cognisync to apply the obvious graph-backed follow-
 The command:
 
 1. refreshes the current queue
-2. accepts a bounded number of open concept candidates
-3. resolves a bounded number of entity merge candidates
-4. re-scans the workspace and writes a maintenance run manifest
+2. applies a bounded number of backlink suggestions
+3. accepts a bounded number of open concept candidates
+4. resolves a bounded number of entity merge candidates
+5. files a bounded number of conflict notes
+6. re-scans the workspace and writes a maintenance run manifest
 
-The current maintenance surface is intentionally conservative. It only applies deterministic concept scaffolds and merge resolutions, then leaves richer synthesis to compile and research.
+The current maintenance surface is intentionally conservative. It only applies deterministic scaffolds and routing actions, then leaves richer synthesis to compile and research.
 
 ### `research`
 
@@ -145,6 +149,8 @@ The scan and compile loop also uses a richer graph substrate now:
 - concept creation is no longer limited to explicit tag overlap
 - `cognisync review` turns that graph state into a usable operator queue
 - resolved merge actions collapse future entity nodes onto a preferred label
+- backlink actions route orphan wiki pages into durable navigation surfaces
+- filed conflict notes suppress resolved conflict reviews while preserving the disagreement as a first-class artifact
 - `cognisync maintain` turns the deterministic parts of that queue into a one-command maintenance pass
 
 ## Traceability
