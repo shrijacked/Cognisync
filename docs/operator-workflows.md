@@ -233,6 +233,7 @@ Before a research run is considered complete, Cognisync now checks:
 The scan and compile loop also uses a richer graph substrate now:
 
 - `.cognisync/graph.json` materializes entities, concept candidates, and conflict edges
+- `.cognisync/graph.json` also materializes source-backed assertion nodes with `asserts` edges from supporting artifacts
 - repeated headings, entity mentions, and tags can all feed concept-page planning
 - concept creation is no longer limited to explicit tag overlap
 - `cognisync review` turns that graph state into a usable operator queue

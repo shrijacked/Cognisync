@@ -6,6 +6,7 @@
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `research --job-profile` so question-driven runs can scaffold profile-specific intermediate notes and validation reports
 - added source-packet and checkpoints artifacts inside each research job workspace so resumed runs keep a fuller execution bundle
+- added source-backed assertion nodes and artifact support edges to `.cognisync/graph.json`
 - expanded `cognisync ui review` with source-coverage panels, compile-health summaries, run timelines, concept-graph pages, graph-node drilldowns, run-detail pages, artifact previews, lightweight filters, and local review actions when served
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind

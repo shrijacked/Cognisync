@@ -192,6 +192,7 @@ Research verification is now stricter too:
 The graph layer is richer now as well:
 
 - `.cognisync/graph.json` includes entity nodes and mention edges, not just artifacts and tags
+- source-backed assertions now materialize as first-class assertion nodes with artifact support edges
 - repeated entities and tags become concept candidates with support counts
 - compile planning can propose concept pages from those candidates even when explicit tags are missing
 - conflicting source claims are represented in the graph so downstream tools can inspect tensions in the corpus
