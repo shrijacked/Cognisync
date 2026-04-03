@@ -285,6 +285,7 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertTrue(packet_path.exists())
             self.assertIn("research memo", packet_path.read_text(encoding="utf-8").lower())
             self.assertIn("Wrote filed answer", stdout.getvalue())
+            self.assertIn("Wrote change summary", stdout.getvalue())
 
             run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
             self.assertTrue(run_manifests)
@@ -296,6 +297,12 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(manifest["answer_path"], "outputs/reports/how-do-agent-loops-use-memory-memo.md")
             self.assertEqual(manifest["status"], "completed")
             self.assertIn("plan_path", manifest)
+            self.assertIn("change_summary_path", manifest)
+            summary_path = workspace.root / manifest["change_summary_path"]
+            self.assertTrue(summary_path.exists())
+            summary_text = summary_path.read_text(encoding="utf-8")
+            self.assertIn("# Research Change Summary", summary_text)
+            self.assertIn("Artifact count:", summary_text)
 
     def test_research_without_profile_writes_a_resumable_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -323,6 +330,7 @@ class RuntimeContractsTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("No profile provided", stdout.getvalue())
+            self.assertIn("Wrote change summary", stdout.getvalue())
 
             run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
             self.assertEqual(len(run_manifests), 1)
@@ -332,6 +340,12 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertTrue(manifest["resume_supported"])
             self.assertTrue((workspace.root / manifest["plan_path"]).exists())
             self.assertTrue((workspace.root / manifest["packet_path"]).exists())
+            self.assertIn("change_summary_path", manifest)
+            summary_path = workspace.root / manifest["change_summary_path"]
+            self.assertTrue(summary_path.exists())
+            summary_text = summary_path.read_text(encoding="utf-8")
+            self.assertIn("# Research Change Summary", summary_text)
+            self.assertIn("Artifact count:", summary_text)
 
             plan_text = (workspace.root / manifest["plan_path"]).read_text(encoding="utf-8")
             self.assertIn("Research Plan", plan_text)

@@ -469,6 +469,7 @@ def cmd_research(args: argparse.Namespace) -> int:
     print(f"Wrote research plan to {result.plan_path}")
     print(f"Wrote report to {result.report_path}")
     print(f"Wrote prompt packet to {result.packet_path}")
+    print(f"Wrote change summary to {result.change_summary_path}")
     print(f"Wrote run manifest to {result.run_manifest_path}")
     if result.slide_path is not None:
         print(f"Wrote slide deck to {result.slide_path}")

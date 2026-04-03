@@ -6,6 +6,7 @@ import re
 from typing import Dict, List, Optional, Sequence
 
 from cognisync.adapters import AdapterError, adapter_from_config
+from cognisync.change_summaries import ChangeState, capture_change_state, write_change_summary
 from cognisync.manifests import read_json_manifest, write_run_manifest, write_workspace_manifests
 from cognisync.renderers import render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
@@ -37,6 +38,7 @@ class ResearchRunResult:
     packet_path: Path
     answer_path: Optional[Path]
     slide_path: Optional[Path]
+    change_summary_path: Path
     run_manifest_path: Path
     hit_count: int
     ran_profile: bool
@@ -69,6 +71,7 @@ def run_research_cycle(
     if not question:
         raise ResearchError("A question is required unless you resume an existing research run.")
 
+    previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
     write_workspace_manifests(workspace, snapshot)
@@ -129,12 +132,33 @@ def run_research_cycle(
     run_manifest_path = write_run_manifest(workspace, "research", base_payload)
 
     if not profile_name:
+        change_summary_path = _write_research_change_summary(workspace, previous_state)
+        run_manifest_path = _write_research_run_state(
+            workspace=workspace,
+            run_id=run_manifest_path.stem,
+            question=question,
+            mode=mode,
+            profile_name=profile_name,
+            plan_path=plan_path,
+            plan_json_path=plan_json_path,
+            report_path=report_path,
+            packet_path=packet_path,
+            answer_path=answer_path,
+            slide_path=slide_path,
+            change_summary_path=change_summary_path,
+            status="planned",
+            sources=sources,
+            validation=_pending_validation_payload(_available_citations(sources)),
+            resume_count=0,
+            attempt_count=0,
+        )
         return ResearchRunResult(
             plan_path=plan_path,
             report_path=report_path,
             packet_path=packet_path,
             answer_path=None,
             slide_path=slide_path,
+            change_summary_path=change_summary_path,
             run_manifest_path=run_manifest_path,
             hit_count=len(hits),
             ran_profile=False,
@@ -157,6 +181,7 @@ def run_research_cycle(
         run_manifest_path=run_manifest_path,
         run_id=run_manifest_path.stem,
         sources=sources,
+        previous_state=previous_state,
         resume_count=0,
         attempt_count=1,
         resumed=False,
@@ -199,6 +224,7 @@ def _resume_research_cycle(
     sources = list(manifest.get("sources", []))
     resume_count = int(manifest.get("resume_count", 0)) + 1
     attempt_count = int(manifest.get("attempt_count", 0)) + 1
+    previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
 
     return _execute_research_run(
         workspace=workspace,
@@ -214,6 +240,7 @@ def _resume_research_cycle(
         run_manifest_path=run_manifest_path,
         run_id=run_manifest_path.stem,
         sources=sources,
+        previous_state=previous_state,
         resume_count=resume_count,
         attempt_count=attempt_count,
         resumed=True,
@@ -234,6 +261,7 @@ def _execute_research_run(
     run_manifest_path: Path,
     run_id: str,
     sources: List[Dict[str, object]],
+    previous_state: ChangeState,
     resume_count: int,
     attempt_count: int,
     resumed: bool,
@@ -267,6 +295,7 @@ def _execute_research_run(
             packet_path=packet_path,
             answer_path=output_file,
             slide_path=slide_path,
+            change_summary_path=_write_research_change_summary(workspace, previous_state),
             status="adapter_failed",
             sources=sources,
             validation=_failed_validation_payload(_available_citations(sources), [str(error)]),
@@ -301,6 +330,7 @@ def _execute_research_run(
         packet_path=packet_path,
         answer_path=output_file,
         slide_path=slide_path,
+        change_summary_path=None,
         status="running",
         sources=sources,
         validation=_pending_validation_payload(_available_citations(sources)),
@@ -335,6 +365,7 @@ def _execute_research_run(
             packet_path=packet_path,
             answer_path=output_file,
             slide_path=slide_path,
+            change_summary_path=_write_research_change_summary(workspace, previous_state),
             status="adapter_failed",
             sources=sources,
             validation=_failed_validation_payload(
@@ -351,10 +382,7 @@ def _execute_research_run(
 
     answer_text = output_file.read_text(encoding="utf-8", errors="ignore") if output_file.exists() else ""
     validation = _verify_research_answer(workspace, answer_text, sources)
-
-    final_snapshot = scan_workspace(workspace)
-    workspace.write_index(final_snapshot)
-    write_workspace_manifests(workspace, final_snapshot)
+    change_summary_path = _write_research_change_summary(workspace, previous_state)
 
     final_status = "completed"
     validation_step_status = "completed"
@@ -390,6 +418,7 @@ def _execute_research_run(
         packet_path=packet_path,
         answer_path=output_file,
         slide_path=slide_path,
+        change_summary_path=change_summary_path,
         status=final_status,
         sources=sources,
         validation=validation,
@@ -405,6 +434,7 @@ def _execute_research_run(
         packet_path=packet_path,
         answer_path=output_file,
         slide_path=slide_path,
+        change_summary_path=change_summary_path,
         run_manifest_path=run_manifest_path,
         hit_count=len(sources),
         ran_profile=True,
@@ -426,6 +456,7 @@ def _write_research_run_state(
     packet_path: Path,
     answer_path: Path,
     slide_path: Optional[Path],
+    change_summary_path: Optional[Path],
     status: str,
     sources: List[Dict[str, object]],
     validation: Dict[str, object],
@@ -446,6 +477,7 @@ def _write_research_run_state(
             "packet_path": workspace.relative_path(packet_path),
             "answer_path": workspace.relative_path(answer_path),
             "slide_path": workspace.relative_path(slide_path) if slide_path else None,
+            "change_summary_path": workspace.relative_path(change_summary_path) if change_summary_path else None,
             "status": status,
             "resume_supported": True,
             "attempt_count": attempt_count,
@@ -459,6 +491,14 @@ def _write_research_run_state(
         },
         run_id=run_id,
     )
+
+
+def _write_research_change_summary(workspace: Workspace, previous_state: ChangeState) -> Path:
+    snapshot = scan_workspace(workspace)
+    workspace.write_index(snapshot)
+    write_workspace_manifests(workspace, snapshot)
+    change_summary = write_change_summary(workspace, "research", previous_state, snapshot)
+    return change_summary.path
 
 
 def _build_research_plan(
