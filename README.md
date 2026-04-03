@@ -217,7 +217,7 @@ The operator loop now has a review layer too:
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
-- research job workspaces land under `outputs/reports/research-jobs/`, include deterministic note artifacts plus a validation report, and are ignored by the scanner so orchestration scratchpads do not leak back into retrieval
+- research job workspaces land under `outputs/reports/research-jobs/`, include deterministic note artifacts, a source packet, checkpoints, and a validation report, and are ignored by the scanner so orchestration scratchpads do not leak back into retrieval
 - review exports land under `outputs/reports/review-exports/` and are ignored by the scanner so operator telemetry does not leak back into retrieval
 - general export bundles land under `outputs/reports/exports/` and are also ignored by the scanner so bridge artifacts do not leak back into retrieval
 - the review dashboard lands under `outputs/reports/review-ui/`, writes stable `review-export.json` and `dashboard-state.json` sidecars, emits static graph-node, run-detail, and artifact-preview pages, and can be served with `cognisync ui review --serve`
@@ -281,7 +281,7 @@ cognisync export presentations
 ```
 
 - `export jsonl` writes one JSONL row per research run with the question, run metadata, cited report text, prompt packet text, filed answer text, slide path, and validation state
-- exported JSONL rows now also include the research job profile, note paths, and validation report path
+- exported JSONL rows now also include the research job profile, note paths, source-packet path, checkpoints path, and validation report path
 - `export presentations` copies generated slide decks and their companion reports or filed answers into a timestamped bundle with a stable `manifest.json`
 - both export surfaces write into `outputs/reports/exports/`
 - scanner ignores these bundles so dataset and sharing artifacts do not re-enter retrieval

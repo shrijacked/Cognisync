@@ -130,7 +130,7 @@ Supported paths in this release:
 - research job profile
 - report, answer, and prompt-packet text
 - citations and validation state
-- note paths, validation-report path, and paths back to the original workspace artifacts
+- note paths, source-packet path, checkpoints path, validation-report path, and paths back to the original workspace artifacts
 
 `export presentations` copies slide decks plus companion reports and answers into a timestamped bundle under `outputs/reports/exports/` and writes a stable `manifest.json` for downstream viewers or sharing flows.
 
@@ -220,7 +220,7 @@ Research and scan now persist:
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
 Research now also writes a dedicated plan in `.cognisync/plans/`, a run-scoped job workspace in `outputs/reports/research-jobs/`, and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
-Each research job workspace contains deterministic intermediate notes plus a validation report, and the scanner ignores `outputs/reports/research-jobs/` so those orchestration artifacts do not pollute retrieval.
+Each research job workspace contains deterministic intermediate notes plus a source packet, a checkpoints manifest, and a validation report, and the scanner ignores `outputs/reports/research-jobs/` so those orchestration artifacts do not pollute retrieval.
 Every planned, resumed, or completed research run also writes a research-scoped change summary so operators can see what the question actually changed in the corpus.
 
 Before a research run is considered complete, Cognisync now checks:
@@ -252,4 +252,4 @@ The scan and compile loop also uses a richer graph substrate now:
 | O10 | `export` | JSONL research datasets and timestamped presentation bundles under `outputs/reports/exports/` |
 | O11 | `maintain` | accepted concept scaffolds, merge resolutions, refreshed manifests, maintenance run manifest, change summary artifact |
 | O12 | `compile` | compile plan, prompt packet, optional model output, fresh lint state, run manifest |
-| O13 | `research` | cited report, prompt packet, intermediate job notes, validation report, run manifest, change summary artifact |
+| O13 | `research` | cited report, prompt packet, source packet, checkpoints manifest, intermediate job notes, validation report, run manifest, change summary artifact |
