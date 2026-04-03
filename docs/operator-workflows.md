@@ -88,9 +88,10 @@ The command:
 2. materializes `.cognisync/review-queue.json`
 3. prints a queue of concept candidates, entity merge suggestions, conflict reviews, and backlink opportunities
 4. can apply deterministic actions directly through subcommands:
-   `accept-concept`, `resolve-merge`, `apply-backlink`, and `file-conflict`
+   `accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, and `dismiss`
 
 The queue is intentionally durable and machine-readable so later automation can consume it directly.
+Dismissed items persist in `.cognisync/review-actions.json` with a reason, and they stay out of future queues and maintenance runs unless that state is edited.
 
 ### `maintain`
 
@@ -131,6 +132,7 @@ Research and scan now persist:
 - `.cognisync/graph.json` for artifact and tag graph state
 - `.cognisync/review-queue.json` for graph follow-up work
 - `.cognisync/review-actions.json` for accepted concept pages and resolved merge decisions
+- `.cognisync/review-actions.json` also records dismissed queue items with reasons
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
 Research now also writes a dedicated plan in `.cognisync/plans/` and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.

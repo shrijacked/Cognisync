@@ -54,7 +54,7 @@ workspace/
 - Deterministic corpus scanner and manifest builder
 - Stable source and graph manifests under `.cognisync/`
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
-- Durable review-action state so accepted concepts and resolved merges survive rescans
+- Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
 - Markdown-aware search over `raw/` and `wiki/`
 - Compile planner for missing summaries, concept pages, and repair work
 - Knowledge-base linter for broken links, missing summaries, graph conflicts, and duplicate concepts
@@ -173,19 +173,21 @@ The operator loop now has a review layer too:
 
 - `cognisync review` renders concept-page candidates, entity merge suggestions, conflicting claims, and backlink opportunities
 - `.cognisync/review-queue.json` stores those items as a durable queue for follow-up automation or human review
-- `.cognisync/review-actions.json` records accepted concept pages and resolved entity merges so the graph stays cleaner on the next scan
+- `.cognisync/review-actions.json` records accepted concept pages, resolved entity merges, and dismissed queue items so the graph stays cleaner on the next scan
 - `cognisync review accept-concept <slug>` turns a concept candidate into a deterministic concept page scaffold
 - `cognisync review resolve-merge "<canonical label>"` records a preferred label, updates concept metadata, and collapses future graph nodes into the resolved entity
 - `cognisync review apply-backlink <wiki/path.md>` routes orphan pages back into stable navigation pages without mutating raw source material
 - `cognisync review file-conflict "<subject>"` files a deterministic conflict note under `wiki/queries/conflicts/`
+- `cognisync review dismiss <review-id> --reason "..."` closes a queue item intentionally and persists why it should stay closed
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
+- dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - lint now surfaces raw sources with no headings or tags, duplicate concept pages, and conflicting claims as graph-aware issues
 
 ```mermaid
 flowchart TD
     A["scan builds index, source manifest, and graph manifest"] --> B["review queue materializes follow-up work"]
-    B --> C["operators accept concepts, resolve merges, apply backlinks, and file conflicts"]
+    B --> C["operators accept concepts, resolve merges, apply backlinks, file conflicts, or dismiss items"]
     C --> D["review actions persist in review-actions.json"]
     D --> E["compile and research consume the cleaned corpus"]
     E --> F["maintain can replay the same actions automatically"]
