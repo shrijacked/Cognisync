@@ -600,7 +600,7 @@ def _verify_research_answer(workspace: Workspace, answer_text: str, sources: Seq
     citations = _validate_citations(answer_text, available_citations)
     answer_lint = _lint_answer(answer_text)
     unsupported_claims = _detect_unsupported_claims(answer_text)
-    source_conflicts = _detect_source_conflicts(workspace, sources, answer_text)
+    source_conflicts = _detect_source_conflicts(workspace, sources, answer_text, citations["used"])
     errors = citations["errors"] + answer_lint["errors"] + unsupported_claims["errors"] + source_conflicts["errors"]
     warnings = citations["warnings"] + answer_lint["warnings"] + unsupported_claims["warnings"] + source_conflicts["warnings"]
     return {
@@ -689,6 +689,7 @@ def _detect_source_conflicts(
     workspace: Workspace,
     sources: Sequence[Dict[str, object]],
     answer_text: str,
+    used_citations: Sequence[str],
 ) -> Dict[str, object]:
     errors: List[str] = []
     warnings: List[str] = []
@@ -720,22 +721,29 @@ def _detect_source_conflicts(
         if line.strip() and not line.lstrip().startswith("#")
     ).lower()
     acknowledged = any(marker in narrative_text for marker in CONFLICT_ACK_MARKERS)
+    used_citation_set = set(used_citations)
     for (subject, verb), objects in sorted(claims.items()):
         if len(objects) < 2:
             continue
-        if acknowledged:
-            continue
         variants = []
+        cited_variants = 0
         for obj, citations in sorted(objects.items()):
-            variants.append(f"{obj} ({', '.join(sorted(set(citations)))})")
-        warnings.append(
-            f"Retrieved sources disagree about '{subject} {verb}': " + "; ".join(variants) + "."
+            unique_citations = sorted(set(citations))
+            variants.append(f"{obj} ({', '.join(unique_citations)})")
+            if used_citation_set.intersection(unique_citations):
+                cited_variants += 1
+        if acknowledged and cited_variants >= 2:
+            continue
+        errors.append(
+            f"Retrieved sources disagree about '{subject} {verb}': "
+            + "; ".join(variants)
+            + ". The answer must acknowledge the disagreement and cite both sides."
         )
     return {
-        "passed": True,
+        "passed": not errors,
         "errors": errors,
         "warnings": warnings,
-        "status": "warning" if warnings else "completed",
+        "status": "failed" if errors else ("warning" if warnings else "completed"),
     }
 
 

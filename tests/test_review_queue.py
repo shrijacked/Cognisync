@@ -331,6 +331,49 @@ class ReviewQueueTests(unittest.TestCase):
             self.assertGreaterEqual(manifest["filed_conflict_count"], 1)
             self.assertIn("Maintenance applied", stdout.getvalue())
 
+    def test_maintain_skips_low_signal_concept_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Low Signal Maintenance Test")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Vector Databases\n\n"
+                "Vector Databases improve recall for agents.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Memory Systems\n\n"
+                "## Vector Databases\n\n"
+                "Vector Databases help persistence for agents.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["maintain", "--workspace", str(root)]), 0)
+
+            actions = json.loads((workspace.state_dir / "review-actions.json").read_text(encoding="utf-8"))
+            self.assertIn("vector-databases", actions["accepted_concepts"])
+            self.assertNotIn("agents", actions["accepted_concepts"])
+
+            queue = json.loads((workspace.state_dir / "review-queue.json").read_text(encoding="utf-8"))
+            concept_items = [item for item in queue["items"] if item["kind"] == "concept_candidate"]
+            self.assertTrue(any(item["slug"] == "agents" for item in concept_items))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -438,7 +438,7 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertFalse(manifest["validation"]["passed"])
             self.assertTrue(manifest["validation"]["checks"]["answer_lint"]["errors"])
 
-    def test_research_marks_conflicting_sources_as_warnings(self) -> None:
+    def test_research_fails_when_conflicts_are_not_acknowledged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workspace = Workspace(root)
@@ -477,13 +477,61 @@ class RuntimeContractsTests(unittest.TestCase):
                     ]
                 )
 
+            self.assertEqual(exit_code, 2)
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            self.assertFalse(manifest["validation"]["passed"])
+            self.assertEqual(manifest["status"], "failed_validation")
+            self.assertTrue(manifest["validation"]["checks"]["source_conflicts"]["errors"])
+
+    def test_research_accepts_conflicts_when_answer_surfaces_both_sides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Conflict Resolution Answer Test")
+
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["conflict"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sys; sys.stdin.read(); "
+                        "print('# Conflict Answer\\n\\nThe sources disagree about the deployment model. "
+                        "One source says it is local first [S1], while another says it is cloud only [S2].')"
+                    ),
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "conflict",
+                        "what is the deployment model",
+                    ]
+                )
+
             self.assertEqual(exit_code, 0)
             run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
             manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
             self.assertTrue(manifest["validation"]["passed"])
-            self.assertTrue(manifest["validation"]["warnings"])
-            self.assertEqual(manifest["status"], "completed_with_warnings")
-            self.assertTrue(manifest["validation"]["checks"]["source_conflicts"]["warnings"])
+            self.assertFalse(manifest["validation"]["checks"]["source_conflicts"]["errors"])
 
 
 if __name__ == "__main__":

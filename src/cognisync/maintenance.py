@@ -195,7 +195,9 @@ def run_maintenance_cycle(
     snapshot = _refresh_workspace_state(workspace)
     queue = build_review_queue(workspace, snapshot)
     concept_slugs = [
-        str(item["slug"]) for item in queue["items"] if item["kind"] == "concept_candidate"
+        str(item["slug"])
+        for item in queue["items"]
+        if item["kind"] == "concept_candidate" and _should_auto_accept_concept(item)
     ][:max_concepts]
     accepted_paths = [accept_concept_candidate(workspace, slug) for slug in concept_slugs]
 
@@ -258,6 +260,17 @@ def _refresh_workspace_state(workspace: Workspace) -> IndexSnapshot:
     workspace.write_index(snapshot)
     write_workspace_manifests(workspace, snapshot)
     return snapshot
+
+
+def _should_auto_accept_concept(item: Dict[str, object]) -> bool:
+    title = str(item.get("title", "")).removeprefix("Create concept page for ").strip()
+    words = [word for word in title.split() if word]
+    evidence_kinds = {str(kind) for kind in list(item.get("evidence_kinds", []))}
+    if len(words) >= 2 and "entity" in evidence_kinds:
+        return True
+    if len(words) >= 3:
+        return True
+    return False
 
 
 def _render_concept_page(workspace: Workspace, snapshot: IndexSnapshot, item: Dict[str, object]) -> str:

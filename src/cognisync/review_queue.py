@@ -72,6 +72,7 @@ def _build_concept_candidate_items(snapshot: IndexSnapshot, actions: Dict[str, o
                 "slug": candidate["slug"],
                 "target_path": candidate["output_path"],
                 "path": candidate["output_path"],
+                "evidence_kinds": list(candidate.get("evidence_kinds", [])),
                 "related_paths": support_paths,
                 "detail": (
                     f"{candidate['title']} is supported by {candidate['support_count']} artifacts "
