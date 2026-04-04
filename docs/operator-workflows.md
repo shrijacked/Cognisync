@@ -125,6 +125,7 @@ Supported paths in this release:
 - `cognisync export finetune-bundle`
 - `cognisync export finetune-bundle --provider-format openai-chat`
 - `cognisync export feedback-bundle`
+- `cognisync export correction-bundle`
 - `cognisync export presentations`
 - `cognisync eval research`
 - `cognisync synth qa`
@@ -161,6 +162,12 @@ You can also ask the same bundle to emit provider-specific supervised records. F
 - the current answer text, weak dimensions, and a remediation prompt per record
 - a bundle `manifest.json` with counts grouped by improvement target
 
+`export correction-bundle` writes a timestamped correction bundle under `outputs/reports/exports/` with:
+
+- `dataset.jsonl` records for remediation jobs that finished with passing validation
+- the corrected answer, the previous failing answer, the recorded improvement targets, and the validation payload per record
+- a bundle `manifest.json` with counts grouped by improvement target, completion status, and example type
+
 `eval research` reads the same persisted research runs and writes a Markdown scorecard plus JSON payload with:
 
 - validation pass and failure counts
@@ -188,6 +195,7 @@ The command:
 3. executes that packet through the chosen adapter profile
 4. validates the corrected answer against the original retrieved sources
 5. writes a remediation manifest and validation report beside the corrected answer
+6. leaves those successful corrections ready for `export correction-bundle` without mutating the original research run
 
 `remediate research --profile codex` is intentionally conservative. It does not overwrite the original research run or filed answer. Instead it leaves a separate correction workspace under `outputs/reports/remediation-jobs/`, and the scanner ignores that directory so remediation artifacts do not leak back into retrieval until a later operator step promotes them.
 
