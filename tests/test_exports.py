@@ -384,10 +384,14 @@ class ExportTests(unittest.TestCase):
             report_text = report_files[-1].read_text(encoding="utf-8")
             payload = json.loads(payload_files[-1].read_text(encoding="utf-8"))
             self.assertIn("## Scorecard", report_text)
+            self.assertIn("## Dimension Averages", report_text)
             self.assertIn("Validation pass rate", report_text)
             self.assertEqual(payload["run_count"], 2)
             self.assertEqual(payload["validation_pass_count"], 1)
             self.assertEqual(payload["failed_validation_count"], 1)
+            self.assertEqual(payload["dimension_averages"]["citation_integrity"], 0.5)
+            self.assertEqual(payload["dimension_averages"]["grounding"], 0.5)
+            self.assertTrue(all("dimensions" in run for run in payload["runs"]))
             self.assertIn("Wrote research evaluation report to", stdout.getvalue())
 
 
