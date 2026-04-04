@@ -307,6 +307,7 @@ Supported paths in this release:
 - `cognisync jobs run-next --worker-id worker-a`
 - `cognisync jobs retry <job-id> --profile codex`
 - `cognisync jobs work --worker-id worker-a --max-jobs 10`
+- `cognisync jobs workers`
 - `cognisync jobs list`
 
 The command family:
@@ -321,6 +322,7 @@ The command family:
 8. records result paths back into the job manifest instead of dropping that state into terminal-only output
 9. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
 10. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
+11. derives `.cognisync/jobs/workers.json` so queue ownership can be inspected as a worker roster instead of only by reading individual job manifests
 
 ```mermaid
 flowchart LR

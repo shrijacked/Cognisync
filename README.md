@@ -229,7 +229,7 @@ The operator loop now has a review layer too:
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json` so operator roles can travel with the workspace instead of living in out-of-band notes
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, and the workspace roster
 - `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, and storage bytes
-- `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, and `jobs list` provide a persisted local queue plus retry lineage and renewable worker leases for remote-style research, compile, lint, maintenance, and scheduled connector execution
+- `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, `jobs workers`, and `jobs list` provide a persisted local queue plus retry lineage, renewable worker leases, and a file-native worker roster for remote-style research, compile, lint, maintenance, and scheduled connector execution
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, and now record a `state_manifests` map in each bundle manifest so the receiving side knows which file-native control-plane manifests were included
 - `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and both single-connector and registry-wide syncs can flow through the same worker loop or scheduled subscription state
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
@@ -357,6 +357,7 @@ cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900
 cognisync jobs run-next --worker-id worker-a
 cognisync jobs retry research-... --profile codex
 cognisync jobs work --worker-id worker-a --max-jobs 10
+cognisync jobs workers
 cognisync jobs list
 
 cognisync sync export
@@ -374,6 +375,7 @@ cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /
 - `jobs run-next --worker-id worker-a` resumes that same worker's active claim or claims a fresh job when none is held
 - `jobs retry` re-queues a terminal job with lineage back to the original manifest, and can override the profile for another attempt
 - `jobs work --worker-id worker-a` drains claimable jobs sequentially under the same worker identity and lease settings
+- `jobs workers` renders `.cognisync/jobs/workers.json`, a derived worker registry that shows the last-seen time, active lease, and idle/completed state for every worker that has touched the queue
 - `sync export` writes a portable workspace bundle under `outputs/reports/sync-bundles/` with `raw/`, `wiki/`, `prompts/`, `.cognisync/`, and the important report job directories
 - `sync import` restores that bundle into another workspace root so queued state, manifests, and corpus files travel together
 - `sync history` reads `.cognisync/sync/history.json`, which records both export and import events plus their bundle manifests
