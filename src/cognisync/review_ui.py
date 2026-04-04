@@ -21,9 +21,10 @@ from cognisync.maintenance import (
     reopen_review_item,
     resolve_entity_merge,
 )
+from cognisync.connectors import ConnectorError, list_connectors, sync_connector
+from cognisync.jobs import JobError, list_jobs, run_job_worker
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.linter import lint_snapshot
-from cognisync.jobs import list_jobs
 from cognisync.planner import build_compile_plan
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
@@ -60,6 +61,7 @@ def write_review_ui_bundle(
     _write_run_detail_pages(workspace, html_path.parent, state_payload)
     _write_job_detail_pages(workspace, html_path.parent, state_payload)
     _write_sync_detail_pages(workspace, html_path.parent, state_payload)
+    _write_connector_detail_pages(bundle_dir=html_path.parent, state_payload=state_payload)
     _write_run_timeline_page(html_path.parent, state_payload)
     _write_concept_graph_page(html_path.parent, state_payload)
 
@@ -111,6 +113,8 @@ def render_review_ui_html(
     job_items = list(jobs.get("items", []))
     sync = dict(payload.get("sync", {}))
     sync_items = list(sync.get("items", []))
+    connectors = dict(payload.get("connectors", {}))
+    connector_items = list(connectors.get("items", []))
     run_timeline = dict(payload.get("run_timeline", {}))
     concept_graph = dict(payload.get("concept_graph", {}))
     recent_change_summaries = list(payload.get("change_summaries", []))
@@ -124,6 +128,7 @@ def render_review_ui_html(
         ("Recorded Runs", str(runs.get("total_count", 0))),
         ("Queued Jobs", str(jobs.get("queued_count", 0))),
         ("Sync Events", str(sync.get("total_count", 0))),
+        ("Connectors", str(connectors.get("total_count", 0))),
         ("Known Conflicts", str(graph.get("conflict_count", 0))),
         ("Sources", str(source_coverage.get("source_count", 0))),
     ]
@@ -234,6 +239,10 @@ def render_review_ui_html(
             _render_sync_history_summary(sync),
             "        </article>",
             "        <article class=\"panel\">",
+            "          <h2>Connectors</h2>",
+            _render_connector_summary(connectors),
+            "        </article>",
+            "        <article class=\"panel\">",
             "          <h2>Recent Change Summaries</h2>",
             _render_recent_links(recent_change_summaries, empty_label="No change summaries found."),
             "        </article>",
@@ -320,8 +329,23 @@ def render_review_ui_html(
             ),
             _render_sync_explorer(sync_items),
             "      </article>",
+            "      <article class=\"panel\" data-filter-scope=\"connectors\">",
+            "        <div class=\"toolbar\">",
+            "          <h2>Connector Explorer</h2>",
+            "          <span class=\"muted\">Filter connector definitions</span>",
+            "        </div>",
+            _render_filter_controls(
+                scope="connectors",
+                search_label="Filter connectors",
+                search_placeholder="Search connector ids, names, sources, and kinds",
+                select_specs=[
+                    ("kind", "Connector Kind", _collect_filter_values(connector_items, "kind")),
+                ],
+            ),
+            _render_connector_explorer(connector_items),
+            "      </article>",
             "      <article class=\"panel\">",
-            "        <h2>Embedded Payload</h2>",
+                "        <h2>Embedded Payload</h2>",
             "        <details>",
             "          <summary>Show JSON snapshot</summary>",
             f"          <pre>{escape(serialized_payload)}</pre>",
@@ -347,6 +371,7 @@ def build_review_ui_state(
     runs = _build_run_history(workspace)
     jobs = _build_job_history(workspace)
     sync = _build_sync_history(workspace)
+    connectors = _build_connector_registry(workspace)
     return {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
@@ -359,6 +384,7 @@ def build_review_ui_state(
             "runs_dir": workspace.relative_path(workspace.runs_dir),
             "job_queue_manifest_path": workspace.relative_path(workspace.job_queue_manifest_path),
             "sync_history_manifest_path": workspace.relative_path(workspace.sync_history_manifest_path),
+            "connector_registry_path": workspace.relative_path(workspace.connector_registry_path),
         },
         "review": review_payload,
         "source_coverage": _build_source_coverage(workspace),
@@ -367,6 +393,7 @@ def build_review_ui_state(
         "runs": runs,
         "jobs": jobs,
         "sync": sync,
+        "connectors": connectors,
         "run_timeline": _build_run_timeline(workspace),
         "concept_graph": _build_concept_graph(workspace),
         "change_summaries": _read_recent_change_summaries(workspace),
@@ -613,6 +640,13 @@ def _render_open_item_actions(item: Dict[str, object]) -> str:
     return "<div class=\"stack\">" + "".join(forms) + "</div>"
 
 
+def _render_connector_actions(item: Dict[str, object]) -> str:
+    connector_id = str(item.get("label", "")).strip()
+    if not connector_id:
+        return "<span class=\"muted\">No actions</span>"
+    return _render_inline_form("/api/connectors/sync", [("connector_id", connector_id)], "Sync")
+
+
 def _render_inline_form(
     action: str,
     hidden_fields: Sequence[tuple[str, str]],
@@ -716,6 +750,7 @@ def _render_job_history_summary(jobs: Dict[str, object]) -> str:
         f"            <span class=\"pill\">jobs <strong>{escape(str(jobs.get('total_count', 0)))}</strong></span>",
         f"            <span class=\"pill warn\">queued <strong>{escape(str(jobs.get('queued_count', 0)))}</strong></span>",
         f"            <span class=\"pill danger\">failures <strong>{escape(str(jobs.get('failed_count', 0)))}</strong></span>",
+        f"            <span>{_render_inline_form('/api/jobs/run-next', [], 'Run next job')}</span>",
         "          </div>",
         _render_kind_table("Job Types", counts_by_kind),
         _render_kind_table("Job Statuses", counts_by_status),
@@ -792,6 +827,51 @@ def _render_sync_history_summary(sync: Dict[str, object]) -> str:
                 f"                <td>{operation}</td>",
                 f"                <td>{file_count}</td>",
                 f"                <td>{generated_at}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_connector_summary(connectors: Dict[str, object]) -> str:
+    items = list(connectors.get("items", []))
+    if not items:
+        return "          <p class=\"empty\">No connectors registered.</p>"
+    recent_items = items[:6]
+    counts_by_kind = dict(connectors.get("counts_by_kind", {}))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">connectors <strong>{escape(str(connectors.get('total_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">synced <strong>{escape(str(connectors.get('synced_count', 0)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Connector Kinds", counts_by_kind),
+        "          <h3>Registered Connectors</h3>",
+        "          <table>",
+        "            <thead><tr><th>Connector</th><th>Kind</th><th>Last Sync</th><th>Actions</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for item in recent_items:
+        detail_href = escape(str(item.get("detail_href", "")))
+        label = escape(str(item.get("label", "")))
+        source = escape(str(item.get("source", "")))
+        kind = escape(str(item.get("kind", "")))
+        last_synced_at = escape(str(item.get("last_synced_at", "")) or "-")
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong><a href=\""
+                    + detail_href
+                    + "\">"
+                    + label
+                    + "</a></strong><br><span class=\"muted\"><code>"
+                    + source
+                    + "</code></span></td>"
+                ),
+                f"                <td>{kind}</td>",
+                f"                <td>{last_synced_at}</td>",
+                f"                <td>{_render_connector_actions(item)}</td>",
                 "              </tr>",
             ]
         )
@@ -1089,6 +1169,49 @@ def _render_sync_explorer(items: List[Dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def _render_connector_explorer(items: List[Dict[str, object]]) -> str:
+    if not items:
+        return "        <p class=\"empty\">No connectors found.</p>"
+    lines = [
+        "        <table>",
+        "          <thead><tr><th>Connector</th><th>Kind</th><th>Last Sync</th><th>Actions</th></tr></thead>",
+        "          <tbody>",
+    ]
+    for item in items:
+        lines.extend(
+            [
+                (
+                    "            <tr data-filter-row=\"connectors\" data-kind=\""
+                    + escape(str(item.get("kind", "")))
+                    + "\" data-search=\""
+                    + escape(str(item.get("search_text", "")))
+                    + "\">"
+                ),
+                (
+                    "              <td><strong><a href=\""
+                    + escape(str(item.get("detail_href", "")))
+                    + "\">"
+                    + escape(str(item.get("label", "")))
+                    + "</a></strong><br><span class=\"muted\"><code>"
+                    + escape(str(item.get("source", "")))
+                    + "</code></span></td>"
+                ),
+                f"              <td>{escape(str(item.get('kind', '')))}</td>",
+                f"              <td>{escape(str(item.get('last_synced_at', '')) or '-')}</td>",
+                f"              <td>{_render_connector_actions(item)}</td>",
+                "            </tr>",
+            ]
+        )
+    lines.extend(
+        [
+            "          </tbody>",
+            "        </table>",
+            "        <p class=\"empty\" data-filter-empty=\"connectors\" hidden>No connectors match the current filters.</p>",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _render_filter_script() -> str:
     return """  <script>
     (() => {
@@ -1338,6 +1461,48 @@ def _build_sync_history(workspace: Workspace, limit: int = 24) -> Dict[str, obje
         "history_manifest_path": workspace.relative_path(workspace.sync_history_manifest_path),
         "total_count": len(events),
         "counts_by_operation": dict(counts_by_operation),
+        "items": items[:limit],
+    }
+
+
+def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    items: List[Dict[str, str]] = []
+    counts_by_kind: Counter[str] = Counter()
+    connectors = list_connectors(workspace)
+    for connector in connectors:
+        connector_id = str(connector.get("connector_id", ""))
+        kind = str(connector.get("kind", "unknown"))
+        counts_by_kind[kind] += 1
+        items.append(
+            {
+                "label": connector_id,
+                "kind": kind,
+                "name": str(connector.get("name", "")),
+                "source": str(connector.get("source", "")),
+                "last_synced_at": str(connector.get("last_synced_at", "") or ""),
+                "last_result_count": str(connector.get("last_result_count", 0) or 0),
+                "last_change_summary_path": str(connector.get("last_change_summary_path", "") or ""),
+                "last_run_manifest_path": str(connector.get("last_run_manifest_path", "") or ""),
+                "path": workspace.relative_path(workspace.connector_registry_path),
+                "detail_href": _connector_detail_href(connector_id),
+                "search_text": _normalize_search_text(
+                    [
+                        connector_id,
+                        kind,
+                        connector.get("name"),
+                        connector.get("source"),
+                        connector.get("last_synced_at"),
+                        connector.get("last_change_summary_path"),
+                        connector.get("last_run_manifest_path"),
+                    ]
+                ),
+            }
+        )
+    return {
+        "registry_path": workspace.relative_path(workspace.connector_registry_path),
+        "total_count": len(connectors),
+        "synced_count": sum(1 for connector in connectors if connector.get("last_synced_at")),
+        "counts_by_kind": dict(counts_by_kind),
         "items": items[:limit],
     }
 
@@ -1633,6 +1798,11 @@ def _collect_preview_targets(workspace: Workspace, state_payload: Dict[str, obje
         for relative_path in list(result.get("remediation_manifest_paths", [])):
             add_target(str(relative_path or ""))
 
+    connectors = dict(state_payload.get("connectors", {}))
+    for item in list(connectors.get("items", [])):
+        add_target(str(item.get("last_change_summary_path", "")))
+        add_target(str(item.get("last_run_manifest_path", "")))
+
     return targets
 
 
@@ -1723,6 +1893,21 @@ def _write_sync_detail_pages(workspace: Workspace, bundle_dir: Path, state_paylo
                 current_href=str(item.get("detail_href", "")),
                 item=item,
                 manifest=manifest,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _write_connector_detail_pages(bundle_dir: Path, state_payload: Dict[str, object]) -> None:
+    connectors = dict(state_payload.get("connectors", {}))
+    items = list(connectors.get("items", []))
+    for item in items:
+        detail_path = bundle_dir / str(item.get("detail_href", ""))
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        detail_path.write_text(
+            _render_connector_detail_html(
+                current_href=str(item.get("detail_href", "")),
+                item=item,
             ),
             encoding="utf-8",
         )
@@ -1958,6 +2143,41 @@ def _render_sync_detail_html(
         title="Sync Detail",
         heading=escape(str(item.get("label", "Sync Detail"))),
         subtitle=escape(str(item.get("operation", "sync"))),
+        current_href=current_href,
+        body_html="\n".join(body_lines),
+    )
+
+
+def _render_connector_detail_html(
+    current_href: str,
+    item: Dict[str, object],
+) -> str:
+    body_lines = [
+        "<article class=\"panel\">",
+        "  <h2>Connector Metadata</h2>",
+        _render_detail_fields(
+            [
+                ("Connector ID", _render_code_value(str(item.get("label", "")))),
+                ("Kind", _render_code_value(str(item.get("kind", "")))),
+                ("Name", _render_code_value(str(item.get("name", "")))),
+                ("Source", _render_code_value(str(item.get("source", "")))),
+                ("Last Synced", _render_code_value(str(item.get("last_synced_at", "")) or "-")),
+                ("Last Result Count", _render_code_value(str(item.get("last_result_count", "")) or "0")),
+                ("Last Change Summary", _render_preview_value(current_href, str(item.get("last_change_summary_path", "")))),
+                ("Last Run Manifest", _render_preview_value(current_href, str(item.get("last_run_manifest_path", "")))),
+                ("Registry Path", _render_code_value(str(item.get("path", "")))),
+            ]
+        ),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Connector Actions</h2>",
+        f"  {_render_connector_actions(item)}",
+        "</article>",
+    ]
+    return _render_detail_page(
+        title="Connector Detail",
+        heading=escape(str(item.get("label", "Connector Detail"))),
+        subtitle=escape(str(item.get("kind", "connector"))),
         current_href=current_href,
         body_html="\n".join(body_lines),
     )
@@ -2373,6 +2593,10 @@ def _sync_detail_href(sync_id: str) -> str:
     return f"sync/{slugify(sync_id) or 'sync'}.html"
 
 
+def _connector_detail_href(connector_id: str) -> str:
+    return f"connectors/{slugify(connector_id) or 'connector'}.html"
+
+
 def _relative_href(from_href: str, to_href: Optional[str]) -> str:
     if not to_href:
         return ""
@@ -2415,9 +2639,9 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
         payload = {key: values[-1] for key, values in parse_qs(raw_body, keep_blank_values=True).items()}
 
         try:
-            self._apply_review_action(parsed.path, payload)
+            self._apply_control_action(parsed.path, payload)
             _refresh_review_ui_bundle(self._workspace, Path(self.directory), self._index_name)
-        except MaintenanceError as error:
+        except (MaintenanceError, JobError, ConnectorError) as error:
             self.send_response(400)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -2428,11 +2652,17 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
         self.send_header("Location", f"/{self._index_name}")
         self.end_headers()
 
-    def _apply_review_action(self, path: str, payload: Dict[str, str]) -> None:
+    def _apply_control_action(self, path: str, payload: Dict[str, str]) -> None:
         workspace = self._workspace
         if workspace is None:
             raise MaintenanceError("No workspace is attached to the review UI server.")
 
+        if path == "/api/jobs/run-next":
+            run_job_worker(workspace, max_jobs=1, stop_on_error=True)
+            return
+        if path == "/api/connectors/sync":
+            sync_connector(workspace, payload.get("connector_id", ""), force=False)
+            return
         if path == "/api/review/accept-concept":
             accept_concept_candidate(workspace, payload.get("slug", ""))
             return

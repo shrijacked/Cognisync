@@ -49,6 +49,22 @@ class ReviewUiTests(unittest.TestCase):
             )
 
             self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            connector_url = "data:text/html;charset=utf-8,<html><head><title>Connector Page</title></head><body><p>Connector body.</p></body></html>"
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        connector_url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "connector-page",
+                    ]
+                ),
+                0,
+            )
             self.assertEqual(
                 main(
                     [
@@ -95,10 +111,12 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Run History", html)
             self.assertIn("Job Queue", html)
             self.assertIn("Sync History", html)
+            self.assertIn("Connectors", html)
             self.assertIn("Graph Node Explorer", html)
             self.assertIn("Run Explorer", html)
             self.assertIn("Job Explorer", html)
             self.assertIn("Sync Explorer", html)
+            self.assertIn("Connector Explorer", html)
             self.assertIn("Source Coverage", html)
             self.assertIn("Compile Health", html)
             self.assertIn("Run Timeline", html)
@@ -108,6 +126,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn(".cognisync/graph.json", html)
             self.assertIn(".cognisync/jobs/queue.json", html)
             self.assertIn(".cognisync/sync/history.json", html)
+            self.assertIn(".cognisync/connectors.json", html)
             self.assertIn("how do agent loops use memory", html)
             self.assertEqual(state["schema_version"], 1)
             self.assertGreaterEqual(state["graph"]["node_count"], 1)
@@ -118,18 +137,21 @@ class ReviewUiTests(unittest.TestCase):
             self.assertGreaterEqual(state["concept_graph"]["selected_node_count"], 1)
             self.assertGreaterEqual(state["jobs"]["total_count"], 1)
             self.assertGreaterEqual(state["sync"]["total_count"], 1)
+            self.assertGreaterEqual(state["connectors"]["total_count"], 1)
             self.assertGreaterEqual(len(state["graph"]["nodes"]), 1)
             self.assertTrue(any(item["detail_href"] for item in state["graph"]["nodes"]))
             self.assertTrue(any(item["run_kind"] == "research" for item in state["runs"]["items"]))
             self.assertTrue(any(item["detail_href"] for item in state["runs"]["items"]))
             self.assertTrue(any(item["detail_href"] for item in state["jobs"]["items"]))
             self.assertTrue(any(item["detail_href"] for item in state["sync"]["items"]))
+            self.assertTrue(any(item["detail_href"] for item in state["connectors"]["items"]))
             self.assertEqual(payload["summary"]["dismissed_item_count"], 1)
             self.assertGreaterEqual(payload["summary"]["open_item_count"], 1)
             graph_detail_href = state["graph"]["nodes"][0]["detail_href"]
             run_detail_href = next(item["detail_href"] for item in state["runs"]["items"] if item["run_kind"] == "research")
             job_detail_href = state["jobs"]["items"][0]["detail_href"]
             sync_detail_href = state["sync"]["items"][0]["detail_href"]
+            connector_detail_href = state["connectors"]["items"][0]["detail_href"]
             change_detail_href = state["change_summaries"][0]["detail_href"]
             concept_graph_href = state["concept_graph"]["map_href"]
             run_timeline_href = state["run_timeline"]["detail_href"]
@@ -137,6 +159,7 @@ class ReviewUiTests(unittest.TestCase):
             run_detail_path = workspace.review_ui_dir / run_detail_href
             job_detail_path = workspace.review_ui_dir / job_detail_href
             sync_detail_path = workspace.review_ui_dir / sync_detail_href
+            connector_detail_path = workspace.review_ui_dir / connector_detail_href
             change_detail_path = workspace.review_ui_dir / change_detail_href
             concept_graph_path = workspace.review_ui_dir / concept_graph_href
             run_timeline_path = workspace.review_ui_dir / run_timeline_href
@@ -144,6 +167,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertTrue(run_detail_path.exists())
             self.assertTrue(job_detail_path.exists())
             self.assertTrue(sync_detail_path.exists())
+            self.assertTrue(connector_detail_path.exists())
             self.assertTrue(change_detail_path.exists())
             self.assertTrue(concept_graph_path.exists())
             self.assertTrue(run_timeline_path.exists())
@@ -151,6 +175,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Run Detail", run_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Job Detail", job_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Sync Detail", sync_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("Connector Detail", connector_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Artifact Preview", change_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Concept Graph", concept_graph_path.read_text(encoding="utf-8"))
             self.assertIn("Run Timeline", run_timeline_path.read_text(encoding="utf-8"))
@@ -158,10 +183,13 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn(run_detail_href, html)
             self.assertIn(job_detail_href, html)
             self.assertIn(sync_detail_href, html)
+            self.assertIn(connector_detail_href, html)
             self.assertIn(change_detail_href, html)
             self.assertIn(concept_graph_href, html)
             self.assertIn(run_timeline_href, html)
             self.assertIn("action=\"/api/review/dismiss\"", html)
+            self.assertIn("action=\"/api/jobs/run-next\"", html)
+            self.assertIn("action=\"/api/connectors/sync\"", html)
             self.assertIn("action=\"/api/review/reopen\"", html)
             self.assertIn("Wrote review UI to", stdout.getvalue())
             self.assertIn("Wrote review UI state to", stdout.getvalue())
@@ -227,6 +255,23 @@ class ReviewUiTests(unittest.TestCase):
             )
 
             self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            connector_url = "data:text/html;charset=utf-8,<html><head><title>Server Connector</title></head><body><p>Connector body.</p></body></html>"
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        connector_url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "server-connector",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
             self.assertEqual(main(["ui", "review", "--workspace", str(root)]), 0)
 
             server = create_review_ui_server(
@@ -289,6 +334,36 @@ class ReviewUiTests(unittest.TestCase):
                 self.assertTrue((workspace.wiki_dir / "concepts" / "agent-memory.md").exists())
                 html = (workspace.review_ui_dir / "index.html").read_text(encoding="utf-8")
                 self.assertIn("action=\"/api/review/accept-concept\"", html)
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/run-next",
+                    body="",
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                queue_payload = json.loads((workspace.jobs_dir / "queue.json").read_text(encoding="utf-8"))
+                self.assertEqual(queue_payload["queued_count"], 0)
+
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode({"connector_id": "url-server-connector"})
+                connection.request(
+                    "POST",
+                    "/api/connectors/sync",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                self.assertTrue((workspace.raw_dir / "urls" / "server-connector.md").exists())
             finally:
                 server.shutdown()
                 server.server_close()
