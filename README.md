@@ -253,6 +253,7 @@ The operator loop now has a review layer too:
 - the same dashboard now also surfaces job-queue history from `.cognisync/jobs/` and sync audit history from `.cognisync/sync/`, with static job-detail and sync-detail pages for browser-first control-plane inspection
 - the same dashboard now also surfaces `.cognisync/jobs/workers.json`, so active and idle worker ownership is visible next to the queue instead of only through the CLI
 - the dashboard now surfaces connector definitions from `.cognisync/connectors.json` too, with static connector-detail pages and live actions for `run next job`, `sync connector`, and `sync all connectors` when the UI is served locally
+- those job, sync, and connector views now also surface actor provenance, so the dashboard shows who queued work, who moved state, and who created or last synced each connector
 - the same dashboard now reads `.cognisync/notifications.json` too, so backlog, validation-failure, and connector-attention signals show up as a durable inbox panel instead of living only in terminal output
 - the same dashboard now reads `.cognisync/access.json` too, so the workspace roster and role distribution are visible in the browser next to the rest of the operator state
 - the same dashboard now reads `.cognisync/audit.json` and `.cognisync/usage.json` too, so control-plane history and usage accounting show up alongside review, runs, jobs, sync, access, and notifications
