@@ -13,6 +13,144 @@ from cognisync.config import LLMProfile, load_config, save_config
 
 
 class JobsAndSyncTests(unittest.TestCase):
+    def test_jobs_can_be_claimed_and_run_by_a_specific_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Claimed Job Workspace"]), 0)
+
+            (root / "raw" / "retrieval.md").write_text(
+                "# Retrieval Systems\n\nAgent memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                claim_exit = main(
+                    [
+                        "jobs",
+                        "claim-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                        "--lease-seconds",
+                        "120",
+                    ]
+                )
+            self.assertEqual(claim_exit, 0)
+            self.assertIn("Claimed job", stdout.getvalue())
+
+            queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+            self.assertEqual(queue_payload["claimed_count"], 1)
+            self.assertEqual(queue_payload["status_counts"]["claimed"], 1)
+            self.assertIn("worker-a", queue_payload["active_worker_ids"])
+
+            manifest_path = next((root / ".cognisync" / "jobs" / "manifests").glob("*.json"))
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "claimed")
+            self.assertEqual(payload["lease"]["worker_id"], "worker-a")
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "run-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-b",
+                    ]
+                ),
+                2,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                run_exit = main(
+                    [
+                        "jobs",
+                        "run-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                    ]
+                )
+            self.assertEqual(run_exit, 0)
+            self.assertIn("Completed job", stdout.getvalue())
+
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["lease"]["worker_id"], "worker-a")
+
+    def test_expired_job_leases_can_be_reclaimed_by_another_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Lease Reclaim Workspace"]), 0)
+
+            (root / "raw" / "retrieval.md").write_text(
+                "# Retrieval Systems\n\nAgent memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "claim-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                        "--lease-seconds",
+                        "60",
+                    ]
+                ),
+                0,
+            )
+
+            manifest_path = next((root / ".cognisync" / "jobs" / "manifests").glob("*.json"))
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["lease"]["lease_expires_at"] = "2000-01-01T00:00:00+00:00"
+            manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                reclaim_exit = main(
+                    [
+                        "jobs",
+                        "claim-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-b",
+                        "--lease-seconds",
+                        "60",
+                    ]
+                )
+            self.assertEqual(reclaim_exit, 0)
+            self.assertIn("Claimed job", stdout.getvalue())
+
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "claimed")
+            self.assertEqual(payload["lease"]["worker_id"], "worker-b")
+            self.assertEqual(payload["lease"]["claim_count"], 2)
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "run-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-b",
+                    ]
+                ),
+                0,
+            )
+
     def test_jobs_queue_runs_research_and_improvement_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

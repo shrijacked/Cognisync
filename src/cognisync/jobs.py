@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -38,6 +38,17 @@ class JobWorkerResult:
     completed_count: int
     failed_count: int
     queue_manifest_path: Path
+
+
+@dataclass(frozen=True)
+class JobClaimResult:
+    job_manifest_path: Path
+    queue_manifest_path: Path
+    job_id: str
+    job_type: str
+    worker_id: str
+    lease_expires_at: str
+    status: str
 
 
 def enqueue_research_job(
@@ -203,10 +214,62 @@ def retry_job(
     )
 
 
+def claim_next_job(
+    workspace: Workspace,
+    worker_id: str,
+    lease_seconds: int = 300,
+) -> JobClaimResult:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    if lease_seconds < 1:
+        raise JobError("Lease seconds must be at least 1.")
+
+    jobs = list_jobs(workspace)
+    active_job = _find_active_job_for_worker(jobs, normalized_worker_id)
+    if active_job is not None:
+        raise JobError(
+            f"Worker {normalized_worker_id} already holds job {active_job.get('job_id', '')}."
+        )
+
+    job = _select_claimable_job(jobs)
+    if job is None:
+        raise JobError("No claimable jobs found.")
+
+    manifest_path = workspace.job_manifests_dir / f"{job['job_id']}.json"
+    claim_count = _existing_claim_count(job) + 1
+    lease = _build_lease_payload(
+        worker_id=normalized_worker_id,
+        lease_seconds=lease_seconds,
+        claim_count=claim_count,
+    )
+    job = _update_job_manifest(
+        manifest_path,
+        status="claimed",
+        lease=lease,
+        claim_count=claim_count,
+        audit_entry=(
+            f"Job claimed by {normalized_worker_id} until {lease['lease_expires_at']}."
+            if str(job.get("status", "")) == "queued"
+            else f"Expired lease reclaimed by {normalized_worker_id} until {lease['lease_expires_at']}."
+        ),
+    )
+    queue_manifest_path = _write_queue_manifest(workspace)
+    return JobClaimResult(
+        job_manifest_path=manifest_path,
+        queue_manifest_path=queue_manifest_path,
+        job_id=str(job["job_id"]),
+        job_type=str(job["job_type"]),
+        worker_id=normalized_worker_id,
+        lease_expires_at=str(lease["lease_expires_at"]),
+        status=str(job["status"]),
+    )
+
+
 def run_job_worker(
     workspace: Workspace,
     max_jobs: Optional[int] = None,
     stop_on_error: bool = False,
+    worker_id: str = "local-worker",
+    lease_seconds: int = 300,
 ) -> JobWorkerResult:
     processed_count = 0
     completed_count = 0
@@ -215,11 +278,13 @@ def run_job_worker(
     while True:
         if max_jobs is not None and processed_count >= max_jobs:
             break
-        queued_jobs = [job for job in list_jobs(workspace) if str(job.get("status", "")) == "queued"]
-        if not queued_jobs:
+        if _select_claimable_job(list_jobs(workspace)) is None and _find_active_job_for_worker(
+            list_jobs(workspace),
+            _normalize_worker_id(worker_id),
+        ) is None:
             break
         try:
-            run_next_job(workspace)
+            run_next_job(workspace, worker_id=worker_id, lease_seconds=lease_seconds)
             completed_count += 1
         except JobError:
             failed_count += 1
@@ -236,20 +301,43 @@ def run_job_worker(
         failed_count=failed_count,
         queue_manifest_path=workspace.job_queue_manifest_path,
     )
+def run_next_job(
+    workspace: Workspace,
+    worker_id: str = "local-worker",
+    lease_seconds: int = 300,
+) -> JobRunResult:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    owned_job = _find_active_job_for_worker(list_jobs(workspace), normalized_worker_id)
+    if owned_job is None:
+        claim = claim_next_job(workspace, worker_id=normalized_worker_id, lease_seconds=lease_seconds)
+        manifest_path = claim.job_manifest_path
+        job = _read_job_by_id(workspace, claim.job_id)
+    else:
+        manifest_path = workspace.job_manifests_dir / f"{owned_job['job_id']}.json"
+        job = owned_job
 
+    claim_count = _existing_claim_count(job)
+    lease = _build_lease_payload(
+        worker_id=normalized_worker_id,
+        lease_seconds=lease_seconds,
+        claim_count=claim_count or 1,
+    )
+    attempts = int(job.get("attempts", 0) or 0)
+    started_at = str(job.get("started_at", "")) or utc_timestamp()
+    audit_entry = "Job execution started."
+    if str(job.get("status", "")) == "running":
+        audit_entry = "Job execution resumed."
+    else:
+        attempts += 1
 
-def run_next_job(workspace: Workspace) -> JobRunResult:
-    queued_jobs = [job for job in list_jobs(workspace) if str(job.get("status", "")) == "queued"]
-    if not queued_jobs:
-        raise JobError("No queued jobs found.")
-    job = queued_jobs[0]
-    manifest_path = workspace.job_manifests_dir / f"{job['job_id']}.json"
     job = _update_job_manifest(
         manifest_path,
         status="running",
-        started_at=utc_timestamp(),
-        attempts=int(job.get("attempts", 0) or 0) + 1,
-        audit_entry="Job execution started.",
+        started_at=started_at,
+        attempts=attempts,
+        lease=lease,
+        claim_count=lease["claim_count"],
+        audit_entry=f"{audit_entry} Worker: {normalized_worker_id}.",
     )
 
     try:
@@ -431,6 +519,8 @@ def _enqueue_job(
         "created_at": utc_timestamp(),
         "updated_at": utc_timestamp(),
         "attempts": 0,
+        "claim_count": 0,
+        "lease": {},
         "parameters": parameters,
         "result": {},
         "error": None,
@@ -470,7 +560,9 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
     jobs = list_jobs(workspace)
     status_counts: Dict[str, int] = {}
     oldest_queued_job_id = ""
+    oldest_claimable_job_id = ""
     latest_updated_at = ""
+    active_worker_ids: List[str] = []
     for job in jobs:
         status = str(job.get("status", "unknown"))
         status_counts[status] = status_counts.get(status, 0) + 1
@@ -479,13 +571,23 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
             latest_updated_at = updated_at
         if not oldest_queued_job_id and status == "queued":
             oldest_queued_job_id = str(job.get("job_id", ""))
+        if not oldest_claimable_job_id and _job_is_claimable(job):
+            oldest_claimable_job_id = str(job.get("job_id", ""))
+        if _job_has_active_lease(job):
+            worker_id = str(dict(job.get("lease", {})).get("worker_id", "")).strip()
+            if worker_id and worker_id not in active_worker_ids:
+                active_worker_ids.append(worker_id)
     payload = {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
         "job_count": len(jobs),
         "queued_count": sum(1 for job in jobs if str(job.get("status", "")) == "queued"),
+        "claimed_count": sum(1 for job in jobs if str(job.get("status", "")) == "claimed"),
+        "running_count": sum(1 for job in jobs if str(job.get("status", "")) == "running"),
         "oldest_queued_job_id": oldest_queued_job_id,
+        "oldest_claimable_job_id": oldest_claimable_job_id,
         "latest_updated_at": latest_updated_at,
+        "active_worker_ids": sorted(active_worker_ids),
         "status_counts": dict(sorted(status_counts.items())),
         "jobs": [
             {
@@ -495,6 +597,8 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
                 "status": str(job.get("status", "")),
                 "created_at": str(job.get("created_at", "")),
                 "updated_at": str(job.get("updated_at", "")),
+                "worker_id": str(dict(job.get("lease", {})).get("worker_id", "")),
+                "lease_expires_at": str(dict(job.get("lease", {})).get("lease_expires_at", "")),
                 "retry_of_job_id": str(job.get("retry_of_job_id", "") or ""),
             }
             for job in jobs
@@ -531,3 +635,71 @@ def _optional_string(value: object) -> Optional[str]:
     if not normalized or normalized.lower() == "none":
         return None
     return normalized
+
+
+def _normalize_worker_id(worker_id: str) -> str:
+    normalized = worker_id.strip()
+    if not normalized:
+        raise JobError("A worker id is required.")
+    return normalized
+
+
+def _existing_claim_count(job: Dict[str, object]) -> int:
+    lease = dict(job.get("lease", {}))
+    return int(lease.get("claim_count", job.get("claim_count", 0)) or 0)
+
+
+def _build_lease_payload(worker_id: str, lease_seconds: int, claim_count: int) -> Dict[str, object]:
+    claimed_at = utc_timestamp()
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
+    ).replace(microsecond=0).isoformat()
+    return {
+        "worker_id": worker_id,
+        "claimed_at": claimed_at,
+        "lease_expires_at": expires_at,
+        "lease_seconds": lease_seconds,
+        "claim_count": claim_count,
+    }
+
+
+def _select_claimable_job(jobs: List[Dict[str, object]]) -> Optional[Dict[str, object]]:
+    for job in jobs:
+        if _job_is_claimable(job):
+            return job
+    return None
+
+
+def _find_active_job_for_worker(jobs: List[Dict[str, object]], worker_id: str) -> Optional[Dict[str, object]]:
+    for job in jobs:
+        if str(job.get("status", "")) not in {"claimed", "running"}:
+            continue
+        lease = dict(job.get("lease", {}))
+        if str(lease.get("worker_id", "")) != worker_id:
+            continue
+        if _job_has_active_lease(job):
+            return job
+    return None
+
+
+def _job_is_claimable(job: Dict[str, object]) -> bool:
+    status = str(job.get("status", ""))
+    if status == "queued":
+        return True
+    if status in {"claimed", "running"} and not _job_has_active_lease(job):
+        return True
+    return False
+
+
+def _job_has_active_lease(job: Dict[str, object]) -> bool:
+    status = str(job.get("status", ""))
+    if status not in {"claimed", "running"}:
+        return False
+    lease = dict(job.get("lease", {}))
+    expires_at = str(lease.get("lease_expires_at", "")).strip()
+    if not expires_at:
+        return False
+    try:
+        return datetime.fromisoformat(expires_at) > datetime.now(timezone.utc)
+    except ValueError:
+        return False

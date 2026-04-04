@@ -44,6 +44,7 @@ from cognisync.ingest import (
 )
 from cognisync.jobs import (
     JobError,
+    claim_next_job,
     enqueue_compile_job,
     enqueue_connector_sync_job,
     enqueue_connector_sync_all_job,
@@ -288,10 +289,34 @@ def cmd_jobs_enqueue_improve_research(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_jobs_claim_next(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = claim_next_job(
+            workspace,
+            worker_id=args.worker_id,
+            lease_seconds=args.lease_seconds,
+        )
+    except JobError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(
+        f"Claimed job {result.job_id} ({result.job_type}) for worker {result.worker_id} "
+        f"until {result.lease_expires_at}."
+    )
+    print(f"Job manifest: {result.job_manifest_path}")
+    print(f"Queue summary: {result.queue_manifest_path}")
+    return 0
+
+
 def cmd_jobs_run_next(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        result = run_next_job(workspace)
+        result = run_next_job(
+            workspace,
+            worker_id=args.worker_id,
+            lease_seconds=args.lease_seconds,
+        )
     except JobError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -324,6 +349,8 @@ def cmd_jobs_work(args: argparse.Namespace) -> int:
         workspace,
         max_jobs=args.max_jobs,
         stop_on_error=args.stop_on_error,
+        worker_id=args.worker_id,
+        lease_seconds=args.lease_seconds,
     )
     print(
         "Processed "
@@ -1338,8 +1365,19 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_improve_parser.add_argument("--provider-format", action="append", default=[])
     jobs_enqueue_improve_parser.set_defaults(func=cmd_jobs_enqueue_improve_research)
 
+    jobs_claim_next_parser = jobs_subparsers.add_parser(
+        "claim-next",
+        help="Claim the oldest available job for a specific worker under a lease",
+    )
+    jobs_claim_next_parser.add_argument("--workspace", default=".")
+    jobs_claim_next_parser.add_argument("--worker-id", default="local-worker")
+    jobs_claim_next_parser.add_argument("--lease-seconds", type=int, default=300)
+    jobs_claim_next_parser.set_defaults(func=cmd_jobs_claim_next)
+
     jobs_run_next_parser = jobs_subparsers.add_parser("run-next", help="Run the oldest queued job")
     jobs_run_next_parser.add_argument("--workspace", default=".")
+    jobs_run_next_parser.add_argument("--worker-id", default="local-worker")
+    jobs_run_next_parser.add_argument("--lease-seconds", type=int, default=300)
     jobs_run_next_parser.set_defaults(func=cmd_jobs_run_next)
 
     jobs_retry_parser = jobs_subparsers.add_parser("retry", help="Re-queue a terminal job for another attempt")
@@ -1356,6 +1394,8 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_work_parser.add_argument("--workspace", default=".")
     jobs_work_parser.add_argument("--max-jobs", type=int, default=None)
     jobs_work_parser.add_argument("--stop-on-error", action="store_true")
+    jobs_work_parser.add_argument("--worker-id", default="local-worker")
+    jobs_work_parser.add_argument("--lease-seconds", type=int, default=300)
     jobs_work_parser.set_defaults(func=cmd_jobs_work)
 
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
