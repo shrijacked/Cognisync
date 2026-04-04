@@ -160,6 +160,25 @@ Transformers rely on attention and influence [[agents]].
                 snapshot.artifact_paths(),
             )
 
+    def test_scan_ignores_sync_bundle_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Scanner Ignore Sync Bundle Test")
+
+            (workspace.raw_dir / "note.md").write_text("# Note\n\nCorpus content.\n", encoding="utf-8")
+            sync_dir = workspace.sync_bundles_dir / "sync-bundle-1" / "raw"
+            sync_dir.mkdir(parents=True, exist_ok=True)
+            (sync_dir / "mirrored-note.md").write_text("# Mirrored Note\n\nSynced content.\n", encoding="utf-8")
+
+            snapshot = scan_workspace(workspace)
+
+            self.assertIn("raw/note.md", snapshot.artifact_paths())
+            self.assertNotIn(
+                "outputs/reports/sync-bundles/sync-bundle-1/raw/mirrored-note.md",
+                snapshot.artifact_paths(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

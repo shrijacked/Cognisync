@@ -49,6 +49,18 @@ class Workspace:
         return self.state_dir / "runs"
 
     @property
+    def jobs_dir(self) -> Path:
+        return self.state_dir / "jobs"
+
+    @property
+    def job_manifests_dir(self) -> Path:
+        return self.jobs_dir / "manifests"
+
+    @property
+    def job_queue_manifest_path(self) -> Path:
+        return self.jobs_dir / "queue.json"
+
+    @property
     def sources_manifest_path(self) -> Path:
         return self.state_dir / "sources.json"
 
@@ -81,6 +93,10 @@ class Workspace:
         return self.outputs_dir / "reports" / "exports"
 
     @property
+    def sync_bundles_dir(self) -> Path:
+        return self.outputs_dir / "reports" / "sync-bundles"
+
+    @property
     def research_jobs_dir(self) -> Path:
         return self.outputs_dir / "reports" / "research-jobs"
 
@@ -100,6 +116,8 @@ class Workspace:
             self.state_dir,
             self.plans_dir,
             self.runs_dir,
+            self.jobs_dir,
+            self.job_manifests_dir,
         ]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)

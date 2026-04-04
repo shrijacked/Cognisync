@@ -63,6 +63,7 @@ def _build_inventory(root: Path) -> Dict[str, Path]:
         "outputs/reports/research-jobs",
         "outputs/reports/review-exports",
         "outputs/reports/review-ui",
+        "outputs/reports/sync-bundles",
     }
     for path in root.rglob("*"):
         if not path.is_file():

@@ -34,6 +34,13 @@ from cognisync.ingest import (
     ingest_url,
     ingest_urls,
 )
+from cognisync.jobs import (
+    JobError,
+    enqueue_improve_research_job,
+    enqueue_research_job,
+    render_jobs_list,
+    run_next_job,
+)
 from cognisync.linter import lint_snapshot
 from cognisync.maintenance import (
     MaintenanceError,
@@ -58,6 +65,7 @@ from cognisync.renderers import render_compile_packet, render_marp_slides, rende
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
 from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
+from cognisync.sync import SyncError, export_sync_bundle, import_sync_bundle
 from cognisync.training_loop import export_training_loop_bundle, improve_research_loop
 from cognisync.workspace import Workspace
 
@@ -170,6 +178,87 @@ def cmd_review_export(args: argparse.Namespace) -> int:
     print(f"Wrote review export to {result.path}")
     print(f"Open review items: {result.item_count}")
     print(f"Dismissed review items: {result.dismissed_count}")
+    return 0
+
+
+def cmd_jobs_list(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_jobs_list(workspace))
+    print(f"Wrote queue summary to {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_research(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    manifest_path = enqueue_research_job(
+        workspace,
+        question=args.question,
+        profile_name=args.profile,
+        limit=args.limit,
+        mode=args.mode,
+        slides=args.slides,
+        job_profile=args.job_profile,
+    )
+    print(f"Queued research job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_improve_research(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    manifest_path = enqueue_improve_research_job(
+        workspace,
+        profile_name=args.profile,
+        limit=args.limit,
+        provider_formats=list(args.provider_format or []),
+    )
+    print(f"Queued improve-research job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_run_next(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = run_next_job(workspace)
+    except JobError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Completed job {result.job_id} ({result.job_type}) with status {result.status}.")
+    print(f"Job manifest: {result.job_manifest_path}")
+    print(f"Queue summary: {result.queue_manifest_path}")
+    return 0
+
+
+def cmd_sync_export(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_sync_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote sync bundle to {result.directory}")
+    print(f"Wrote sync manifest to {result.manifest_path}")
+    print(f"Copied {result.file_count} file(s) into the sync bundle.")
+    return 0
+
+
+def cmd_sync_import(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    bundle_dir = Path(args.bundle).expanduser()
+    if not bundle_dir.is_absolute():
+        bundle_dir = Path.cwd() / bundle_dir
+    bundle_dir = bundle_dir.resolve()
+    try:
+        result = import_sync_bundle(workspace, bundle_dir=bundle_dir)
+    except SyncError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Imported sync bundle into {workspace.root}")
+    print(f"Source manifest: {result.manifest_path}")
+    print(f"Copied {result.file_count} file(s) from the bundle.")
     return 0
 
 
@@ -894,6 +983,56 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--workspace", default=".")
     doctor_parser.add_argument("--strict", action="store_true")
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    jobs_parser = subparsers.add_parser("jobs", help="Manage persisted local job queues for remote-style execution")
+    jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command", required=True)
+
+    jobs_list_parser = jobs_subparsers.add_parser("list", help="List queued and historical jobs")
+    jobs_list_parser.add_argument("--workspace", default=".")
+    jobs_list_parser.set_defaults(func=cmd_jobs_list)
+
+    jobs_enqueue_parser = jobs_subparsers.add_parser("enqueue", help="Queue a persisted job manifest")
+    jobs_enqueue_subparsers = jobs_enqueue_parser.add_subparsers(dest="jobs_enqueue_command", required=True)
+
+    jobs_enqueue_research_parser = jobs_enqueue_subparsers.add_parser(
+        "research",
+        help="Queue a research run for later worker execution",
+    )
+    jobs_enqueue_research_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_research_parser.add_argument("--profile", default=None)
+    jobs_enqueue_research_parser.add_argument("--limit", type=int, default=5)
+    jobs_enqueue_research_parser.add_argument("--mode", default="wiki")
+    jobs_enqueue_research_parser.add_argument("--slides", action="store_true")
+    jobs_enqueue_research_parser.add_argument("--job-profile", default=DEFAULT_RESEARCH_JOB_PROFILE)
+    jobs_enqueue_research_parser.add_argument("question")
+    jobs_enqueue_research_parser.set_defaults(func=cmd_jobs_enqueue_research)
+
+    jobs_enqueue_improve_parser = jobs_enqueue_subparsers.add_parser(
+        "improve-research",
+        help="Queue a one-shot research improvement loop for later worker execution",
+    )
+    jobs_enqueue_improve_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_improve_parser.add_argument("--profile", required=True)
+    jobs_enqueue_improve_parser.add_argument("--limit", type=int, default=5)
+    jobs_enqueue_improve_parser.add_argument("--provider-format", action="append", default=[])
+    jobs_enqueue_improve_parser.set_defaults(func=cmd_jobs_enqueue_improve_research)
+
+    jobs_run_next_parser = jobs_subparsers.add_parser("run-next", help="Run the oldest queued job")
+    jobs_run_next_parser.add_argument("--workspace", default=".")
+    jobs_run_next_parser.set_defaults(func=cmd_jobs_run_next)
+
+    sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
+    sync_subparsers = sync_parser.add_subparsers(dest="sync_command", required=True)
+
+    sync_export_parser = sync_subparsers.add_parser("export", help="Write a portable workspace sync bundle")
+    sync_export_parser.add_argument("--workspace", default=".")
+    sync_export_parser.add_argument("--output-dir", default=None)
+    sync_export_parser.set_defaults(func=cmd_sync_export)
+
+    sync_import_parser = sync_subparsers.add_parser("import", help="Import a portable workspace sync bundle")
+    sync_import_parser.add_argument("bundle")
+    sync_import_parser.add_argument("--workspace", default=".")
+    sync_import_parser.set_defaults(func=cmd_sync_import)
 
     ingest_parser = subparsers.add_parser("ingest", help="Bring source material into raw/")
     ingest_subparsers = ingest_parser.add_subparsers(dest="ingest_command", required=True)
