@@ -229,23 +229,28 @@ Supported paths in this release:
 
 - `cognisync jobs enqueue research --profile codex "..."`
 - `cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat`
+- `cognisync jobs enqueue compile`
+- `cognisync jobs enqueue lint`
+- `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2`
 - `cognisync jobs run-next`
 - `cognisync jobs retry <job-id> --profile codex`
+- `cognisync jobs work --max-jobs 10`
 - `cognisync jobs list`
 
 The command family:
 
 1. persists queued job manifests under `.cognisync/jobs/manifests/`
 2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
-3. reuses the same `research` and `improve research` runtimes when a worker executes `jobs run-next`
+3. reuses the same `research`, `improve research`, `compile`, `lint`, and `maintain` runtimes when a worker executes queued jobs
 4. records result paths back into the job manifest instead of dropping that state into terminal-only output
 5. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
+6. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
 
 ```mermaid
 flowchart LR
-    A["jobs enqueue research or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
-    B --> C["jobs run-next claims oldest queued job"]
-    C --> D["existing runtime executes research or improvement loop"]
+    A["jobs enqueue research, compile, lint, maintain, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
+    B --> C["jobs run-next or jobs work claims queued jobs"]
+    C --> D["existing runtime executes the matching operator loop"]
     D --> E["job manifest stores result paths and completion status"]
     E --> F["jobs retry can re-queue a terminal job with lineage"]
     F --> G["queue summary reflects remaining queued work"]

@@ -15,6 +15,7 @@
 - added `cognisync jobs` so research and improvement work can be queued, persisted, and executed later through local control-plane style manifests
 - added `cognisync sync export` and `sync import` so file-native workspaces can move between operators as portable bundles
 - added `cognisync jobs retry` so terminal jobs can be re-queued with explicit lineage to the original manifest
+- added `cognisync jobs enqueue compile|lint|maintain` and `jobs work` so the queue now covers more of the operator loop and can drain sequentially like a lightweight worker
 - added `.cognisync/sync/history.json` and per-event sync manifests so workspace handoffs now leave an audit trail
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
