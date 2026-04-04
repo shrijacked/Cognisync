@@ -74,6 +74,54 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertEqual(run_exit, 0)
             self.assertIn("Completed job", stdout.getvalue())
 
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                failing_enqueue_exit = main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "failing",
+                        "do agent loops always require vector databases",
+                    ]
+                )
+            self.assertEqual(failing_enqueue_exit, 0)
+            self.assertIn("Queued research job", stdout.getvalue())
+
+            self.assertEqual(main(["jobs", "run-next", "--workspace", str(root)]), 2)
+
+            job_manifest_paths = sorted((root / ".cognisync" / "jobs" / "manifests").glob("*.json"))
+            failed_job_payload = next(
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in job_manifest_paths
+                if json.loads(path.read_text(encoding="utf-8"))["status"] == "failed"
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                retry_exit = main(
+                    [
+                        "jobs",
+                        "retry",
+                        failed_job_payload["job_id"],
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "healer",
+                    ]
+                )
+            self.assertEqual(retry_exit, 0)
+            self.assertIn("Queued retry job", stdout.getvalue())
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                retried_exit = main(["jobs", "run-next", "--workspace", str(root)])
+            self.assertEqual(retried_exit, 0)
+            self.assertIn("Completed job", stdout.getvalue())
+
             self.assertNotEqual(
                 main(
                     [
@@ -118,13 +166,20 @@ class JobsAndSyncTests(unittest.TestCase):
             queue_path = jobs_dir / "queue.json"
             manifest_paths = sorted((jobs_dir / "manifests").glob("*.json"))
             self.assertTrue(queue_path.exists())
-            self.assertEqual(len(manifest_paths), 2)
+            self.assertEqual(len(manifest_paths), 4)
 
             queue_payload = json.loads(queue_path.read_text(encoding="utf-8"))
-            self.assertEqual(queue_payload["status_counts"]["completed"], 2)
+            self.assertEqual(queue_payload["status_counts"]["completed"], 3)
+            self.assertEqual(queue_payload["status_counts"]["failed"], 1)
             self.assertEqual(queue_payload["queued_count"], 0)
 
             manifest_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in manifest_paths]
+            retried_manifest = next(
+                payload
+                for payload in manifest_payloads
+                if payload["status"] == "completed" and payload.get("retry_of_job_id") == failed_job_payload["job_id"]
+            )
+            self.assertEqual(retried_manifest["job_type"], "research")
             improve_manifest = next(payload for payload in manifest_payloads if payload["job_type"] == "improve_research")
             self.assertEqual(improve_manifest["status"], "completed")
             self.assertEqual(improve_manifest["job_type"], "improve_research")
@@ -160,6 +215,13 @@ class JobsAndSyncTests(unittest.TestCase):
             bundle_dir = bundle_dirs[-1]
             manifest_path = bundle_dir / "manifest.json"
             self.assertTrue(manifest_path.exists())
+            self.assertTrue((source_root / ".cognisync" / "sync" / "history.json").exists())
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                history_exit = main(["sync", "history", "--workspace", str(source_root)])
+            self.assertEqual(history_exit, 0)
+            self.assertIn("Sync History", stdout.getvalue())
 
             stdout = io.StringIO()
             with redirect_stdout(stdout):
@@ -170,8 +232,16 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertTrue((target_root / "raw" / "agent-loops.md").exists())
             self.assertTrue((target_root / "wiki" / "concepts" / "agent-loops.md").exists())
             self.assertTrue((target_root / ".cognisync" / "sources.json").exists())
+            self.assertTrue((target_root / ".cognisync" / "sync" / "history.json").exists())
             imported_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertGreaterEqual(imported_manifest["file_count"], 3)
+
+            source_history = json.loads((source_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
+            target_history = json.loads((target_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
+            self.assertEqual(source_history["operation_counts"]["export"], 1)
+            self.assertEqual(target_history["operation_counts"]["import"], 1)
+            self.assertEqual(source_history["event_count"], 1)
+            self.assertEqual(target_history["event_count"], 1)
 
 
 if __name__ == "__main__":

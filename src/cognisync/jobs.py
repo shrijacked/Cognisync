@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -83,16 +84,47 @@ def render_jobs_list(workspace: Workspace) -> str:
         status = str(job.get("status", "unknown"))
         status_counts[status] = status_counts.get(status, 0) + 1
     lines.append(f"- Status counts: `{json.dumps(dict(sorted(status_counts.items())), sort_keys=True)}`")
+    oldest_queued = next((job for job in jobs if str(job.get("status", "")) == "queued"), None)
+    if oldest_queued is not None:
+        lines.append(f"- Oldest queued job: `{oldest_queued.get('job_id', '')}`")
     lines.extend(["", "## Jobs", ""])
     for job in jobs:
+        retry_of_job_id = str(job.get("retry_of_job_id", "") or "")
+        retry_suffix = f" retry-of:{retry_of_job_id}" if retry_of_job_id else ""
         lines.append(
             "- "
             f"`{job['job_id']}` "
             f"`{job['job_type']}` "
             f"`{job['status']}` "
-            f"{job.get('title', '')}"
+            f"{job.get('title', '')}{retry_suffix}"
         )
     return "\n".join(lines)
+
+
+def retry_job(
+    workspace: Workspace,
+    job_id: str,
+    profile_name: Optional[str] = None,
+    provider_formats: Optional[List[str]] = None,
+) -> Path:
+    original = _read_job_by_id(workspace, job_id)
+    if str(original.get("status", "")) not in {"completed", "failed"}:
+        raise JobError(f"Job {job_id} is not in a terminal state and cannot be retried.")
+
+    parameters = dict(original.get("parameters", {}))
+    job_type = str(original.get("job_type", ""))
+    if profile_name:
+        parameters["profile_name"] = profile_name
+    if provider_formats is not None and job_type == "improve_research":
+        parameters["provider_formats"] = list(provider_formats)
+
+    return _enqueue_job(
+        workspace,
+        job_type=job_type,
+        title_seed=str(original.get("title", job_type)),
+        parameters=parameters,
+        retry_of_job_id=str(original.get("job_id", "")),
+    )
 
 
 def run_next_job(workspace: Workspace) -> JobRunResult:
@@ -184,6 +216,7 @@ def _enqueue_job(
     job_type: str,
     title_seed: str,
     parameters: Dict[str, object],
+    retry_of_job_id: Optional[str] = None,
 ) -> Path:
     workspace.job_manifests_dir.mkdir(parents=True, exist_ok=True)
     job_id = _job_id(job_type, title_seed)
@@ -200,11 +233,12 @@ def _enqueue_job(
         "parameters": parameters,
         "result": {},
         "error": None,
+        "retry_of_job_id": retry_of_job_id,
         "audit": [
             {
                 "timestamp": utc_timestamp(),
                 "status": "queued",
-                "message": "Job created.",
+                "message": "Job created." if not retry_of_job_id else f"Job re-queued from {retry_of_job_id}.",
             }
         ],
     }
@@ -234,14 +268,23 @@ def _update_job_manifest(manifest_path: Path, audit_entry: Optional[str] = None,
 def _write_queue_manifest(workspace: Workspace) -> Path:
     jobs = list_jobs(workspace)
     status_counts: Dict[str, int] = {}
+    oldest_queued_job_id = ""
+    latest_updated_at = ""
     for job in jobs:
         status = str(job.get("status", "unknown"))
         status_counts[status] = status_counts.get(status, 0) + 1
+        updated_at = str(job.get("updated_at", ""))
+        if updated_at and updated_at > latest_updated_at:
+            latest_updated_at = updated_at
+        if not oldest_queued_job_id and status == "queued":
+            oldest_queued_job_id = str(job.get("job_id", ""))
     payload = {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
         "job_count": len(jobs),
         "queued_count": sum(1 for job in jobs if str(job.get("status", "")) == "queued"),
+        "oldest_queued_job_id": oldest_queued_job_id,
+        "latest_updated_at": latest_updated_at,
         "status_counts": dict(sorted(status_counts.items())),
         "jobs": [
             {
@@ -251,6 +294,7 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
                 "status": str(job.get("status", "")),
                 "created_at": str(job.get("created_at", "")),
                 "updated_at": str(job.get("updated_at", "")),
+                "retry_of_job_id": str(job.get("retry_of_job_id", "") or ""),
             }
             for job in jobs
         ],
@@ -264,5 +308,15 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
 
 
 def _job_id(job_type: str, title_seed: str) -> str:
-    stamp = utc_timestamp().replace(":", "").replace("-", "").replace("+", "").replace(".", "")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{job_type}-{stamp}-{slugify(title_seed)[:48] or 'job'}"
+
+
+def _read_job_by_id(workspace: Workspace, job_id: str) -> Dict[str, object]:
+    normalized = job_id.strip()
+    if not normalized:
+        raise JobError("A job id is required.")
+    manifest_path = workspace.job_manifests_dir / f"{normalized}.json"
+    if not manifest_path.exists():
+        raise JobError(f"Could not find a job manifest for {normalized}.")
+    return json.loads(manifest_path.read_text(encoding="utf-8"))

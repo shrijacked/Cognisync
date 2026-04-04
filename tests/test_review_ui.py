@@ -49,6 +49,20 @@ class ReviewUiTests(unittest.TestCase):
             )
 
             self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "map the open questions in this corpus",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["sync", "export", "--workspace", str(root)]), 0)
             review_id = "conflict:raw-cloud.md:raw-local.md:the deployment model:is"
             self.assertEqual(
                 main(["review", "dismiss", review_id, "--reason", "tracking this manually", "--workspace", str(root)]),
@@ -79,8 +93,12 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Dismissed Review Items", html)
             self.assertIn("Graph Overview", html)
             self.assertIn("Run History", html)
+            self.assertIn("Job Queue", html)
+            self.assertIn("Sync History", html)
             self.assertIn("Graph Node Explorer", html)
             self.assertIn("Run Explorer", html)
+            self.assertIn("Job Explorer", html)
+            self.assertIn("Sync Explorer", html)
             self.assertIn("Source Coverage", html)
             self.assertIn("Compile Health", html)
             self.assertIn("Run Timeline", html)
@@ -88,6 +106,8 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Filter nodes", html)
             self.assertIn("Filter runs", html)
             self.assertIn(".cognisync/graph.json", html)
+            self.assertIn(".cognisync/jobs/queue.json", html)
+            self.assertIn(".cognisync/sync/history.json", html)
             self.assertIn("how do agent loops use memory", html)
             self.assertEqual(state["schema_version"], 1)
             self.assertGreaterEqual(state["graph"]["node_count"], 1)
@@ -96,34 +116,48 @@ class ReviewUiTests(unittest.TestCase):
             self.assertGreaterEqual(state["compile_health"]["pending_task_count"], 1)
             self.assertGreaterEqual(state["run_timeline"]["total_count"], 1)
             self.assertGreaterEqual(state["concept_graph"]["selected_node_count"], 1)
+            self.assertGreaterEqual(state["jobs"]["total_count"], 1)
+            self.assertGreaterEqual(state["sync"]["total_count"], 1)
             self.assertGreaterEqual(len(state["graph"]["nodes"]), 1)
             self.assertTrue(any(item["detail_href"] for item in state["graph"]["nodes"]))
             self.assertTrue(any(item["run_kind"] == "research" for item in state["runs"]["items"]))
             self.assertTrue(any(item["detail_href"] for item in state["runs"]["items"]))
+            self.assertTrue(any(item["detail_href"] for item in state["jobs"]["items"]))
+            self.assertTrue(any(item["detail_href"] for item in state["sync"]["items"]))
             self.assertEqual(payload["summary"]["dismissed_item_count"], 1)
             self.assertGreaterEqual(payload["summary"]["open_item_count"], 1)
             graph_detail_href = state["graph"]["nodes"][0]["detail_href"]
             run_detail_href = next(item["detail_href"] for item in state["runs"]["items"] if item["run_kind"] == "research")
+            job_detail_href = state["jobs"]["items"][0]["detail_href"]
+            sync_detail_href = state["sync"]["items"][0]["detail_href"]
             change_detail_href = state["change_summaries"][0]["detail_href"]
             concept_graph_href = state["concept_graph"]["map_href"]
             run_timeline_href = state["run_timeline"]["detail_href"]
             graph_detail_path = workspace.review_ui_dir / graph_detail_href
             run_detail_path = workspace.review_ui_dir / run_detail_href
+            job_detail_path = workspace.review_ui_dir / job_detail_href
+            sync_detail_path = workspace.review_ui_dir / sync_detail_href
             change_detail_path = workspace.review_ui_dir / change_detail_href
             concept_graph_path = workspace.review_ui_dir / concept_graph_href
             run_timeline_path = workspace.review_ui_dir / run_timeline_href
             self.assertTrue(graph_detail_path.exists())
             self.assertTrue(run_detail_path.exists())
+            self.assertTrue(job_detail_path.exists())
+            self.assertTrue(sync_detail_path.exists())
             self.assertTrue(change_detail_path.exists())
             self.assertTrue(concept_graph_path.exists())
             self.assertTrue(run_timeline_path.exists())
             self.assertIn("Graph Node Detail", graph_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Run Detail", run_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("Job Detail", job_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("Sync Detail", sync_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Artifact Preview", change_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Concept Graph", concept_graph_path.read_text(encoding="utf-8"))
             self.assertIn("Run Timeline", run_timeline_path.read_text(encoding="utf-8"))
             self.assertIn(graph_detail_href, html)
             self.assertIn(run_detail_href, html)
+            self.assertIn(job_detail_href, html)
+            self.assertIn(sync_detail_href, html)
             self.assertIn(change_detail_href, html)
             self.assertIn(concept_graph_href, html)
             self.assertIn(run_timeline_href, html)

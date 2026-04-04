@@ -23,9 +23,11 @@ from cognisync.maintenance import (
 )
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.linter import lint_snapshot
+from cognisync.jobs import list_jobs
 from cognisync.planner import build_compile_plan
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
+from cognisync.sync import list_sync_events
 from cognisync.types import IndexSnapshot
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
@@ -56,6 +58,8 @@ def write_review_ui_bundle(
     _write_artifact_preview_pages(workspace, html_path.parent, state_payload)
     _write_graph_detail_pages(workspace, html_path.parent, state_payload)
     _write_run_detail_pages(workspace, html_path.parent, state_payload)
+    _write_job_detail_pages(workspace, html_path.parent, state_payload)
+    _write_sync_detail_pages(workspace, html_path.parent, state_payload)
     _write_run_timeline_page(html_path.parent, state_payload)
     _write_concept_graph_page(html_path.parent, state_payload)
 
@@ -103,6 +107,10 @@ def render_review_ui_html(
     graph_nodes = list(graph.get("nodes", []))
     runs = dict(payload.get("runs", {}))
     run_items = list(runs.get("items", []))
+    jobs = dict(payload.get("jobs", {}))
+    job_items = list(jobs.get("items", []))
+    sync = dict(payload.get("sync", {}))
+    sync_items = list(sync.get("items", []))
     run_timeline = dict(payload.get("run_timeline", {}))
     concept_graph = dict(payload.get("concept_graph", {}))
     recent_change_summaries = list(payload.get("change_summaries", []))
@@ -114,9 +122,10 @@ def render_review_ui_html(
         ("Graph Nodes", str(graph.get("node_count", 0))),
         ("Graph Edges", str(graph.get("edge_count", 0))),
         ("Recorded Runs", str(runs.get("total_count", 0))),
+        ("Queued Jobs", str(jobs.get("queued_count", 0))),
+        ("Sync Events", str(sync.get("total_count", 0))),
         ("Known Conflicts", str(graph.get("conflict_count", 0))),
         ("Sources", str(source_coverage.get("source_count", 0))),
-        ("Pending Tasks", str(compile_health.get("pending_task_count", 0))),
     ]
 
     lines = [
@@ -217,16 +226,24 @@ def render_review_ui_html(
             _render_run_history_summary(runs),
             "        </article>",
             "        <article class=\"panel\">",
+            "          <h2>Job Queue</h2>",
+            _render_job_history_summary(jobs),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Sync History</h2>",
+            _render_sync_history_summary(sync),
+            "        </article>",
+            "        <article class=\"panel\">",
             "          <h2>Recent Change Summaries</h2>",
             _render_recent_links(recent_change_summaries, empty_label="No change summaries found."),
             "        </article>",
             "        <article class=\"panel\">",
-            "          <h2>Source Coverage</h2>",
-            _render_source_coverage(source_coverage),
-            "        </article>",
-            "        <article class=\"panel\">",
             "          <h2>Compile Health</h2>",
             _render_compile_health(compile_health),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Source Coverage</h2>",
+            _render_source_coverage(source_coverage),
             "        </article>",
             "      </div>",
             "    </section>",
@@ -271,6 +288,38 @@ def render_review_ui_html(
             ),
             _render_run_explorer(run_items),
             "      </article>",
+            "      <article class=\"panel\" data-filter-scope=\"jobs\">",
+            "        <div class=\"toolbar\">",
+            "          <h2>Job Explorer</h2>",
+            "          <span class=\"muted\">Filter queued and historical jobs</span>",
+            "        </div>",
+            _render_filter_controls(
+                scope="jobs",
+                search_label="Filter jobs",
+                search_placeholder="Search job ids, titles, and statuses",
+                select_specs=[
+                    ("job-type", "Job Type", _collect_filter_values(job_items, "job_type")),
+                    ("job-status", "Job Status", _collect_filter_values(job_items, "status")),
+                ],
+            ),
+            _render_job_explorer(job_items),
+            "      </article>",
+            "      <article class=\"panel\" data-filter-scope=\"sync-events\">",
+            "        <div class=\"toolbar\">",
+            "          <h2>Sync Explorer</h2>",
+            "          <span class=\"muted\">Filter import and export history</span>",
+            "        </div>",
+            _render_filter_controls(
+                scope="sync-events",
+                search_label="Filter sync events",
+                search_placeholder="Search sync ids, bundle paths, and operations",
+                select_specs=[
+                    ("operation", "Operation", _collect_filter_values(sync_items, "operation")),
+                    ("status", "Status", _collect_filter_values(sync_items, "status")),
+                ],
+            ),
+            _render_sync_explorer(sync_items),
+            "      </article>",
             "      <article class=\"panel\">",
             "        <h2>Embedded Payload</h2>",
             "        <details>",
@@ -296,6 +345,8 @@ def build_review_ui_state(
 ) -> Dict[str, object]:
     review_payload = review_payload or build_review_export_payload(workspace, snapshot)
     runs = _build_run_history(workspace)
+    jobs = _build_job_history(workspace)
+    sync = _build_sync_history(workspace)
     return {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
@@ -306,12 +357,16 @@ def build_review_ui_state(
             "review_queue_manifest_path": workspace.relative_path(workspace.review_queue_manifest_path),
             "review_actions_manifest_path": workspace.relative_path(workspace.review_actions_manifest_path),
             "runs_dir": workspace.relative_path(workspace.runs_dir),
+            "job_queue_manifest_path": workspace.relative_path(workspace.job_queue_manifest_path),
+            "sync_history_manifest_path": workspace.relative_path(workspace.sync_history_manifest_path),
         },
         "review": review_payload,
         "source_coverage": _build_source_coverage(workspace),
         "compile_health": _build_compile_health(workspace, snapshot),
         "graph": _build_graph_summary(workspace),
         "runs": runs,
+        "jobs": jobs,
+        "sync": sync,
         "run_timeline": _build_run_timeline(workspace),
         "concept_graph": _build_concept_graph(workspace),
         "change_summaries": _read_recent_change_summaries(workspace),
@@ -649,6 +704,101 @@ def _render_run_history_summary(runs: Dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _render_job_history_summary(jobs: Dict[str, object]) -> str:
+    items = list(jobs.get("items", []))
+    if not items:
+        return "          <p class=\"empty\">No queued or historical jobs found.</p>"
+    counts_by_kind = dict(jobs.get("counts_by_kind", {}))
+    counts_by_status = dict(jobs.get("counts_by_status", {}))
+    recent_items = items[:6]
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">jobs <strong>{escape(str(jobs.get('total_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">queued <strong>{escape(str(jobs.get('queued_count', 0)))}</strong></span>",
+        f"            <span class=\"pill danger\">failures <strong>{escape(str(jobs.get('failed_count', 0)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Job Types", counts_by_kind),
+        _render_kind_table("Job Statuses", counts_by_status),
+        "          <h3>Recent Jobs</h3>",
+        "          <table>",
+        "            <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Updated</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for item in recent_items:
+        detail_href = escape(str(item.get("detail_href", "")))
+        label = escape(str(item.get("label", "")))
+        path = escape(str(item.get("path", "")))
+        job_type = escape(str(item.get("job_type", "")))
+        status = escape(str(item.get("status", "")))
+        updated_at = escape(str(item.get("updated_at", "")))
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong><a href=\""
+                    + detail_href
+                    + "\">"
+                    + label
+                    + "</a></strong><br><span class=\"muted\"><code>"
+                    + path
+                    + "</code></span></td>"
+                ),
+                f"                <td>{job_type}</td>",
+                f"                <td>{status}</td>",
+                f"                <td>{updated_at}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_sync_history_summary(sync: Dict[str, object]) -> str:
+    items = list(sync.get("items", []))
+    if not items:
+        return "          <p class=\"empty\">No sync events found.</p>"
+    counts_by_operation = dict(sync.get("counts_by_operation", {}))
+    recent_items = items[:6]
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">events <strong>{escape(str(sync.get('total_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">operations <strong>{escape(str(len(counts_by_operation)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Sync Operations", counts_by_operation),
+        "          <h3>Recent Events</h3>",
+        "          <table>",
+        "            <thead><tr><th>Event</th><th>Operation</th><th>Files</th><th>Generated</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for item in recent_items:
+        detail_href = escape(str(item.get("detail_href", "")))
+        label = escape(str(item.get("label", "")))
+        path = escape(str(item.get("path", "")))
+        operation = escape(str(item.get("operation", "")))
+        file_count = escape(str(item.get("file_count", 0)))
+        generated_at = escape(str(item.get("generated_at", "")))
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong><a href=\""
+                    + detail_href
+                    + "\">"
+                    + label
+                    + "</a></strong><br><span class=\"muted\"><code>"
+                    + path
+                    + "</code></span></td>"
+                ),
+                f"                <td>{operation}</td>",
+                f"                <td>{file_count}</td>",
+                f"                <td>{generated_at}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
 def _render_kind_table(title: str, values: Dict[str, object]) -> str:
     if not values:
         return f"          <p class=\"empty\">{escape(title)}: none.</p>"
@@ -849,6 +999,96 @@ def _render_run_explorer(items: List[Dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def _render_job_explorer(items: List[Dict[str, object]]) -> str:
+    if not items:
+        return "        <p class=\"empty\">No job manifests found.</p>"
+    lines = [
+        "        <table>",
+        "          <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Updated</th></tr></thead>",
+        "          <tbody>",
+    ]
+    for item in items:
+        lines.extend(
+            [
+                (
+                    "            <tr data-filter-row=\"jobs\" data-job-type=\""
+                    + escape(str(item.get("job_type", "")))
+                    + "\" data-job-status=\""
+                    + escape(str(item.get("status", "")))
+                    + "\" data-search=\""
+                    + escape(str(item.get("search_text", "")))
+                    + "\">"
+                ),
+                (
+                    "              <td><strong><a href=\""
+                    + escape(str(item.get("detail_href", "")))
+                    + "\">"
+                    + escape(str(item.get("label", "")))
+                    + "</a></strong><br><span class=\"muted\"><code>"
+                    + escape(str(item.get("path", "")))
+                    + "</code></span></td>"
+                ),
+                f"              <td>{escape(str(item.get('job_type', '')))}</td>",
+                f"              <td>{escape(str(item.get('status', '')))}</td>",
+                f"              <td>{escape(str(item.get('updated_at', '')))}</td>",
+                "            </tr>",
+            ]
+        )
+    lines.extend(
+        [
+            "          </tbody>",
+            "        </table>",
+            "        <p class=\"empty\" data-filter-empty=\"jobs\" hidden>No jobs match the current filters.</p>",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_sync_explorer(items: List[Dict[str, object]]) -> str:
+    if not items:
+        return "        <p class=\"empty\">No sync events found.</p>"
+    lines = [
+        "        <table>",
+        "          <thead><tr><th>Event</th><th>Operation</th><th>Status</th><th>Generated</th></tr></thead>",
+        "          <tbody>",
+    ]
+    for item in items:
+        lines.extend(
+            [
+                (
+                    "            <tr data-filter-row=\"sync-events\" data-operation=\""
+                    + escape(str(item.get("operation", "")))
+                    + "\" data-status=\""
+                    + escape(str(item.get("status", "")))
+                    + "\" data-search=\""
+                    + escape(str(item.get("search_text", "")))
+                    + "\">"
+                ),
+                (
+                    "              <td><strong><a href=\""
+                    + escape(str(item.get("detail_href", "")))
+                    + "\">"
+                    + escape(str(item.get("label", "")))
+                    + "</a></strong><br><span class=\"muted\"><code>"
+                    + escape(str(item.get("path", "")))
+                    + "</code></span></td>"
+                ),
+                f"              <td>{escape(str(item.get('operation', '')))}</td>",
+                f"              <td>{escape(str(item.get('status', '')))}</td>",
+                f"              <td>{escape(str(item.get('generated_at', '')))}</td>",
+                "            </tr>",
+            ]
+        )
+    lines.extend(
+        [
+            "          </tbody>",
+            "        </table>",
+            "        <p class=\"empty\" data-filter-empty=\"sync-events\" hidden>No sync events match the current filters.</p>",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _render_filter_script() -> str:
     return """  <script>
     (() => {
@@ -1011,6 +1251,93 @@ def _build_run_history(workspace: Workspace, limit: int = 24) -> Dict[str, objec
         "total_count": len(manifests),
         "counts_by_kind": dict(counts_by_kind),
         "counts_by_status": dict(counts_by_status),
+        "items": items[:limit],
+    }
+
+
+def _build_job_history(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    items: List[Dict[str, str]] = []
+    counts_by_kind: Counter[str] = Counter()
+    counts_by_status: Counter[str] = Counter()
+    jobs = list_jobs(workspace)
+    for manifest in jobs:
+        job_id = str(manifest.get("job_id", ""))
+        job_type = str(manifest.get("job_type", "unknown"))
+        status = str(manifest.get("status", "unknown"))
+        counts_by_kind[job_type] += 1
+        counts_by_status[status] += 1
+        relative = workspace.relative_path(workspace.job_manifests_dir / f"{job_id}.json")
+        items.append(
+            {
+                "label": job_id,
+                "job_type": job_type,
+                "status": status,
+                "updated_at": str(manifest.get("updated_at", "")),
+                "created_at": str(manifest.get("created_at", "")),
+                "path": relative,
+                "detail_href": _job_detail_href(job_id),
+                "title": str(manifest.get("title", "")),
+                "retry_of_job_id": str(manifest.get("retry_of_job_id", "") or ""),
+                "search_text": _normalize_search_text(
+                    [
+                        job_id,
+                        job_type,
+                        status,
+                        manifest.get("title"),
+                        manifest.get("error"),
+                        manifest.get("retry_of_job_id"),
+                        relative,
+                    ]
+                ),
+            }
+        )
+    return {
+        "queue_manifest_path": workspace.relative_path(workspace.job_queue_manifest_path),
+        "total_count": len(jobs),
+        "queued_count": sum(1 for job in jobs if str(job.get("status", "")) == "queued"),
+        "failed_count": sum(1 for job in jobs if str(job.get("status", "")) == "failed"),
+        "counts_by_kind": dict(counts_by_kind),
+        "counts_by_status": dict(counts_by_status),
+        "items": items[:limit],
+    }
+
+
+def _build_sync_history(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    items: List[Dict[str, str]] = []
+    counts_by_operation: Counter[str] = Counter()
+    events = list_sync_events(workspace)
+    for event in events:
+        sync_id = str(event.get("sync_id", ""))
+        operation = str(event.get("operation", "unknown"))
+        status = str(event.get("status", "unknown"))
+        counts_by_operation[operation] += 1
+        relative = workspace.relative_path(workspace.sync_manifests_dir / f"{sync_id}.json")
+        items.append(
+            {
+                "label": sync_id,
+                "operation": operation,
+                "status": status,
+                "generated_at": str(event.get("generated_at", "")),
+                "file_count": str(event.get("file_count", 0)),
+                "path": relative,
+                "detail_href": _sync_detail_href(sync_id),
+                "bundle_dir_relative": str(event.get("bundle_dir_relative", "")),
+                "search_text": _normalize_search_text(
+                    [
+                        sync_id,
+                        operation,
+                        status,
+                        event.get("bundle_dir_relative"),
+                        event.get("bundle_manifest_relative"),
+                        relative,
+                    ]
+                ),
+            }
+        )
+    return {
+        "history_manifest_path": workspace.relative_path(workspace.sync_history_manifest_path),
+        "total_count": len(events),
+        "counts_by_operation": dict(counts_by_operation),
         "items": items[:limit],
     }
 
@@ -1287,6 +1614,25 @@ def _collect_preview_targets(workspace: Workspace, state_payload: Dict[str, obje
         ):
             add_target(str(manifest.get(key, "") or ""))
 
+    jobs = dict(state_payload.get("jobs", {}))
+    for item in list(jobs.get("items", [])):
+        add_target(str(item.get("path", "")))
+        manifest_path = _resolve_workspace_relative(workspace, str(item.get("path", "")))
+        if not manifest_path.exists():
+            continue
+        manifest = read_json_manifest(manifest_path)
+        result = dict(manifest.get("result", {}))
+        for key in (
+            "run_manifest_path",
+            "report_path",
+            "answer_path",
+            "change_summary_path",
+            "training_loop_manifest_path",
+        ):
+            add_target(str(result.get(key, "") or ""))
+        for relative_path in list(result.get("remediation_manifest_paths", [])):
+            add_target(str(relative_path or ""))
+
     return targets
 
 
@@ -1334,6 +1680,46 @@ def _write_run_detail_pages(workspace: Workspace, bundle_dir: Path, state_payloa
         detail_path.parent.mkdir(parents=True, exist_ok=True)
         detail_path.write_text(
             _render_run_detail_html(
+                current_href=str(item.get("detail_href", "")),
+                item=item,
+                manifest=manifest,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _write_job_detail_pages(workspace: Workspace, bundle_dir: Path, state_payload: Dict[str, object]) -> None:
+    jobs = dict(state_payload.get("jobs", {}))
+    items = list(jobs.get("items", []))
+    for item in items:
+        manifest_path = _resolve_workspace_relative(workspace, str(item.get("path", "")))
+        if not manifest_path.exists():
+            continue
+        manifest = read_json_manifest(manifest_path)
+        detail_path = bundle_dir / str(item.get("detail_href", ""))
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        detail_path.write_text(
+            _render_job_detail_html(
+                current_href=str(item.get("detail_href", "")),
+                item=item,
+                manifest=manifest,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _write_sync_detail_pages(workspace: Workspace, bundle_dir: Path, state_payload: Dict[str, object]) -> None:
+    sync = dict(state_payload.get("sync", {}))
+    items = list(sync.get("items", []))
+    for item in items:
+        manifest_path = _resolve_workspace_relative(workspace, str(item.get("path", "")))
+        if not manifest_path.exists():
+            continue
+        manifest = read_json_manifest(manifest_path)
+        detail_path = bundle_dir / str(item.get("detail_href", ""))
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        detail_path.write_text(
+            _render_sync_detail_html(
                 current_href=str(item.get("detail_href", "")),
                 item=item,
                 manifest=manifest,
@@ -1476,6 +1862,107 @@ def _render_run_detail_html(
     )
 
 
+def _render_job_detail_html(
+    current_href: str,
+    item: Dict[str, object],
+    manifest: Dict[str, object],
+) -> str:
+    result = dict(manifest.get("result", {}))
+    audit_entries = list(manifest.get("audit", []))
+    body_lines = [
+        "<article class=\"panel\">",
+        "  <h2>Job Metadata</h2>",
+        _render_detail_fields(
+            [
+                ("Job ID", _render_code_value(str(manifest.get("job_id", "")))),
+                ("Type", _render_code_value(str(manifest.get("job_type", "")))),
+                ("Status", _render_code_value(str(manifest.get("status", "")))),
+                ("Title", _render_code_value(str(manifest.get("title", "")))),
+                ("Created", _render_code_value(str(manifest.get("created_at", "")))),
+                ("Updated", _render_code_value(str(manifest.get("updated_at", "")))),
+                ("Attempts", _render_code_value(str(manifest.get("attempts", 0)))),
+                ("Retry Of", _render_code_value(str(manifest.get("retry_of_job_id", "")) or "-")),
+                ("Error", _render_code_value(str(manifest.get("error", "")) or "-")),
+            ]
+        ),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Job Result</h2>",
+        _render_detail_fields(
+            [
+                ("Run Manifest", _render_preview_value(current_href, str(result.get("run_manifest_path", "")))),
+                ("Report", _render_preview_value(current_href, str(result.get("report_path", "")))),
+                ("Answer", _render_preview_value(current_href, str(result.get("answer_path", "")))),
+                ("Change Summary", _render_preview_value(current_href, str(result.get("change_summary_path", "")))),
+                ("Training Loop Manifest", _render_preview_value(current_href, str(result.get("training_loop_manifest_path", "")))),
+                ("Training Loop Directory", _render_code_value(str(result.get("training_loop_dir", "")) or "-")),
+                ("Warning Count", _render_code_value(str(result.get("warning_count", "")) or "-")),
+                ("Remediated Count", _render_code_value(str(result.get("remediated_count", "")) or "-")),
+            ]
+        ),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Audit Trail</h2>",
+        _render_job_audit_table(audit_entries),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Job Snapshot</h2>",
+        "  <details>",
+        "    <summary>Show job JSON</summary>",
+        f"    <pre>{escape(json.dumps(manifest, indent=2, sort_keys=True))}</pre>",
+        "  </details>",
+        "</article>",
+    ]
+    return _render_detail_page(
+        title="Job Detail",
+        heading=escape(str(item.get("label", "Job Detail"))),
+        subtitle=escape(str(item.get("job_type", "job"))),
+        current_href=current_href,
+        body_html="\n".join(body_lines),
+    )
+
+
+def _render_sync_detail_html(
+    current_href: str,
+    item: Dict[str, object],
+    manifest: Dict[str, object],
+) -> str:
+    body_lines = [
+        "<article class=\"panel\">",
+        "  <h2>Sync Metadata</h2>",
+        _render_detail_fields(
+            [
+                ("Sync ID", _render_code_value(str(manifest.get("sync_id", "")))),
+                ("Operation", _render_code_value(str(manifest.get("operation", "")))),
+                ("Status", _render_code_value(str(manifest.get("status", "")))),
+                ("Generated", _render_code_value(str(manifest.get("generated_at", "")))),
+                ("File Count", _render_code_value(str(manifest.get("file_count", 0)))),
+                ("Bundle Directory", _render_code_value(str(manifest.get("bundle_dir_relative", "")) or str(manifest.get("bundle_dir", "")))),
+                ("Bundle Manifest", _render_code_value(str(manifest.get("bundle_manifest_relative", "")) or str(manifest.get("bundle_manifest_path", "")))),
+            ]
+        ),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Included Paths</h2>",
+        _render_sync_included_paths(list(manifest.get("included_paths", []))),
+        "</article>",
+        "<article class=\"panel\">",
+        "  <h2>Sync Snapshot</h2>",
+        "  <details>",
+        "    <summary>Show sync JSON</summary>",
+        f"    <pre>{escape(json.dumps(manifest, indent=2, sort_keys=True))}</pre>",
+        "  </details>",
+        "</article>",
+    ]
+    return _render_detail_page(
+        title="Sync Detail",
+        heading=escape(str(item.get("label", "Sync Detail"))),
+        subtitle=escape(str(item.get("operation", "sync"))),
+        current_href=current_href,
+        body_html="\n".join(body_lines),
+    )
+
+
 def _render_run_timeline_page_html(current_href: str, timeline: Dict[str, object]) -> str:
     body_lines = [
         "<article class=\"panel\">",
@@ -1581,6 +2068,38 @@ def _render_detail_fields(rows: Sequence[tuple[str, str]]) -> str:
             ]
         )
     lines.extend(["    </tbody>", "  </table>"])
+    return "\n".join(lines)
+
+
+def _render_job_audit_table(entries: List[Dict[str, object]]) -> str:
+    if not entries:
+        return "  <p class=\"muted\">No audit entries found.</p>"
+    lines = [
+        "  <table>",
+        "    <thead><tr><th>Timestamp</th><th>Status</th><th>Message</th></tr></thead>",
+        "    <tbody>",
+    ]
+    for entry in entries:
+        lines.extend(
+            [
+                "      <tr>",
+                f"        <td>{escape(str(entry.get('timestamp', '')))}</td>",
+                f"        <td>{escape(str(entry.get('status', '')))}</td>",
+                f"        <td>{escape(str(entry.get('message', '')))}</td>",
+                "      </tr>",
+            ]
+        )
+    lines.extend(["    </tbody>", "  </table>"])
+    return "\n".join(lines)
+
+
+def _render_sync_included_paths(paths: List[object]) -> str:
+    if not paths:
+        return "  <p class=\"muted\">No included paths recorded.</p>"
+    lines = ["  <ul>"]
+    for path in paths:
+        lines.append(f"    <li><code>{escape(str(path))}</code></li>")
+    lines.append("  </ul>")
     return "\n".join(lines)
 
 
@@ -1844,6 +2363,14 @@ def _artifact_preview_href(relative_path: str) -> str:
 def _run_detail_href(relative_path: str) -> str:
     stem = Path(relative_path).stem
     return f"runs/{stem}.html"
+
+
+def _job_detail_href(job_id: str) -> str:
+    return f"jobs/{slugify(job_id) or 'job'}.html"
+
+
+def _sync_detail_href(sync_id: str) -> str:
+    return f"sync/{slugify(sync_id) or 'sync'}.html"
 
 
 def _relative_href(from_href: str, to_href: Optional[str]) -> str:

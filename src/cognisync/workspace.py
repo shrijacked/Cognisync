@@ -61,6 +61,18 @@ class Workspace:
         return self.jobs_dir / "queue.json"
 
     @property
+    def sync_state_dir(self) -> Path:
+        return self.state_dir / "sync"
+
+    @property
+    def sync_manifests_dir(self) -> Path:
+        return self.sync_state_dir / "manifests"
+
+    @property
+    def sync_history_manifest_path(self) -> Path:
+        return self.sync_state_dir / "history.json"
+
+    @property
     def sources_manifest_path(self) -> Path:
         return self.state_dir / "sources.json"
 
@@ -118,6 +130,8 @@ class Workspace:
             self.runs_dir,
             self.jobs_dir,
             self.job_manifests_dir,
+            self.sync_state_dir,
+            self.sync_manifests_dir,
         ]
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)

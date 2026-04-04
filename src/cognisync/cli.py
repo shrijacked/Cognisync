@@ -38,6 +38,7 @@ from cognisync.jobs import (
     JobError,
     enqueue_improve_research_job,
     enqueue_research_job,
+    retry_job,
     render_jobs_list,
     run_next_job,
 )
@@ -65,7 +66,7 @@ from cognisync.renderers import render_compile_packet, render_marp_slides, rende
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
 from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
-from cognisync.sync import SyncError, export_sync_bundle, import_sync_bundle
+from cognisync.sync import SyncError, export_sync_bundle, import_sync_bundle, render_sync_history
 from cognisync.training_loop import export_training_loop_bundle, improve_research_loop
 from cognisync.workspace import Workspace
 
@@ -230,6 +231,23 @@ def cmd_jobs_run_next(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_jobs_retry(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        manifest_path = retry_job(
+            workspace,
+            job_id=args.job_id,
+            profile_name=args.profile,
+            provider_formats=list(args.provider_format or []),
+        )
+    except JobError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Queued retry job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
 def cmd_sync_export(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     output_dir = None
@@ -241,6 +259,8 @@ def cmd_sync_export(args: argparse.Namespace) -> int:
     result = export_sync_bundle(workspace, output_dir=output_dir)
     print(f"Wrote sync bundle to {result.directory}")
     print(f"Wrote sync manifest to {result.manifest_path}")
+    print(f"Wrote sync event to {result.event_manifest_path}")
+    print(f"Sync history: {result.history_manifest_path}")
     print(f"Copied {result.file_count} file(s) into the sync bundle.")
     return 0
 
@@ -258,7 +278,16 @@ def cmd_sync_import(args: argparse.Namespace) -> int:
         return 2
     print(f"Imported sync bundle into {workspace.root}")
     print(f"Source manifest: {result.manifest_path}")
+    print(f"Wrote sync event to {result.event_manifest_path}")
+    print(f"Sync history: {result.history_manifest_path}")
     print(f"Copied {result.file_count} file(s) from the bundle.")
+    return 0
+
+
+def cmd_sync_history(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_sync_history(workspace))
+    print(f"Wrote sync history to {workspace.sync_history_manifest_path}")
     return 0
 
 
@@ -1021,8 +1050,19 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_run_next_parser.add_argument("--workspace", default=".")
     jobs_run_next_parser.set_defaults(func=cmd_jobs_run_next)
 
+    jobs_retry_parser = jobs_subparsers.add_parser("retry", help="Re-queue a terminal job for another attempt")
+    jobs_retry_parser.add_argument("job_id")
+    jobs_retry_parser.add_argument("--workspace", default=".")
+    jobs_retry_parser.add_argument("--profile", default=None)
+    jobs_retry_parser.add_argument("--provider-format", action="append", default=[])
+    jobs_retry_parser.set_defaults(func=cmd_jobs_retry)
+
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_command", required=True)
+
+    sync_history_parser = sync_subparsers.add_parser("history", help="List recorded sync export and import events")
+    sync_history_parser.add_argument("--workspace", default=".")
+    sync_history_parser.set_defaults(func=cmd_sync_history)
 
     sync_export_parser = sync_subparsers.add_parser("export", help="Write a portable workspace sync bundle")
     sync_export_parser.add_argument("--workspace", default=".")
