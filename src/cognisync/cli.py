@@ -4,6 +4,13 @@ import argparse
 from pathlib import Path
 import sys
 
+from cognisync.access import (
+    AccessError,
+    VALID_ACCESS_ROLES,
+    grant_access_member,
+    render_access_roster,
+    revoke_access_member,
+)
 from cognisync.adapters import (
     AdapterError,
     adapter_from_config,
@@ -375,6 +382,42 @@ def cmd_notify_list(args: argparse.Namespace) -> int:
     write_notifications_manifest(workspace)
     print(render_notifications(workspace))
     print(f"Wrote notifications to {workspace.notifications_manifest_path}")
+    return 0
+
+
+def cmd_access_list(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_access_roster(workspace))
+    print(f"Access manifest: {workspace.access_manifest_path}")
+    return 0
+
+
+def cmd_access_grant(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        member = grant_access_member(
+            workspace,
+            principal_id=args.principal_id,
+            role=args.role,
+            display_name=args.name,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Granted {member['role']} access to {member['principal_id']}")
+    print(f"Access manifest: {workspace.access_manifest_path}")
+    return 0
+
+
+def cmd_access_revoke(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        member = revoke_access_member(workspace, principal_id=args.principal_id)
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Revoked access for {member['principal_id']}")
+    print(f"Access manifest: {workspace.access_manifest_path}")
     return 0
 
 
@@ -1167,6 +1210,25 @@ def build_parser() -> argparse.ArgumentParser:
     notify_list_parser = notify_subparsers.add_parser("list", help="List active notifications")
     notify_list_parser.add_argument("--workspace", default=".")
     notify_list_parser.set_defaults(func=cmd_notify_list)
+
+    access_parser = subparsers.add_parser("access", help="Manage file-native workspace roles and permissions")
+    access_subparsers = access_parser.add_subparsers(dest="access_command", required=True)
+
+    access_list_parser = access_subparsers.add_parser("list", help="List the persisted workspace access roster")
+    access_list_parser.add_argument("--workspace", default=".")
+    access_list_parser.set_defaults(func=cmd_access_list)
+
+    access_grant_parser = access_subparsers.add_parser("grant", help="Grant or update a workspace access member")
+    access_grant_parser.add_argument("principal_id")
+    access_grant_parser.add_argument("role", choices=VALID_ACCESS_ROLES)
+    access_grant_parser.add_argument("--workspace", default=".")
+    access_grant_parser.add_argument("--name", default=None)
+    access_grant_parser.set_defaults(func=cmd_access_grant)
+
+    access_revoke_parser = access_subparsers.add_parser("revoke", help="Remove a workspace access member")
+    access_revoke_parser.add_argument("principal_id")
+    access_revoke_parser.add_argument("--workspace", default=".")
+    access_revoke_parser.set_defaults(func=cmd_access_revoke)
 
     jobs_parser = subparsers.add_parser("jobs", help="Manage persisted local job queues for remote-style execution")
     jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command", required=True)

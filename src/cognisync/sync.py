@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 from typing import Dict, List, Optional
 
+from cognisync.access import ensure_access_manifest
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -70,6 +71,7 @@ def render_sync_history(workspace: Workspace) -> str:
 
 
 def export_sync_bundle(workspace: Workspace, output_dir: Optional[Path] = None) -> SyncBundleResult:
+    ensure_access_manifest(workspace)
     destination = output_dir or _next_sync_bundle_dir(workspace)
     destination.mkdir(parents=True, exist_ok=True)
 
@@ -103,6 +105,7 @@ def export_sync_bundle(workspace: Workspace, output_dir: Optional[Path] = None) 
         "workspace_root": workspace.root.as_posix(),
         "included_paths": copied_paths,
         "file_count": file_count,
+        "state_manifests": _state_manifest_paths(workspace),
     }
     manifest_path = destination / "manifest.json"
     manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -251,3 +254,22 @@ def _write_sync_history_manifest(workspace: Workspace) -> Path:
 def _sync_event_id(operation: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"sync-{operation}-{stamp}"
+
+
+def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:
+    manifest_paths = {
+        "access": workspace.access_manifest_path,
+        "connectors": workspace.connector_registry_path,
+        "graph": workspace.graph_manifest_path,
+        "jobs_queue": workspace.job_queue_manifest_path,
+        "notifications": workspace.notifications_manifest_path,
+        "review_actions": workspace.review_actions_manifest_path,
+        "review_queue": workspace.review_queue_manifest_path,
+        "sources": workspace.sources_manifest_path,
+        "sync_history": workspace.sync_history_manifest_path,
+    }
+    return {
+        name: workspace.relative_path(path)
+        for name, path in sorted(manifest_paths.items())
+        if path.exists()
+    }

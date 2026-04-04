@@ -201,6 +201,21 @@ class JobsAndSyncTests(unittest.TestCase):
                 "# Agent Loops\n\nA compiled concept page.\n",
                 encoding="utf-8",
             )
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "reviewer-1",
+                        "reviewer",
+                        "--workspace",
+                        str(source_root),
+                        "--name",
+                        "Reviewer One",
+                    ]
+                ),
+                0,
+            )
 
             self.assertEqual(main(["scan", "--workspace", str(source_root)]), 0)
 
@@ -232,9 +247,16 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertTrue((target_root / "raw" / "agent-loops.md").exists())
             self.assertTrue((target_root / "wiki" / "concepts" / "agent-loops.md").exists())
             self.assertTrue((target_root / ".cognisync" / "sources.json").exists())
+            self.assertTrue((target_root / ".cognisync" / "access.json").exists())
             self.assertTrue((target_root / ".cognisync" / "sync" / "history.json").exists())
             imported_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertGreaterEqual(imported_manifest["file_count"], 3)
+            self.assertEqual(imported_manifest["state_manifests"]["access"], ".cognisync/access.json")
+
+            target_access = json.loads((target_root / ".cognisync" / "access.json").read_text(encoding="utf-8"))
+            members = {item["principal_id"]: item for item in target_access["members"]}
+            self.assertIn("reviewer-1", members)
+            self.assertEqual(members["reviewer-1"]["role"], "reviewer")
 
             source_history = json.loads((source_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
             target_history = json.loads((target_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))

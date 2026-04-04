@@ -12,6 +12,7 @@ import posixpath
 from urllib.parse import parse_qs, urlparse
 from typing import Dict, List, Optional, Sequence
 
+from cognisync.access import ensure_access_manifest, load_access_manifest
 from cognisync.maintenance import (
     MaintenanceError,
     accept_concept_candidate,
@@ -116,6 +117,7 @@ def render_review_ui_html(
     sync_items = list(sync.get("items", []))
     connectors = dict(payload.get("connectors", {}))
     connector_items = list(connectors.get("items", []))
+    access = dict(payload.get("access", {}))
     notifications = dict(payload.get("notifications", {}))
     run_timeline = dict(payload.get("run_timeline", {}))
     concept_graph = dict(payload.get("concept_graph", {}))
@@ -131,6 +133,7 @@ def render_review_ui_html(
         ("Queued Jobs", str(jobs.get("queued_count", 0))),
         ("Sync Events", str(sync.get("total_count", 0))),
         ("Connectors", str(connectors.get("total_count", 0))),
+        ("Workspace Members", str(access.get("member_count", 0))),
         ("Notifications", str(notifications.get("total_count", 0))),
         ("Known Conflicts", str(graph.get("conflict_count", 0))),
         ("Sources", str(source_coverage.get("source_count", 0))),
@@ -244,6 +247,10 @@ def render_review_ui_html(
             "        <article class=\"panel\">",
             "          <h2>Connectors</h2>",
             _render_connector_summary(connectors),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Workspace Access</h2>",
+            _render_access_summary(access),
             "        </article>",
             "        <article class=\"panel\">",
             "          <h2>Notifications</h2>",
@@ -379,6 +386,7 @@ def build_review_ui_state(
     jobs = _build_job_history(workspace)
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
+    access = _build_access_summary(workspace)
     notifications = _build_notifications(workspace)
     return {
         "schema_version": 1,
@@ -394,6 +402,7 @@ def build_review_ui_state(
             "sync_history_manifest_path": workspace.relative_path(workspace.sync_history_manifest_path),
             "connector_registry_path": workspace.relative_path(workspace.connector_registry_path),
             "notifications_manifest_path": workspace.relative_path(workspace.notifications_manifest_path),
+            "access_manifest_path": workspace.relative_path(workspace.access_manifest_path),
         },
         "review": review_payload,
         "source_coverage": _build_source_coverage(workspace),
@@ -403,6 +412,7 @@ def build_review_ui_state(
         "jobs": jobs,
         "sync": sync,
         "connectors": connectors,
+        "access": access,
         "notifications": notifications,
         "run_timeline": _build_run_timeline(workspace),
         "concept_graph": _build_concept_graph(workspace),
@@ -887,6 +897,45 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
                 f"                <td>{kind}</td>",
                 f"                <td>{last_synced_at}</td>",
                 f"                <td>{_render_connector_actions(item)}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_access_summary(access: Dict[str, object]) -> str:
+    members = list(access.get("members", []))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">members <strong>{escape(str(access.get('member_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">roles <strong>{escape(str(len(dict(access.get('counts_by_role', {})))))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{escape(str(access.get('manifest_path', '')))}</code></p>",
+        _render_kind_table("Roles", dict(access.get("counts_by_role", {}))),
+    ]
+    if not members:
+        lines.append("          <p class=\"empty\">No workspace members recorded.</p>")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "          <h3>Roster</h3>",
+            "          <table>",
+            "            <thead><tr><th>Member</th><th>Role</th><th>Status</th></tr></thead>",
+            "            <tbody>",
+        ]
+    )
+    for member in members[:8]:
+        principal_id = escape(str(member.get("principal_id", "")))
+        display_name = escape(str(member.get("display_name", "")))
+        role = escape(str(member.get("role", "")))
+        status = escape(str(member.get("status", "")))
+        lines.extend(
+            [
+                "              <tr>",
+                f"                <td><strong>{display_name or principal_id}</strong><br><span class=\"muted\"><code>{principal_id}</code></span></td>",
+                f"                <td>{role}</td>",
+                f"                <td>{status}</td>",
                 "              </tr>",
             ]
         )
@@ -1554,6 +1603,30 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
         "synced_count": sum(1 for connector in connectors if connector.get("last_synced_at")),
         "counts_by_kind": dict(counts_by_kind),
         "items": items[:limit],
+    }
+
+
+def _build_access_summary(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    ensure_access_manifest(workspace)
+    payload = load_access_manifest(workspace)
+    members = [dict(item) for item in list(payload.get("members", []))]
+    counts_by_role: Counter[str] = Counter(str(member.get("role", "viewer")) for member in members)
+    items = [
+        {
+            "principal_id": str(member.get("principal_id", "")),
+            "display_name": str(member.get("display_name", "")),
+            "role": str(member.get("role", "")),
+            "status": str(member.get("status", "")),
+            "added_at": str(member.get("added_at", "")),
+            "updated_at": str(member.get("updated_at", "")),
+        }
+        for member in members[:limit]
+    ]
+    return {
+        "manifest_path": workspace.relative_path(workspace.access_manifest_path),
+        "member_count": len(members),
+        "counts_by_role": dict(counts_by_role),
+        "members": items,
     }
 
 

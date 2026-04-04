@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from cognisync.access import ensure_access_manifest
 from cognisync.config import default_config, load_config, save_config
 from cognisync.types import IndexSnapshot
 
@@ -79,6 +80,10 @@ class Workspace:
     @property
     def notifications_manifest_path(self) -> Path:
         return self.state_dir / "notifications.json"
+
+    @property
+    def access_manifest_path(self) -> Path:
+        return self.state_dir / "access.json"
 
     @property
     def sources_manifest_path(self) -> Path:
@@ -176,6 +181,8 @@ class Workspace:
         for path, content in navigation_pages.items():
             if force or not path.exists():
                 path.write_text(content, encoding="utf-8")
+
+        ensure_access_manifest(self)
 
     def load_config(self):
         return load_config(self.config_path)
