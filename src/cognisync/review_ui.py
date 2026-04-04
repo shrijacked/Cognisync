@@ -32,7 +32,7 @@ from cognisync.maintenance import (
     resolve_entity_merge,
 )
 from cognisync.connectors import ConnectorError, list_connectors, sync_all_connectors, sync_connector
-from cognisync.jobs import JobError, list_jobs, run_job_worker
+from cognisync.jobs import JobError, list_jobs, read_worker_registry, run_job_worker
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.linter import lint_snapshot
 from cognisync.notifications import write_notifications_manifest
@@ -126,6 +126,7 @@ def render_review_ui_html(
     run_items = list(runs.get("items", []))
     jobs = dict(payload.get("jobs", {}))
     job_items = list(jobs.get("items", []))
+    workers = dict(payload.get("workers", {}))
     sync = dict(payload.get("sync", {}))
     sync_items = list(sync.get("items", []))
     connectors = dict(payload.get("connectors", {}))
@@ -146,6 +147,7 @@ def render_review_ui_html(
         ("Graph Edges", str(graph.get("edge_count", 0))),
         ("Recorded Runs", str(runs.get("total_count", 0))),
         ("Queued Jobs", str(jobs.get("queued_count", 0))),
+        ("Workers", str(workers.get("total_count", 0))),
         ("Sync Events", str(sync.get("total_count", 0))),
         ("Connectors", str(connectors.get("total_count", 0))),
         ("Workspace Members", str(access.get("member_count", 0))),
@@ -255,6 +257,10 @@ def render_review_ui_html(
             "        <article class=\"panel\">",
             "          <h2>Job Queue</h2>",
             _render_job_history_summary(jobs),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Workers</h2>",
+            _render_worker_summary(workers),
             "        </article>",
             "        <article class=\"panel\">",
             "          <h2>Sync History</h2>",
@@ -412,6 +418,7 @@ def build_review_ui_state(
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
     access = _build_access_summary(workspace, actor_id=actor_id)
+    workers = _build_worker_summary(workspace)
     audit = _build_audit_history(workspace)
     usage = _build_usage_summary(workspace)
     notifications = _build_notifications(workspace)
@@ -439,6 +446,7 @@ def build_review_ui_state(
         "graph": _build_graph_summary(workspace),
         "runs": runs,
         "jobs": jobs,
+        "workers": workers,
         "sync": sync,
         "connectors": connectors,
         "access": access,
@@ -836,6 +844,44 @@ def _render_job_history_summary(jobs: Dict[str, object]) -> str:
                 f"                <td>{job_type}</td>",
                 f"                <td>{status}</td>",
                 f"                <td>{updated_at}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_worker_summary(workers: Dict[str, object]) -> str:
+    items = list(workers.get("items", []))
+    if not items:
+        return "          <p class=\"empty\">No workers have touched the queue yet.</p>"
+    counts_by_status = dict(workers.get("counts_by_status", {}))
+    recent_items = items[:6]
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">workers <strong>{escape(str(workers.get('total_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">active <strong>{escape(str(workers.get('active_count', 0)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Worker Statuses", counts_by_status),
+        "          <h3>Recent Workers</h3>",
+        "          <table>",
+        "            <thead><tr><th>Worker</th><th>Status</th><th>Current Job</th><th>Last Seen</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for item in recent_items:
+        worker_id = escape(str(item.get("worker_id", "")))
+        status = escape(str(item.get("status", "")))
+        current_job_id = escape(str(item.get("current_job_id", "")) or "-")
+        current_job_type = escape(str(item.get("current_job_type", "")) or "")
+        current_job = current_job_id if not current_job_type else f"{current_job_id} ({current_job_type})"
+        last_seen_at = escape(str(item.get("last_seen_at", "")))
+        lines.extend(
+            [
+                "              <tr>",
+                f"                <td><strong>{worker_id}</strong></td>",
+                f"                <td>{status}</td>",
+                f"                <td>{escape(current_job)}</td>",
+                f"                <td>{last_seen_at}</td>",
                 "              </tr>",
             ]
         )
@@ -1632,6 +1678,30 @@ def _build_job_history(workspace: Workspace, limit: int = 24) -> Dict[str, objec
         "counts_by_kind": dict(counts_by_kind),
         "counts_by_status": dict(counts_by_status),
         "items": items[:limit],
+    }
+
+
+def _build_worker_summary(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    payload = read_worker_registry(workspace)
+    workers = list(payload.get("workers", []))
+    items = [
+        {
+            "worker_id": str(worker.get("worker_id", "")),
+            "status": str(worker.get("status", "")),
+            "current_job_id": str(worker.get("current_job_id", "")),
+            "current_job_type": str(worker.get("current_job_type", "")),
+            "lease_expires_at": str(worker.get("lease_expires_at", "")),
+            "last_seen_at": str(worker.get("last_seen_at", "")),
+            "claim_count": int(worker.get("claim_count", 0) or 0),
+        }
+        for worker in workers[:limit]
+    ]
+    return {
+        "manifest_path": workspace.relative_path(workspace.worker_registry_path),
+        "total_count": len(workers),
+        "active_count": sum(1 for worker in workers if str(worker.get("status", "")) in {"claimed", "running"}),
+        "counts_by_status": dict(payload.get("counts_by_status", {})),
+        "items": items,
     }
 
 

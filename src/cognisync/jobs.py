@@ -211,8 +211,7 @@ def render_jobs_list(workspace: Workspace) -> str:
 
 
 def render_worker_registry(workspace: Workspace) -> str:
-    _write_queue_manifest(workspace)
-    payload = _read_worker_registry(workspace)
+    payload = read_worker_registry(workspace)
     workers = list(payload.get("workers", []))
     lines = [
         "# Worker Registry",
@@ -234,6 +233,11 @@ def render_worker_registry(workspace: Workspace) -> str:
             f"last-seen:{worker.get('last_seen_at', '')}{current_suffix}"
         )
     return "\n".join(lines)
+
+
+def read_worker_registry(workspace: Workspace) -> Dict[str, object]:
+    _write_queue_manifest(workspace)
+    return _read_worker_registry(workspace)
 
 
 def retry_job(

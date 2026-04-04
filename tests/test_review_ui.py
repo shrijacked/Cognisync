@@ -110,6 +110,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Graph Overview", html)
             self.assertIn("Run History", html)
             self.assertIn("Job Queue", html)
+            self.assertIn("Workers", html)
             self.assertIn("Sync History", html)
             self.assertIn("Connectors", html)
             self.assertIn("Workspace Access", html)
@@ -144,6 +145,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertGreaterEqual(state["run_timeline"]["total_count"], 1)
             self.assertGreaterEqual(state["concept_graph"]["selected_node_count"], 1)
             self.assertGreaterEqual(state["jobs"]["total_count"], 1)
+            self.assertIn("workers", state)
             self.assertGreaterEqual(state["sync"]["total_count"], 1)
             self.assertGreaterEqual(state["connectors"]["total_count"], 1)
             self.assertGreaterEqual(state["audit"]["total_count"], 1)
@@ -378,6 +380,8 @@ class ReviewUiTests(unittest.TestCase):
 
                 queue_payload = json.loads((workspace.jobs_dir / "queue.json").read_text(encoding="utf-8"))
                 self.assertEqual(queue_payload["queued_count"], 0)
+                state = json.loads((workspace.review_ui_dir / "dashboard-state.json").read_text(encoding="utf-8"))
+                self.assertGreaterEqual(state["workers"]["total_count"], 1)
 
                 connection = HTTPConnection(host, port, timeout=5)
                 body = urlencode({"connector_id": "url-server-connector"})
