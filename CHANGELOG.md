@@ -12,6 +12,7 @@
 - added `cognisync export correction-bundle` so validated remediation jobs can be exported as correction-training records with previous-response context
 - added `cognisync export training-loop-bundle` so evaluation, feedback, correction, and finetune artifacts can ship together as one portable training package
 - added `cognisync improve research` so the remediation loop and training-loop bundle refresh can run as one operator action
+- added `cognisync notify list` plus `.cognisync/notifications.json` so jobs, runs, connectors, and review state now materialize into a durable operator inbox
 - added `cognisync jobs` so research and improvement work can be queued, persisted, and executed later through local control-plane style manifests
 - added `cognisync sync export` and `sync import` so file-native workspaces can move between operators as portable bundles
 - added `cognisync jobs retry` so terminal jobs can be re-queued with explicit lineage to the original manifest
@@ -32,6 +33,7 @@
 - expanded `cognisync ui review` again with job-queue and sync-history panels, filterable explorers, and static job-detail and sync-detail pages
 - expanded `cognisync ui review` again with connector-registry panels, connector-detail pages, and live `run next job` and `sync connector` actions when served locally
 - expanded `cognisync ui review` again with a live `sync all connectors` action so served dashboards can refresh the unsynced registry directly
+- expanded `cognisync ui review` again with a notifications panel sourced from `.cognisync/notifications.json`
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions

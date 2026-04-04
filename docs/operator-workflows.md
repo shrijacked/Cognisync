@@ -112,7 +112,23 @@ The command:
 3. writes stable `review-export.json` and `dashboard-state.json` sidecars in the same directory
 4. can optionally serve that directory locally with `--serve`
 
-The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, run history from `.cognisync/runs/`, queued-job history from `.cognisync/jobs/`, sync audit history from `.cognisync/sync/`, and connector definitions from `.cognisync/connectors.json`. It also writes static graph-node, run-detail, run-timeline, concept-graph, job-detail, sync-detail, connector-detail, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, queued work, connector registry, and sync handoffs without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, resolve merge candidates, run the next queued job, sync one registered connector, or sync the unsynced portion of the whole connector registry. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, run history from `.cognisync/runs/`, queued-job history from `.cognisync/jobs/`, sync audit history from `.cognisync/sync/`, connector definitions from `.cognisync/connectors.json`, and operator notifications from `.cognisync/notifications.json`. It also writes static graph-node, run-detail, run-timeline, concept-graph, job-detail, sync-detail, connector-detail, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, queued work, connector registry, and sync handoffs without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, resolve merge candidates, run the next queued job, sync one registered connector, or sync the unsynced portion of the whole connector registry. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+
+### `notify`
+
+Use `notify` when you want a durable operator inbox built from the current workspace state.
+
+Supported path in this release:
+
+- `cognisync notify list`
+
+The command:
+
+1. writes `.cognisync/notifications.json`
+2. derives notifications from queued and failed jobs, validation-failed runs, warning-bearing runs, and unsynced connectors
+3. prints a human-readable inbox view for the same manifest
+
+This keeps backlog and failure signals file-native, so later automation or UI layers can read the same inbox instead of scraping terminal logs.
 
 ### `export`
 
