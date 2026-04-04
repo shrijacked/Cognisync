@@ -833,6 +833,102 @@ class ExportTests(unittest.TestCase):
             )
             self.assertIn("Wrote training-loop bundle to", stdout.getvalue())
 
+    def test_improve_research_runs_remediation_and_writes_training_loop_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Improvement Loop Workspace"]), 0)
+
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory helps agent loops persist findings.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(root / ".cognisync" / "config.json")
+            config.llm_profiles["passer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            config.llm_profiles["failing"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops always require vector databases.')",
+                ]
+            )
+            config.llm_profiles["healer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            save_config(root / ".cognisync" / "config.json", config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "passer",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertNotEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "failing",
+                        "do agent loops always require vector databases",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "improve",
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "healer",
+                        "--limit",
+                        "1",
+                        "--provider-format",
+                        "openai-chat",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            bundle_dirs = sorted((root / "outputs" / "reports" / "exports").glob("training-loop-bundle-*"))
+            self.assertTrue(bundle_dirs)
+            manifest_path = bundle_dirs[-1] / "manifest.json"
+            self.assertTrue(manifest_path.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertGreaterEqual(manifest["corrections"]["record_count"], 1)
+            self.assertEqual(
+                manifest["finetune"]["provider_exports"]["openai-chat"],
+                "finetune/supervised.openai-chat.jsonl",
+            )
+            self.assertIn("Improved 1 research run(s).", stdout.getvalue())
+            self.assertIn("Wrote training-loop bundle to", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

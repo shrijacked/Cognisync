@@ -58,7 +58,7 @@ from cognisync.renderers import render_compile_packet, render_marp_slides, rende
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
 from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
-from cognisync.training_loop import export_training_loop_bundle
+from cognisync.training_loop import export_training_loop_bundle, improve_research_loop
 from cognisync.workspace import Workspace
 
 
@@ -341,6 +341,36 @@ def cmd_export_training_loop_bundle(args: argparse.Namespace) -> int:
     print(f"Wrote feedback manifest to {result.feedback_manifest_path}")
     print(f"Wrote correction manifest to {result.correction_manifest_path}")
     print(f"Wrote finetune manifest to {result.finetune_manifest_path}")
+    return 0
+
+
+def cmd_improve_research(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    try:
+        result = improve_research_loop(
+            workspace,
+            profile_name=args.profile,
+            limit=args.limit,
+            output_dir=output_dir,
+            provider_formats=list(args.provider_format or []),
+        )
+    except (ExportError, RemediationError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Improved {result.remediation.remediated_count} research run(s).")
+    if result.remediation.manifest_paths:
+        for manifest_path in result.remediation.manifest_paths:
+            print(f"- {manifest_path}")
+    else:
+        print("No remediation candidates were available, but the training-loop bundle was still refreshed.")
+    print(f"Wrote training-loop bundle to {result.bundle.directory}")
+    print(f"Wrote training-loop manifest to {result.bundle.manifest_path}")
     return 0
 
 
@@ -1126,6 +1156,28 @@ def build_parser() -> argparse.ArgumentParser:
     remediate_research_parser.add_argument("--profile", required=True)
     remediate_research_parser.add_argument("--limit", type=int, default=5)
     remediate_research_parser.set_defaults(func=cmd_remediate_research)
+
+    improve_parser = subparsers.add_parser(
+        "improve",
+        help="Run higher-level improvement loops over persisted Cognisync artifacts",
+    )
+    improve_subparsers = improve_parser.add_subparsers(dest="improve_command", required=True)
+
+    improve_research_parser = improve_subparsers.add_parser(
+        "research",
+        help="Remediate weak research runs and package a refreshed training-loop bundle",
+    )
+    improve_research_parser.add_argument("--workspace", default=".")
+    improve_research_parser.add_argument("--profile", required=True)
+    improve_research_parser.add_argument("--limit", type=int, default=5)
+    improve_research_parser.add_argument("--output-dir", default=None)
+    improve_research_parser.add_argument(
+        "--provider-format",
+        action="append",
+        default=[],
+        help="Optionally emit provider-specific supervised exports such as openai-chat inside the bundle",
+    )
+    improve_research_parser.set_defaults(func=cmd_improve_research)
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate persisted Cognisync artifacts")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)

@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 
 from cognisync.evaluation import evaluate_research_runs, export_feedback_bundle
 from cognisync.exports import export_correction_bundle, export_finetune_bundle
+from cognisync.remediation import RemediationBatchResult, remediate_research_runs
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -20,6 +21,12 @@ class TrainingLoopBundleResult:
     feedback_manifest_path: Path
     correction_manifest_path: Path
     finetune_manifest_path: Path
+
+
+@dataclass(frozen=True)
+class ImprovementLoopResult:
+    remediation: RemediationBatchResult
+    bundle: TrainingLoopBundleResult
 
 
 def export_training_loop_bundle(
@@ -107,6 +114,22 @@ def export_training_loop_bundle(
         correction_manifest_path=correction_result.manifest_path,
         finetune_manifest_path=finetune_result.manifest_path,
     )
+
+
+def improve_research_loop(
+    workspace: Workspace,
+    profile_name: str,
+    limit: int = 5,
+    output_dir: Optional[Path] = None,
+    provider_formats: Optional[List[str]] = None,
+) -> ImprovementLoopResult:
+    remediation = remediate_research_runs(workspace, profile_name=profile_name, limit=limit)
+    bundle = export_training_loop_bundle(
+        workspace,
+        output_dir=output_dir,
+        provider_formats=provider_formats,
+    )
+    return ImprovementLoopResult(remediation=remediation, bundle=bundle)
 
 
 def _next_training_loop_bundle_dir(workspace: Workspace) -> Path:
