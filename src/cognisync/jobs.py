@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from cognisync.compile_flow import run_compile_cycle
-from cognisync.connectors import sync_connector
+from cognisync.connectors import sync_all_connectors, sync_connector
 from cognisync.linter import lint_snapshot
 from cognisync.maintenance import run_maintenance_cycle
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
@@ -90,6 +90,22 @@ def enqueue_connector_sync_job(workspace: Workspace, connector_id: str, force: b
         {
             "connector_id": connector_id,
             "force": force,
+        },
+    )
+
+
+def enqueue_connector_sync_all_job(
+    workspace: Workspace,
+    force: bool = False,
+    limit: Optional[int] = None,
+) -> Path:
+    return _enqueue_job(
+        workspace,
+        "connector_sync_all",
+        "connector-sync-all",
+        {
+            "force": force,
+            "limit": limit,
         },
     )
 
@@ -339,6 +355,25 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "synced_count": result.synced_count,
             "registry_path": workspace.relative_path(result.registry_path),
             "result_paths": [workspace.relative_path(path) for path in result.result_paths],
+        }
+    if job_type == "connector_sync_all":
+        result = sync_all_connectors(
+            workspace,
+            force=bool(parameters.get("force", False)),
+            limit=int(parameters["limit"]) if parameters.get("limit") is not None else None,
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+            "registry_path": workspace.relative_path(result.registry_path),
+            "connector_count": result.connector_count,
+            "synced_connector_count": result.synced_connector_count,
+            "total_result_count": result.total_result_count,
+            "connector_run_manifest_paths": [
+                workspace.relative_path(item.run_manifest_path) for item in result.connector_results
+            ],
+            "connector_change_summary_paths": [
+                workspace.relative_path(item.change_summary_path) for item in result.connector_results
+            ],
         }
     if job_type == "research":
         result = run_research_cycle(

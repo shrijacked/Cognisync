@@ -13,7 +13,7 @@ from cognisync.adapters import (
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import MaintenancePolicy, save_config
-from cognisync.connectors import ConnectorError, add_connector, render_connector_list, sync_connector
+from cognisync.connectors import ConnectorError, add_connector, render_connector_list, sync_all_connectors, sync_connector
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
 from cognisync.evaluation import evaluate_research_runs, export_feedback_bundle
@@ -39,6 +39,7 @@ from cognisync.jobs import (
     JobError,
     enqueue_compile_job,
     enqueue_connector_sync_job,
+    enqueue_connector_sync_all_job,
     enqueue_improve_research_job,
     enqueue_lint_job,
     enqueue_maintain_job,
@@ -231,6 +232,18 @@ def cmd_jobs_enqueue_connector_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_jobs_enqueue_connector_sync_all(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    manifest_path = enqueue_connector_sync_all_job(
+        workspace,
+        force=args.force,
+        limit=args.limit,
+    )
+    print(f"Queued connector-sync-all job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
 def cmd_jobs_enqueue_lint(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     manifest_path = enqueue_lint_job(workspace)
@@ -395,6 +408,24 @@ def cmd_connector_sync(args: argparse.Namespace) -> int:
     print(f"Imported {result.synced_count} source artifact(s).")
     print(f"Wrote change summary to {result.change_summary_path}")
     print(f"Wrote run manifest to {result.run_manifest_path}")
+    print(f"Connector registry: {result.registry_path}")
+    return 0
+
+
+def cmd_connector_sync_all(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = sync_all_connectors(
+            workspace,
+            force=args.force,
+            limit=args.limit,
+        )
+    except ConnectorError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Synced {result.synced_connector_count} connector(s).")
+    print(f"Imported {result.total_result_count} source artifact(s).")
+    print(f"Wrote batch run manifest to {result.run_manifest_path}")
     print(f"Connector registry: {result.registry_path}")
     return 0
 
@@ -1161,6 +1192,15 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_connector_sync_parser.add_argument("--force", action="store_true")
     jobs_enqueue_connector_sync_parser.set_defaults(func=cmd_jobs_enqueue_connector_sync)
 
+    jobs_enqueue_connector_sync_all_parser = jobs_enqueue_subparsers.add_parser(
+        "connector-sync-all",
+        help="Queue a full connector-registry sync for later worker execution",
+    )
+    jobs_enqueue_connector_sync_all_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_connector_sync_all_parser.add_argument("--force", action="store_true")
+    jobs_enqueue_connector_sync_all_parser.add_argument("--limit", type=int, default=None)
+    jobs_enqueue_connector_sync_all_parser.set_defaults(func=cmd_jobs_enqueue_connector_sync_all)
+
     jobs_enqueue_lint_parser = jobs_enqueue_subparsers.add_parser(
         "lint",
         help="Queue a lint pass for later worker execution",
@@ -1245,6 +1285,15 @@ def build_parser() -> argparse.ArgumentParser:
     connector_sync_parser.add_argument("--workspace", default=".")
     connector_sync_parser.add_argument("--force", action="store_true")
     connector_sync_parser.set_defaults(func=cmd_connector_sync)
+
+    connector_sync_all_parser = connector_subparsers.add_parser(
+        "sync-all",
+        help="Run every registered connector immediately",
+    )
+    connector_sync_all_parser.add_argument("--workspace", default=".")
+    connector_sync_all_parser.add_argument("--force", action="store_true")
+    connector_sync_all_parser.add_argument("--limit", type=int, default=None)
+    connector_sync_all_parser.set_defaults(func=cmd_connector_sync_all)
 
     ingest_parser = subparsers.add_parser("ingest", help="Bring source material into raw/")
     ingest_subparsers = ingest_parser.add_subparsers(dest="ingest_command", required=True)

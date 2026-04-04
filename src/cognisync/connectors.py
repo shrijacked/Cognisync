@@ -31,6 +31,16 @@ class ConnectorSyncResult:
     result_paths: List[Path]
 
 
+@dataclass(frozen=True)
+class ConnectorBatchSyncResult:
+    connector_count: int
+    synced_connector_count: int
+    total_result_count: int
+    registry_path: Path
+    run_manifest_path: Path
+    connector_results: List[ConnectorSyncResult]
+
+
 def add_connector(
     workspace: Workspace,
     kind: str,
@@ -146,6 +156,59 @@ def sync_connector(
         change_summary_path=change_summary.path,
         run_manifest_path=run_manifest_path,
         result_paths=[result.path for result in results],
+    )
+
+
+def sync_all_connectors(
+    workspace: Workspace,
+    force: bool = False,
+    limit: Optional[int] = None,
+) -> ConnectorBatchSyncResult:
+    connectors = list_connectors(workspace)
+    if not connectors:
+        raise ConnectorError("No connector definitions found.")
+
+    pending_connectors = connectors if force else [connector for connector in connectors if not connector.get("last_synced_at")]
+    selected_connectors = pending_connectors[:limit] if limit is not None else pending_connectors
+    connector_results: List[ConnectorSyncResult] = []
+    for connector in selected_connectors:
+        connector_results.append(
+            sync_connector(
+                workspace,
+                connector_id=str(connector.get("connector_id", "")),
+                force=force,
+            )
+        )
+
+    run_manifest_path = write_run_manifest(
+        workspace,
+        "connector_sync_all",
+        {
+            "run_label": "connector-sync-all",
+            "force": force,
+            "selected_connector_ids": [str(item.get("connector_id", "")) for item in selected_connectors],
+            "connector_ids": [result.connector_id for result in connector_results],
+            "registry_connector_count": len(connectors),
+            "synced_connector_count": len(connector_results),
+            "total_result_count": sum(result.synced_count for result in connector_results),
+            "registry_path": workspace.relative_path(workspace.connector_registry_path),
+            "connector_run_manifest_paths": [
+                workspace.relative_path(result.run_manifest_path) for result in connector_results
+            ],
+            "connector_change_summary_paths": [
+                workspace.relative_path(result.change_summary_path) for result in connector_results
+            ],
+            "status": "completed",
+        },
+    )
+
+    return ConnectorBatchSyncResult(
+        connector_count=len(connectors),
+        synced_connector_count=len(connector_results),
+        total_result_count=sum(result.synced_count for result in connector_results),
+        registry_path=workspace.connector_registry_path,
+        run_manifest_path=run_manifest_path,
+        connector_results=connector_results,
     )
 
 

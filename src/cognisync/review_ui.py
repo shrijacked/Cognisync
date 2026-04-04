@@ -21,7 +21,7 @@ from cognisync.maintenance import (
     reopen_review_item,
     resolve_entity_merge,
 )
-from cognisync.connectors import ConnectorError, list_connectors, sync_connector
+from cognisync.connectors import ConnectorError, list_connectors, sync_all_connectors, sync_connector
 from cognisync.jobs import JobError, list_jobs, run_job_worker
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.linter import lint_snapshot
@@ -647,6 +647,10 @@ def _render_connector_actions(item: Dict[str, object]) -> str:
     return _render_inline_form("/api/connectors/sync", [("connector_id", connector_id)], "Sync")
 
 
+def _render_connector_global_actions() -> str:
+    return _render_inline_form("/api/connectors/sync-all", [], "Sync all connectors")
+
+
 def _render_inline_form(
     action: str,
     hidden_fields: Sequence[tuple[str, str]],
@@ -844,6 +848,7 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
         "          <div class=\"toolbar\">",
         f"            <span class=\"pill\">connectors <strong>{escape(str(connectors.get('total_count', 0)))}</strong></span>",
         f"            <span class=\"pill warn\">synced <strong>{escape(str(connectors.get('synced_count', 0)))}</strong></span>",
+        f"            <span>{_render_connector_global_actions()}</span>",
         "          </div>",
         _render_kind_table("Connector Kinds", counts_by_kind),
         "          <h3>Registered Connectors</h3>",
@@ -2662,6 +2667,9 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/connectors/sync":
             sync_connector(workspace, payload.get("connector_id", ""), force=False)
+            return
+        if path == "/api/connectors/sync-all":
+            sync_all_connectors(workspace, force=False)
             return
         if path == "/api/review/accept-concept":
             accept_concept_candidate(workspace, payload.get("slug", ""))

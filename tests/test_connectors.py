@@ -13,6 +13,61 @@ from cognisync.cli import main
 
 
 class ConnectorTests(unittest.TestCase):
+    def test_connector_sync_all_runs_every_registered_connector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Connector Sync All Workspace"]), 0)
+
+            first_url = "data:text/html;charset=utf-8," + quote("<html><head><title>First Source</title></head><body><p>One.</p></body></html>")
+            second_url = "data:text/html;charset=utf-8," + quote("<html><head><title>Second Source</title></head><body><p>Two.</p></body></html>")
+
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        first_url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "first-source",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        second_url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "second-source",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                sync_exit = main(["connector", "sync-all", "--workspace", str(root)])
+            self.assertEqual(sync_exit, 0)
+            self.assertIn("Synced 2 connector(s).", stdout.getvalue())
+            self.assertIn("Imported 2 source artifact(s).", stdout.getvalue())
+
+            self.assertTrue((root / "raw" / "urls" / "first-source.md").exists())
+            self.assertTrue((root / "raw" / "urls" / "second-source.md").exists())
+
+            registry = json.loads((root / ".cognisync" / "connectors.json").read_text(encoding="utf-8"))
+            connectors = sorted(registry["connectors"], key=lambda item: item["connector_id"])
+            self.assertEqual(len(connectors), 2)
+            self.assertTrue(all(connector["last_synced_at"] for connector in connectors))
+            self.assertEqual(sum(int(connector["last_result_count"]) for connector in connectors), 2)
+
     def test_connector_add_list_and_sync_repo_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -123,6 +178,74 @@ class ConnectorTests(unittest.TestCase):
             ]
             self.assertEqual(manifest_payloads[0]["job_type"], "connector_sync")
             self.assertEqual(manifest_payloads[0]["result"]["connector_kind"], "urls")
+
+    def test_connector_sync_all_jobs_flow_through_the_worker_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Connector Batch Job Workspace"]), 0)
+
+            first_url = "data:text/html;charset=utf-8," + quote("<html><head><title>Batch First</title></head><body><p>One.</p></body></html>")
+            second_url = "data:text/html;charset=utf-8," + quote("<html><head><title>Batch Second</title></head><body><p>Two.</p></body></html>")
+
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        first_url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "batch-first",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        second_url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "batch-second",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "connector-sync-all",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                work_exit = main(["jobs", "work", "--workspace", str(root), "--max-jobs", "1"])
+            self.assertEqual(work_exit, 0)
+            self.assertIn("Processed 1 job(s): 1 completed, 0 failed.", stdout.getvalue())
+
+            self.assertTrue((root / "raw" / "urls" / "batch-first.md").exists())
+            self.assertTrue((root / "raw" / "urls" / "batch-second.md").exists())
+
+            manifest_payloads = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted((root / ".cognisync" / "jobs" / "manifests").glob("*.json"))
+            ]
+            self.assertEqual(manifest_payloads[0]["job_type"], "connector_sync_all")
+            self.assertEqual(manifest_payloads[0]["result"]["synced_connector_count"], 2)
+            self.assertEqual(manifest_payloads[0]["result"]["total_result_count"], 2)
 
 
 if __name__ == "__main__":

@@ -190,6 +190,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("action=\"/api/review/dismiss\"", html)
             self.assertIn("action=\"/api/jobs/run-next\"", html)
             self.assertIn("action=\"/api/connectors/sync\"", html)
+            self.assertIn("action=\"/api/connectors/sync-all\"", html)
             self.assertIn("action=\"/api/review/reopen\"", html)
             self.assertIn("Wrote review UI to", stdout.getvalue())
             self.assertIn("Wrote review UI state to", stdout.getvalue())
@@ -267,6 +268,22 @@ class ReviewUiTests(unittest.TestCase):
                         str(root),
                         "--name",
                         "server-connector",
+                    ]
+                ),
+                0,
+            )
+            second_connector_url = "data:text/html;charset=utf-8,<html><head><title>Batch Connector</title></head><body><p>Second connector body.</p></body></html>"
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        second_connector_url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "batch-connector",
                     ]
                 ),
                 0,
@@ -364,6 +381,20 @@ class ReviewUiTests(unittest.TestCase):
                 connection.close()
 
                 self.assertTrue((workspace.raw_dir / "urls" / "server-connector.md").exists())
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/connectors/sync-all",
+                    body="",
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                self.assertTrue((workspace.raw_dir / "urls" / "batch-connector.md").exists())
             finally:
                 server.shutdown()
                 server.server_close()
