@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime
 from pathlib import Path
 
 from tests import support  # noqa: F401
@@ -13,6 +14,81 @@ from cognisync.config import LLMProfile, load_config, save_config
 
 
 class JobsAndSyncTests(unittest.TestCase):
+    def test_job_heartbeat_extends_the_active_worker_lease(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Heartbeat Workspace"]), 0)
+
+            (root / "raw" / "retrieval.md").write_text(
+                "# Retrieval Systems\n\nAgent memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "claim-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                        "--lease-seconds",
+                        "60",
+                    ]
+                ),
+                0,
+            )
+
+            manifest_path = next((root / ".cognisync" / "jobs" / "manifests").glob("*.json"))
+            original_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            original_expiry = datetime.fromisoformat(original_payload["lease"]["lease_expires_at"])
+            self.assertNotIn("last_heartbeat_at", original_payload["lease"])
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                heartbeat_exit = main(
+                    [
+                        "jobs",
+                        "heartbeat",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                        "--lease-seconds",
+                        "600",
+                    ]
+                )
+            self.assertEqual(heartbeat_exit, 0)
+            self.assertIn("Renewed lease", stdout.getvalue())
+
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            renewed_expiry = datetime.fromisoformat(payload["lease"]["lease_expires_at"])
+            self.assertGreater(renewed_expiry, original_expiry)
+            self.assertEqual(payload["lease"]["worker_id"], "worker-a")
+            self.assertEqual(payload["lease"]["claim_count"], 1)
+            self.assertTrue(payload["lease"]["last_heartbeat_at"])
+
+            queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+            queued_job = queue_payload["jobs"][0]
+            self.assertEqual(queued_job["worker_id"], "worker-a")
+            self.assertEqual(queued_job["status"], "claimed")
+            self.assertEqual(queued_job["last_heartbeat_at"], payload["lease"]["last_heartbeat_at"])
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "run-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-b",
+                    ]
+                ),
+                2,
+            )
+
     def test_jobs_can_be_claimed_and_run_by_a_specific_worker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

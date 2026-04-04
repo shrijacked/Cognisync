@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from typing import Dict, List
 
@@ -125,9 +126,8 @@ def build_notification_manifest(workspace: Workspace) -> Dict[str, object]:
             )
 
     connector_payload = _read_json(workspace.connector_registry_path)
-    unsynced_connectors = [
-        item for item in list(connector_payload.get("connectors", [])) if not item.get("last_synced_at")
-    ]
+    connectors = list(connector_payload.get("connectors", []))
+    unsynced_connectors = [item for item in connectors if not item.get("last_synced_at")]
     if unsynced_connectors:
         notifications.append(
             {
@@ -138,6 +138,19 @@ def build_notification_manifest(workspace: Workspace) -> Dict[str, object]:
                 "detail": "Registered connectors exist but have not been pulled into the workspace yet.",
                 "path": workspace.relative_path(workspace.connector_registry_path),
                 "related_paths": [str(item.get("connector_id", "")) for item in unsynced_connectors[:8]],
+            }
+        )
+    due_connectors = [item for item in connectors if _connector_is_due(item)]
+    if due_connectors:
+        notifications.append(
+            {
+                "id": "connector-due",
+                "kind": "connector_due",
+                "severity": "info",
+                "title": f"Connector registry has {len(due_connectors)} scheduled connector(s) due",
+                "detail": "Scheduled connector subscriptions are ready for a sync pass.",
+                "path": workspace.relative_path(workspace.connector_registry_path),
+                "related_paths": [str(item.get("connector_id", "")) for item in due_connectors[:8]],
             }
         )
 
@@ -165,3 +178,16 @@ def _read_json(path) -> Dict[str, object]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _connector_is_due(connector: Dict[str, object]) -> bool:
+    subscription = dict(connector.get("subscription", {}))
+    if not bool(subscription.get("enabled", False)):
+        return False
+    next_sync_at = str(subscription.get("next_sync_at", "") or "").strip()
+    if not next_sync_at:
+        return True
+    try:
+        return datetime.fromisoformat(next_sync_at) <= datetime.now(timezone.utc)
+    except ValueError:
+        return True

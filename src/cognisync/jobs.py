@@ -51,6 +51,17 @@ class JobClaimResult:
     status: str
 
 
+@dataclass(frozen=True)
+class JobHeartbeatResult:
+    job_manifest_path: Path
+    queue_manifest_path: Path
+    job_id: str
+    job_type: str
+    worker_id: str
+    lease_expires_at: str
+    status: str
+
+
 def enqueue_research_job(
     workspace: Workspace,
     question: str,
@@ -110,6 +121,7 @@ def enqueue_connector_sync_all_job(
     workspace: Workspace,
     force: bool = False,
     limit: Optional[int] = None,
+    scheduled_only: bool = False,
 ) -> Path:
     return _enqueue_job(
         workspace,
@@ -118,6 +130,7 @@ def enqueue_connector_sync_all_job(
         {
             "force": force,
             "limit": limit,
+            "scheduled_only": scheduled_only,
         },
     )
 
@@ -171,6 +184,15 @@ def render_jobs_list(workspace: Workspace) -> str:
         status = str(job.get("status", "unknown"))
         status_counts[status] = status_counts.get(status, 0) + 1
     lines.append(f"- Status counts: `{json.dumps(dict(sorted(status_counts.items())), sort_keys=True)}`")
+    active_workers = sorted(
+        {
+            str(dict(job.get("lease", {})).get("worker_id", "")).strip()
+            for job in jobs
+            if _job_has_active_lease(job) and str(dict(job.get("lease", {})).get("worker_id", "")).strip()
+        }
+    )
+    if active_workers:
+        lines.append(f"- Active workers: `{json.dumps(active_workers)}`")
     oldest_queued = next((job for job in jobs if str(job.get("status", "")) == "queued"), None)
     if oldest_queued is not None:
         lines.append(f"- Oldest queued job: `{oldest_queued.get('job_id', '')}`")
@@ -264,6 +286,47 @@ def claim_next_job(
     )
 
 
+def heartbeat_job(
+    workspace: Workspace,
+    worker_id: str,
+    lease_seconds: int = 300,
+) -> JobHeartbeatResult:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    if lease_seconds < 1:
+        raise JobError("Lease seconds must be at least 1.")
+
+    job = _find_active_job_for_worker(list_jobs(workspace), normalized_worker_id)
+    if job is None:
+        raise JobError(f"No active job lease found for worker {normalized_worker_id}.")
+
+    manifest_path = workspace.job_manifests_dir / f"{job['job_id']}.json"
+    current_lease = dict(job.get("lease", {}))
+    heartbeat_at = utc_timestamp()
+    lease = _build_lease_payload(
+        worker_id=normalized_worker_id,
+        lease_seconds=lease_seconds,
+        claim_count=_existing_claim_count(job) or 1,
+        claimed_at=str(current_lease.get("claimed_at", "")) or None,
+        last_heartbeat_at=heartbeat_at,
+    )
+    job = _update_job_manifest(
+        manifest_path,
+        lease=lease,
+        claim_count=lease["claim_count"],
+        audit_entry=f"Lease renewed by {normalized_worker_id} until {lease['lease_expires_at']}.",
+    )
+    queue_manifest_path = _write_queue_manifest(workspace)
+    return JobHeartbeatResult(
+        job_manifest_path=manifest_path,
+        queue_manifest_path=queue_manifest_path,
+        job_id=str(job["job_id"]),
+        job_type=str(job["job_type"]),
+        worker_id=normalized_worker_id,
+        lease_expires_at=str(lease["lease_expires_at"]),
+        status=str(job["status"]),
+    )
+
+
 def run_job_worker(
     workspace: Workspace,
     max_jobs: Optional[int] = None,
@@ -321,6 +384,7 @@ def run_next_job(
         worker_id=normalized_worker_id,
         lease_seconds=lease_seconds,
         claim_count=claim_count or 1,
+        claimed_at=str(dict(job.get("lease", {})).get("claimed_at", "")) or None,
     )
     attempts = int(job.get("attempts", 0) or 0)
     started_at = str(job.get("started_at", "")) or utc_timestamp()
@@ -450,6 +514,7 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             workspace,
             force=bool(parameters.get("force", False)),
             limit=int(parameters["limit"]) if parameters.get("limit") is not None else None,
+            scheduled_only=bool(parameters.get("scheduled_only", False)),
         )
         return {
             "run_manifest_path": workspace.relative_path(result.run_manifest_path),
@@ -457,6 +522,7 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "connector_count": result.connector_count,
             "synced_connector_count": result.synced_connector_count,
             "total_result_count": result.total_result_count,
+            "scheduled_only": bool(parameters.get("scheduled_only", False)),
             "connector_run_manifest_paths": [
                 workspace.relative_path(item.run_manifest_path) for item in result.connector_results
             ],
@@ -599,6 +665,7 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
                 "updated_at": str(job.get("updated_at", "")),
                 "worker_id": str(dict(job.get("lease", {})).get("worker_id", "")),
                 "lease_expires_at": str(dict(job.get("lease", {})).get("lease_expires_at", "")),
+                "last_heartbeat_at": str(dict(job.get("lease", {})).get("last_heartbeat_at", "")),
                 "retry_of_job_id": str(job.get("retry_of_job_id", "") or ""),
             }
             for job in jobs
@@ -649,18 +716,27 @@ def _existing_claim_count(job: Dict[str, object]) -> int:
     return int(lease.get("claim_count", job.get("claim_count", 0)) or 0)
 
 
-def _build_lease_payload(worker_id: str, lease_seconds: int, claim_count: int) -> Dict[str, object]:
-    claimed_at = utc_timestamp()
+def _build_lease_payload(
+    worker_id: str,
+    lease_seconds: int,
+    claim_count: int,
+    claimed_at: Optional[str] = None,
+    last_heartbeat_at: Optional[str] = None,
+) -> Dict[str, object]:
+    claimed_at = claimed_at or utc_timestamp()
     expires_at = (
         datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
     ).replace(microsecond=0).isoformat()
-    return {
+    payload = {
         "worker_id": worker_id,
         "claimed_at": claimed_at,
         "lease_expires_at": expires_at,
         "lease_seconds": lease_seconds,
         "claim_count": claim_count,
     }
+    if last_heartbeat_at:
+        payload["last_heartbeat_at"] = last_heartbeat_at
+    return payload
 
 
 def _select_claimable_job(jobs: List[Dict[str, object]]) -> Optional[Dict[str, object]]:

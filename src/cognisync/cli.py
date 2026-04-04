@@ -20,7 +20,15 @@ from cognisync.adapters import (
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import MaintenancePolicy, save_config
-from cognisync.connectors import ConnectorError, add_connector, render_connector_list, sync_all_connectors, sync_connector
+from cognisync.connectors import (
+    ConnectorError,
+    add_connector,
+    render_connector_list,
+    subscribe_connector,
+    sync_all_connectors,
+    sync_connector,
+    unsubscribe_connector,
+)
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
 from cognisync.evaluation import evaluate_research_runs, export_feedback_bundle
@@ -52,6 +60,7 @@ from cognisync.jobs import (
     enqueue_lint_job,
     enqueue_maintain_job,
     enqueue_research_job,
+    heartbeat_job,
     retry_job,
     render_jobs_list,
     run_job_worker,
@@ -248,6 +257,7 @@ def cmd_jobs_enqueue_connector_sync_all(args: argparse.Namespace) -> int:
         workspace,
         force=args.force,
         limit=args.limit,
+        scheduled_only=args.scheduled_only,
     )
     print(f"Queued connector-sync-all job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
@@ -321,6 +331,26 @@ def cmd_jobs_run_next(args: argparse.Namespace) -> int:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Completed job {result.job_id} ({result.job_type}) with status {result.status}.")
+    print(f"Job manifest: {result.job_manifest_path}")
+    print(f"Queue summary: {result.queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_heartbeat(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = heartbeat_job(
+            workspace,
+            worker_id=args.worker_id,
+            lease_seconds=args.lease_seconds,
+        )
+    except JobError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(
+        f"Renewed lease for job {result.job_id} ({result.job_type}) "
+        f"for worker {result.worker_id} until {result.lease_expires_at}."
+    )
     print(f"Job manifest: {result.job_manifest_path}")
     print(f"Queue summary: {result.queue_manifest_path}")
     return 0
@@ -515,6 +545,7 @@ def cmd_connector_sync_all(args: argparse.Namespace) -> int:
             workspace,
             force=args.force,
             limit=args.limit,
+            scheduled_only=args.scheduled_only,
         )
     except ConnectorError as error:
         print(str(error), file=sys.stderr)
@@ -523,6 +554,37 @@ def cmd_connector_sync_all(args: argparse.Namespace) -> int:
     print(f"Imported {result.total_result_count} source artifact(s).")
     print(f"Wrote batch run manifest to {result.run_manifest_path}")
     print(f"Connector registry: {result.registry_path}")
+    return 0
+
+
+def cmd_connector_subscribe(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        connector = subscribe_connector(
+            workspace,
+            connector_id=args.connector_id,
+            every_hours=args.every_hours,
+        )
+    except ConnectorError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(
+        f"Subscribed connector {connector['connector_id']} "
+        f"for every {connector['subscription']['interval_hours']} hour(s)."
+    )
+    print(f"Connector registry: {workspace.connector_registry_path}")
+    return 0
+
+
+def cmd_connector_unsubscribe(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        connector = unsubscribe_connector(workspace, connector_id=args.connector_id)
+    except ConnectorError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Unsubscribed connector {connector['connector_id']}")
+    print(f"Connector registry: {workspace.connector_registry_path}")
     return 0
 
 
@@ -1335,6 +1397,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_connector_sync_all_parser.add_argument("--workspace", default=".")
     jobs_enqueue_connector_sync_all_parser.add_argument("--force", action="store_true")
     jobs_enqueue_connector_sync_all_parser.add_argument("--limit", type=int, default=None)
+    jobs_enqueue_connector_sync_all_parser.add_argument("--scheduled-only", action="store_true")
     jobs_enqueue_connector_sync_all_parser.set_defaults(func=cmd_jobs_enqueue_connector_sync_all)
 
     jobs_enqueue_lint_parser = jobs_enqueue_subparsers.add_parser(
@@ -1379,6 +1442,15 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_run_next_parser.add_argument("--worker-id", default="local-worker")
     jobs_run_next_parser.add_argument("--lease-seconds", type=int, default=300)
     jobs_run_next_parser.set_defaults(func=cmd_jobs_run_next)
+
+    jobs_heartbeat_parser = jobs_subparsers.add_parser(
+        "heartbeat",
+        help="Renew the active lease for a worker's currently claimed or running job",
+    )
+    jobs_heartbeat_parser.add_argument("--workspace", default=".")
+    jobs_heartbeat_parser.add_argument("--worker-id", default="local-worker")
+    jobs_heartbeat_parser.add_argument("--lease-seconds", type=int, default=300)
+    jobs_heartbeat_parser.set_defaults(func=cmd_jobs_heartbeat)
 
     jobs_retry_parser = jobs_subparsers.add_parser("retry", help="Re-queue a terminal job for another attempt")
     jobs_retry_parser.add_argument("job_id")
@@ -1442,7 +1514,25 @@ def build_parser() -> argparse.ArgumentParser:
     connector_sync_all_parser.add_argument("--workspace", default=".")
     connector_sync_all_parser.add_argument("--force", action="store_true")
     connector_sync_all_parser.add_argument("--limit", type=int, default=None)
+    connector_sync_all_parser.add_argument("--scheduled-only", action="store_true")
     connector_sync_all_parser.set_defaults(func=cmd_connector_sync_all)
+
+    connector_subscribe_parser = connector_subparsers.add_parser(
+        "subscribe",
+        help="Enable scheduled syncs for a connector in the local registry",
+    )
+    connector_subscribe_parser.add_argument("connector_id")
+    connector_subscribe_parser.add_argument("--workspace", default=".")
+    connector_subscribe_parser.add_argument("--every-hours", type=int, required=True)
+    connector_subscribe_parser.set_defaults(func=cmd_connector_subscribe)
+
+    connector_unsubscribe_parser = connector_subparsers.add_parser(
+        "unsubscribe",
+        help="Disable scheduled syncs for a connector",
+    )
+    connector_unsubscribe_parser.add_argument("connector_id")
+    connector_unsubscribe_parser.add_argument("--workspace", default=".")
+    connector_unsubscribe_parser.set_defaults(func=cmd_connector_unsubscribe)
 
     ingest_parser = subparsers.add_parser("ingest", help="Bring source material into raw/")
     ingest_subparsers = ingest_parser.add_subparsers(dest="ingest_command", required=True)

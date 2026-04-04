@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -42,6 +43,54 @@ class ConnectorBatchSyncResult:
     connector_results: List[ConnectorSyncResult]
 
 
+def subscribe_connector(
+    workspace: Workspace,
+    connector_id: str,
+    every_hours: int,
+) -> Dict[str, object]:
+    if every_hours < 1:
+        raise ConnectorError("Connector subscription intervals must be at least 1 hour.")
+
+    registry = _load_connector_registry(workspace)
+    connectors = list(registry.get("connectors", []))
+    connector = next((item for item in connectors if str(item.get("connector_id", "")) == connector_id), None)
+    if connector is None:
+        raise ConnectorError(f"Could not find connector '{connector_id}'.")
+
+    subscribed_at = utc_timestamp()
+    connector["subscription"] = {
+        "enabled": True,
+        "interval_hours": every_hours,
+        "subscribed_at": subscribed_at,
+        "next_sync_at": subscribed_at,
+        "last_scheduled_sync_at": str(dict(connector.get("subscription", {})).get("last_scheduled_sync_at", "")) or None,
+    }
+    connector["updated_at"] = subscribed_at
+    registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
+    _write_connector_registry(workspace, registry)
+    write_notifications_manifest(workspace)
+    return connector
+
+
+def unsubscribe_connector(workspace: Workspace, connector_id: str) -> Dict[str, object]:
+    registry = _load_connector_registry(workspace)
+    connectors = list(registry.get("connectors", []))
+    connector = next((item for item in connectors if str(item.get("connector_id", "")) == connector_id), None)
+    if connector is None:
+        raise ConnectorError(f"Could not find connector '{connector_id}'.")
+
+    subscription = _normalize_subscription(connector.get("subscription", {}))
+    subscription["enabled"] = False
+    subscription["interval_hours"] = None
+    subscription["next_sync_at"] = None
+    connector["subscription"] = subscription
+    connector["updated_at"] = utc_timestamp()
+    registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
+    _write_connector_registry(workspace, registry)
+    write_notifications_manifest(workspace)
+    return connector
+
+
 def add_connector(
     workspace: Workspace,
     kind: str,
@@ -71,6 +120,7 @@ def add_connector(
         "last_change_summary_path": None,
         "last_run_manifest_path": None,
         "last_result_count": 0,
+        "subscription": _normalize_subscription({}),
     }
     connectors.append(record)
     registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
@@ -104,6 +154,13 @@ def render_connector_list(workspace: Workspace) -> str:
             f"`{connector.get('kind', '')}` "
             f"{connector.get('source', '')}"
         )
+        subscription = _normalize_subscription(connector.get("subscription", {}))
+        if bool(subscription.get("enabled")):
+            lines.append(
+                "  "
+                f"schedule: every {subscription.get('interval_hours', '?')}h"
+                f" next {subscription.get('next_sync_at') or 'unscheduled'}"
+            )
     return "\n".join(lines)
 
 
@@ -111,6 +168,7 @@ def sync_connector(
     workspace: Workspace,
     connector_id: str,
     force: bool = False,
+    scheduled: bool = False,
 ) -> ConnectorSyncResult:
     registry = _load_connector_registry(workspace)
     connectors = list(registry.get("connectors", []))
@@ -136,17 +194,20 @@ def sync_connector(
             "connector_id": connector_id,
             "connector_kind": str(connector.get("kind", "")),
             "connector_source": str(connector.get("source", "")),
+            "scheduled": scheduled,
             "result_paths": [workspace.relative_path(result.path) for result in results],
             "change_summary_path": workspace.relative_path(change_summary.path),
             "status": "completed",
         },
     )
 
-    connector["updated_at"] = utc_timestamp()
-    connector["last_synced_at"] = utc_timestamp()
+    synced_at = utc_timestamp()
+    connector["updated_at"] = synced_at
+    connector["last_synced_at"] = synced_at
     connector["last_change_summary_path"] = workspace.relative_path(change_summary.path)
     connector["last_run_manifest_path"] = workspace.relative_path(run_manifest_path)
     connector["last_result_count"] = len(results)
+    connector["subscription"] = _advance_subscription(connector.get("subscription", {}), synced_at, scheduled=scheduled)
     registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
     _write_connector_registry(workspace, registry)
 
@@ -165,12 +226,16 @@ def sync_all_connectors(
     workspace: Workspace,
     force: bool = False,
     limit: Optional[int] = None,
+    scheduled_only: bool = False,
 ) -> ConnectorBatchSyncResult:
     connectors = list_connectors(workspace)
     if not connectors:
         raise ConnectorError("No connector definitions found.")
 
-    pending_connectors = connectors if force else [connector for connector in connectors if not connector.get("last_synced_at")]
+    if scheduled_only:
+        pending_connectors = [connector for connector in connectors if _connector_subscription_is_due(connector)]
+    else:
+        pending_connectors = connectors if force else [connector for connector in connectors if not connector.get("last_synced_at")]
     selected_connectors = pending_connectors[:limit] if limit is not None else pending_connectors
     connector_results: List[ConnectorSyncResult] = []
     for connector in selected_connectors:
@@ -179,6 +244,7 @@ def sync_all_connectors(
                 workspace,
                 connector_id=str(connector.get("connector_id", "")),
                 force=force,
+                scheduled=scheduled_only,
             )
         )
 
@@ -188,6 +254,7 @@ def sync_all_connectors(
         {
             "run_label": "connector-sync-all",
             "force": force,
+            "scheduled_only": scheduled_only,
             "selected_connector_ids": [str(item.get("connector_id", "")) for item in selected_connectors],
             "connector_ids": [result.connector_id for result in connector_results],
             "registry_connector_count": len(connectors),
@@ -238,13 +305,17 @@ def _load_connector_registry(workspace: Workspace) -> Dict[str, object]:
             "generated_at": utc_timestamp(),
             "connectors": [],
         }
-    return json.loads(workspace.connector_registry_path.read_text(encoding="utf-8"))
+    payload = json.loads(workspace.connector_registry_path.read_text(encoding="utf-8"))
+    connectors = [_normalize_connector_record(item) for item in list(payload.get("connectors", []))]
+    payload["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
+    return payload
 
 
 def _write_connector_registry(workspace: Workspace, payload: Dict[str, object]) -> None:
     payload = dict(payload)
     payload["schema_version"] = 1
     payload["generated_at"] = utc_timestamp()
+    payload["connectors"] = [_normalize_connector_record(item) for item in list(payload.get("connectors", []))]
     workspace.connector_registry_path.parent.mkdir(parents=True, exist_ok=True)
     workspace.connector_registry_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True),
@@ -273,3 +344,55 @@ def _resolve_local_source_path(workspace: Workspace, source: str) -> Path:
 def _looks_like_remote_source(source: str) -> bool:
     normalized = source.strip().lower()
     return "://" in normalized or normalized.startswith("data:")
+
+
+def _normalize_connector_record(connector: Dict[str, object]) -> Dict[str, object]:
+    normalized = dict(connector)
+    normalized["subscription"] = _normalize_subscription(connector.get("subscription", {}))
+    return normalized
+
+
+def _normalize_subscription(subscription: object) -> Dict[str, object]:
+    payload = dict(subscription) if isinstance(subscription, dict) else {}
+    interval_hours = payload.get("interval_hours")
+    try:
+        normalized_interval = int(interval_hours) if interval_hours is not None else None
+    except (TypeError, ValueError):
+        normalized_interval = None
+    return {
+        "enabled": bool(payload.get("enabled", False)),
+        "interval_hours": normalized_interval,
+        "subscribed_at": str(payload.get("subscribed_at", "")) or None,
+        "next_sync_at": str(payload.get("next_sync_at", "")) or None,
+        "last_scheduled_sync_at": str(payload.get("last_scheduled_sync_at", "")) or None,
+    }
+
+
+def _advance_subscription(subscription: object, synced_at: str, scheduled: bool) -> Dict[str, object]:
+    payload = _normalize_subscription(subscription)
+    if not bool(payload.get("enabled")):
+        return payload
+    interval_hours = payload.get("interval_hours")
+    if interval_hours is None:
+        return payload
+    if scheduled:
+        payload["last_scheduled_sync_at"] = synced_at
+    payload["next_sync_at"] = _future_timestamp(hours=int(interval_hours))
+    return payload
+
+
+def _connector_subscription_is_due(connector: Dict[str, object]) -> bool:
+    subscription = _normalize_subscription(connector.get("subscription", {}))
+    if not bool(subscription.get("enabled")):
+        return False
+    next_sync_at = str(subscription.get("next_sync_at", "") or "").strip()
+    if not next_sync_at:
+        return True
+    try:
+        return datetime.fromisoformat(next_sync_at) <= datetime.now(timezone.utc)
+    except ValueError:
+        return True
+
+
+def _future_timestamp(*, hours: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).replace(microsecond=0).isoformat()
