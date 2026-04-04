@@ -5,6 +5,7 @@
 - added `cognisync export jsonl` so research runs can be emitted as portable JSONL dataset artifacts
 - added `cognisync export training-bundle` so research runs can be packaged as label-bearing training datasets
 - added `cognisync export finetune-bundle` so research runs and synthetic graph-derived examples can be emitted together as supervised and retrieval datasets
+- added `--provider-format openai-chat` to `cognisync export finetune-bundle` so the same bundle can emit OpenAI-ready chat records without a separate conversion step
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
 - added `cognisync synth qa` and `cognisync synth contrastive` so the assertion graph can emit deterministic synthetic QA and retrieval data

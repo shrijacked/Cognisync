@@ -123,6 +123,7 @@ Supported paths in this release:
 - `cognisync export jsonl`
 - `cognisync export training-bundle`
 - `cognisync export finetune-bundle`
+- `cognisync export finetune-bundle --provider-format openai-chat`
 - `cognisync export presentations`
 - `cognisync eval research`
 - `cognisync synth qa`
@@ -150,6 +151,8 @@ Supported paths in this release:
 - `supervised.jsonl` examples sourced from persisted research runs plus synthetic QA records
 - `retrieval.jsonl` contrastive retrieval examples sourced from assertion support paths
 - a bundle `manifest.json` with supervised and retrieval counts plus example-type tallies
+
+You can also ask the same bundle to emit provider-specific supervised records. For example, `--provider-format openai-chat` writes `supervised.openai-chat.jsonl` with `messages` arrays for direct chat-finetuning flows while keeping the generic files intact.
 
 `eval research` reads the same persisted research runs and writes a Markdown scorecard plus JSON payload with:
 
