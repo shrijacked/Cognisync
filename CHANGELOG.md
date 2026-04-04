@@ -46,6 +46,7 @@
 - expanded `cognisync ui review` again with a workspace-access panel sourced from `.cognisync/access.json`
 - expanded `cognisync ui review` again with audit-history and usage-summary panels sourced from `.cognisync/audit.json` and `.cognisync/usage.json`
 - taught served review dashboards to run as an explicit workspace actor with role-gated live actions, so review work can be browser-driven without giving every actor operator powers
+- expanded `cognisync ui review` with a worker panel sourced from `.cognisync/jobs/workers.json`
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions
