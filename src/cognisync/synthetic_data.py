@@ -21,6 +21,19 @@ class SyntheticBundleResult:
 
 
 def export_synthetic_qa_bundle(workspace: Workspace, output_dir: Optional[Path] = None) -> SyntheticBundleResult:
+    records = build_synthetic_qa_records(workspace)
+    return _write_bundle(workspace, "synthetic-qa", records, output_dir=output_dir)
+
+
+def export_synthetic_contrastive_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+) -> SyntheticBundleResult:
+    records = build_synthetic_contrastive_records(workspace)
+    return _write_bundle(workspace, "synthetic-contrastive", records, output_dir=output_dir)
+
+
+def build_synthetic_qa_records(workspace: Workspace) -> List[Dict[str, object]]:
     snapshot = _ensure_snapshot(workspace)
     graph_manifest = build_graph_manifest(workspace, snapshot)
     assertions = _assertion_nodes(graph_manifest)
@@ -44,17 +57,15 @@ def export_synthetic_qa_bundle(workspace: Workspace, output_dir: Optional[Path] 
                     "object": assertion["object"],
                 },
                 "citations": citations,
+                "support_paths": support_paths,
                 "source_paths": support_paths,
                 "support_count": len(support_paths),
             }
         )
-    return _write_bundle(workspace, "synthetic-qa", records, output_dir=output_dir)
+    return records
 
 
-def export_synthetic_contrastive_bundle(
-    workspace: Workspace,
-    output_dir: Optional[Path] = None,
-) -> SyntheticBundleResult:
+def build_synthetic_contrastive_records(workspace: Workspace) -> List[Dict[str, object]]:
     snapshot = _ensure_snapshot(workspace)
     graph_manifest = build_graph_manifest(workspace, snapshot)
     assertions = _assertion_nodes(graph_manifest)
@@ -81,7 +92,7 @@ def export_synthetic_contrastive_bundle(
                 "support_paths": support_paths,
             }
         )
-    return _write_bundle(workspace, "synthetic-contrastive", records, output_dir=output_dir)
+    return records
 
 
 def _ensure_snapshot(workspace: Workspace) -> IndexSnapshot:

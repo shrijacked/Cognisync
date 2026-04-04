@@ -75,6 +75,78 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(manifest["label_counts"]["validation_passed"], 1)
             self.assertIn("Wrote training export to", stdout.getvalue())
 
+    def test_export_finetune_bundle_writes_supervised_and_retrieval_sets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Finetune Export Workspace"]), 0)
+
+            (root / "raw" / "memory-a.md").write_text(
+                "# Memory A\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory-b.md").write_text(
+                "# Memory B\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "planning.md").write_text(
+                "# Planning\n\nAgent planning prefers explicit checkpoints.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(root / ".cognisync" / "config.json")
+            config.llm_profiles["researcher"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent memory uses vector databases. [S1]')",
+                ]
+            )
+            save_config(root / ".cognisync" / "config.json", config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "researcher",
+                        "how does agent memory work",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["export", "finetune-bundle", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            export_dirs = sorted((root / "outputs" / "reports" / "exports").glob("finetune-bundle-*"))
+            self.assertTrue(export_dirs)
+            supervised_path = export_dirs[-1] / "supervised.jsonl"
+            retrieval_path = export_dirs[-1] / "retrieval.jsonl"
+            manifest_path = export_dirs[-1] / "manifest.json"
+            self.assertTrue(supervised_path.exists())
+            self.assertTrue(retrieval_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            supervised_records = [
+                json.loads(line) for line in supervised_path.read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            retrieval_records = [
+                json.loads(line) for line in retrieval_path.read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(supervised_records)
+            self.assertTrue(retrieval_records)
+            self.assertIn(supervised_records[0]["example_type"], {"research_run", "synthetic_qa"})
+            self.assertEqual(retrieval_records[0]["example_type"], "contrastive_retrieval")
+            self.assertGreaterEqual(manifest["supervised_count"], 1)
+            self.assertGreaterEqual(manifest["retrieval_count"], 1)
+            self.assertIn("Wrote finetune export to", stdout.getvalue())
+
     def test_export_jsonl_writes_research_dataset_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

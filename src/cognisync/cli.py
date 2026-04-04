@@ -16,7 +16,12 @@ from cognisync.config import MaintenancePolicy, save_config
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
 from cognisync.evaluation import evaluate_research_runs
-from cognisync.exports import export_presentations_bundle, export_research_jsonl, export_training_bundle
+from cognisync.exports import (
+    export_finetune_bundle,
+    export_presentations_bundle,
+    export_research_jsonl,
+    export_training_bundle,
+)
 from cognisync.ingest import (
     IngestError,
     ingest_batch,
@@ -242,6 +247,27 @@ def cmd_export_training_bundle(args: argparse.Namespace) -> int:
     print(f"Wrote training dataset to {result.dataset_path}")
     print(f"Wrote training manifest to {result.manifest_path}")
     print(f"Bundled {result.record_count} research run(s).")
+    return 0
+
+
+def cmd_export_finetune_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_finetune_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote finetune export to {result.directory}")
+    print(f"Wrote supervised dataset to {result.supervised_path}")
+    print(f"Wrote retrieval dataset to {result.retrieval_path}")
+    print(f"Wrote finetune manifest to {result.manifest_path}")
+    print(
+        "Bundled "
+        f"{result.supervised_count} supervised example(s) and "
+        f"{result.retrieval_count} retrieval example(s)."
+    )
     return 0
 
 
@@ -951,6 +977,14 @@ def build_parser() -> argparse.ArgumentParser:
     export_training_parser.add_argument("--workspace", default=".")
     export_training_parser.add_argument("--output-dir", default=None)
     export_training_parser.set_defaults(func=cmd_export_training_bundle)
+
+    export_finetune_parser = export_subparsers.add_parser(
+        "finetune-bundle",
+        help="Export supervised and retrieval datasets for downstream finetuning pipelines",
+    )
+    export_finetune_parser.add_argument("--workspace", default=".")
+    export_finetune_parser.add_argument("--output-dir", default=None)
+    export_finetune_parser.set_defaults(func=cmd_export_finetune_bundle)
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate persisted Cognisync artifacts")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)

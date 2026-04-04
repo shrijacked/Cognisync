@@ -8,6 +8,7 @@ import shutil
 from typing import Dict, List, Optional
 
 from cognisync.manifests import read_json_manifest
+from cognisync.synthetic_data import build_synthetic_contrastive_records, build_synthetic_qa_records
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -31,6 +32,16 @@ class TrainingBundleResult:
     dataset_path: Path
     manifest_path: Path
     record_count: int
+
+
+@dataclass(frozen=True)
+class FinetuneBundleResult:
+    directory: Path
+    supervised_path: Path
+    retrieval_path: Path
+    manifest_path: Path
+    supervised_count: int
+    retrieval_count: int
 
 
 def collect_research_export_records(workspace: Workspace) -> List[Dict[str, object]]:
@@ -165,6 +176,46 @@ def export_training_bundle(
     )
 
 
+def export_finetune_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+) -> FinetuneBundleResult:
+    destination = output_dir or _next_finetune_bundle_dir(workspace)
+    destination.mkdir(parents=True, exist_ok=True)
+    supervised_path = destination / "supervised.jsonl"
+    retrieval_path = destination / "retrieval.jsonl"
+    manifest_path = destination / "manifest.json"
+
+    supervised_records = _build_supervised_finetune_records(workspace)
+    retrieval_records = _build_retrieval_finetune_records(workspace)
+
+    supervised_lines = [json.dumps(record, sort_keys=True) for record in supervised_records]
+    retrieval_lines = [json.dumps(record, sort_keys=True) for record in retrieval_records]
+    supervised_path.write_text("\n".join(supervised_lines) + ("\n" if supervised_lines else ""), encoding="utf-8")
+    retrieval_path.write_text("\n".join(retrieval_lines) + ("\n" if retrieval_lines else ""), encoding="utf-8")
+
+    manifest_payload = {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "bundle_type": "finetune-bundle",
+        "supervised_file": supervised_path.name,
+        "retrieval_file": retrieval_path.name,
+        "supervised_count": len(supervised_records),
+        "retrieval_count": len(retrieval_records),
+        "supervised_example_types": _count_example_types(supervised_records),
+        "retrieval_example_types": _count_example_types(retrieval_records),
+    }
+    manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return FinetuneBundleResult(
+        directory=destination,
+        supervised_path=supervised_path,
+        retrieval_path=retrieval_path,
+        manifest_path=manifest_path,
+        supervised_count=len(supervised_records),
+        retrieval_count=len(retrieval_records),
+    )
+
+
 def derive_research_labels(record: Dict[str, object]) -> Dict[str, object]:
     validation = dict(record.get("validation", {}))
     checks = dict(validation.get("checks", {}))
@@ -181,6 +232,84 @@ def derive_research_labels(record: Dict[str, object]) -> Dict[str, object]:
         "has_unsupported_claims": bool(unsupported_claims.get("errors", [])),
         "has_conflict_gate": bool(source_conflicts.get("errors", [])),
     }
+
+
+def _build_supervised_finetune_records(workspace: Workspace) -> List[Dict[str, object]]:
+    records: List[Dict[str, object]] = []
+    for record in collect_research_export_records(workspace):
+        response_text = str(record.get("answer_text") or record.get("report_text") or "").strip()
+        prompt_text = str(record.get("question") or "").strip()
+        if not prompt_text or not response_text:
+            continue
+        records.append(
+            {
+                "example_type": "research_run",
+                "prompt": prompt_text,
+                "response": response_text,
+                "citations": list(dict(record.get("citations", {})).get("used", [])),
+                "source_paths": list(record.get("sources", [])),
+                "validation_labels": derive_research_labels(record),
+                "metadata": {
+                    "run_id": record.get("run_id"),
+                    "mode": record.get("mode"),
+                    "status": record.get("status"),
+                    "job_profile": record.get("job_profile"),
+                    "run_manifest_path": record.get("run_manifest_path"),
+                    "report_path": record.get("report_path"),
+                    "answer_path": record.get("answer_path"),
+                },
+            }
+        )
+
+    for record in build_synthetic_qa_records(workspace):
+        prompt_text = str(record.get("question") or "").strip()
+        response_text = str(record.get("answer") or "").strip()
+        if not prompt_text or not response_text:
+            continue
+        records.append(
+            {
+                "example_type": "synthetic_qa",
+                "prompt": prompt_text,
+                "response": response_text,
+                "citations": list(record.get("citations", [])),
+                "source_paths": list(record.get("source_paths", [])),
+                "metadata": {
+                    "assertion": dict(record.get("assertion", {})),
+                    "support_count": int(record.get("support_count", 0) or 0),
+                },
+            }
+        )
+    return records
+
+
+def _build_retrieval_finetune_records(workspace: Workspace) -> List[Dict[str, object]]:
+    records: List[Dict[str, object]] = []
+    for record in build_synthetic_contrastive_records(workspace):
+        query_text = str(record.get("query") or "").strip()
+        positive_path = str(record.get("positive_path") or "").strip()
+        negative_path = str(record.get("negative_path") or "").strip()
+        if not query_text or not positive_path or not negative_path:
+            continue
+        records.append(
+            {
+                "example_type": "contrastive_retrieval",
+                "query": query_text,
+                "positive_path": positive_path,
+                "negative_path": negative_path,
+                "support_paths": list(record.get("support_paths", [])),
+                "metadata": {
+                    "assertion": dict(record.get("assertion", {})),
+                },
+            }
+        )
+    return records
+
+
+def _count_example_types(records: List[Dict[str, object]]) -> Dict[str, int]:
+    counts: Dict[str, int] = defaultdict(int)
+    for record in records:
+        counts[str(record.get("example_type", "unknown"))] += 1
+    return dict(sorted(counts.items()))
 
 
 def _build_research_export_record(
@@ -257,5 +386,11 @@ def _next_presentation_bundle_dir(workspace: Workspace) -> Path:
 
 def _next_training_bundle_dir(workspace: Workspace) -> Path:
     directory = workspace.export_artifacts_dir / f"training-bundle-{_timestamp_slug()}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _next_finetune_bundle_dir(workspace: Workspace) -> Path:
+    directory = workspace.export_artifacts_dir / f"finetune-bundle-{_timestamp_slug()}"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
