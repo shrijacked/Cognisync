@@ -36,10 +36,14 @@ from cognisync.ingest import (
 )
 from cognisync.jobs import (
     JobError,
+    enqueue_compile_job,
     enqueue_improve_research_job,
+    enqueue_lint_job,
+    enqueue_maintain_job,
     enqueue_research_job,
     retry_job,
     render_jobs_list,
+    run_job_worker,
     run_next_job,
 )
 from cognisync.linter import lint_snapshot
@@ -205,6 +209,36 @@ def cmd_jobs_enqueue_research(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_jobs_enqueue_compile(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    manifest_path = enqueue_compile_job(workspace, profile_name=args.profile)
+    print(f"Queued compile job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_lint(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    manifest_path = enqueue_lint_job(workspace)
+    print(f"Queued lint job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_maintain(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    manifest_path = enqueue_maintain_job(
+        workspace,
+        max_concepts=args.max_concepts,
+        max_merges=args.max_merges,
+        max_backlinks=args.max_backlinks,
+        max_conflicts=args.max_conflicts,
+    )
+    print(f"Queued maintain job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
 def cmd_jobs_enqueue_improve_research(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     manifest_path = enqueue_improve_research_job(
@@ -246,6 +280,23 @@ def cmd_jobs_retry(args: argparse.Namespace) -> int:
     print(f"Queued retry job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
+
+
+def cmd_jobs_work(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    result = run_job_worker(
+        workspace,
+        max_jobs=args.max_jobs,
+        stop_on_error=args.stop_on_error,
+    )
+    print(
+        "Processed "
+        f"{result.processed_count} job(s): "
+        f"{result.completed_count} completed, "
+        f"{result.failed_count} failed."
+    )
+    print(f"Queue summary: {result.queue_manifest_path}")
+    return 0 if result.failed_count == 0 or not args.stop_on_error else 2
 
 
 def cmd_sync_export(args: argparse.Namespace) -> int:
@@ -1036,6 +1087,32 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_research_parser.add_argument("question")
     jobs_enqueue_research_parser.set_defaults(func=cmd_jobs_enqueue_research)
 
+    jobs_enqueue_compile_parser = jobs_enqueue_subparsers.add_parser(
+        "compile",
+        help="Queue a compile planning run for later worker execution",
+    )
+    jobs_enqueue_compile_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_compile_parser.add_argument("--profile", default=None)
+    jobs_enqueue_compile_parser.set_defaults(func=cmd_jobs_enqueue_compile)
+
+    jobs_enqueue_lint_parser = jobs_enqueue_subparsers.add_parser(
+        "lint",
+        help="Queue a lint pass for later worker execution",
+    )
+    jobs_enqueue_lint_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_lint_parser.set_defaults(func=cmd_jobs_enqueue_lint)
+
+    jobs_enqueue_maintain_parser = jobs_enqueue_subparsers.add_parser(
+        "maintain",
+        help="Queue a maintenance pass for later worker execution",
+    )
+    jobs_enqueue_maintain_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_maintain_parser.add_argument("--max-concepts", type=int, default=10)
+    jobs_enqueue_maintain_parser.add_argument("--max-merges", type=int, default=10)
+    jobs_enqueue_maintain_parser.add_argument("--max-backlinks", type=int, default=10)
+    jobs_enqueue_maintain_parser.add_argument("--max-conflicts", type=int, default=10)
+    jobs_enqueue_maintain_parser.set_defaults(func=cmd_jobs_enqueue_maintain)
+
     jobs_enqueue_improve_parser = jobs_enqueue_subparsers.add_parser(
         "improve-research",
         help="Queue a one-shot research improvement loop for later worker execution",
@@ -1056,6 +1133,15 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_retry_parser.add_argument("--profile", default=None)
     jobs_retry_parser.add_argument("--provider-format", action="append", default=[])
     jobs_retry_parser.set_defaults(func=cmd_jobs_retry)
+
+    jobs_work_parser = jobs_subparsers.add_parser(
+        "work",
+        help="Run queued jobs sequentially until the queue is empty or a limit is reached",
+    )
+    jobs_work_parser.add_argument("--workspace", default=".")
+    jobs_work_parser.add_argument("--max-jobs", type=int, default=None)
+    jobs_work_parser.add_argument("--stop-on-error", action="store_true")
+    jobs_work_parser.set_defaults(func=cmd_jobs_work)
 
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_command", required=True)

@@ -243,6 +243,66 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertEqual(source_history["event_count"], 1)
             self.assertEqual(target_history["event_count"], 1)
 
+    def test_jobs_worker_drains_compile_lint_and_maintain_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Worker Queue Workspace"]), 0)
+
+            (root / "raw" / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (root / "wiki" / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["jobs", "enqueue", "compile", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "maintain",
+                        "--workspace",
+                        str(root),
+                        "--max-concepts",
+                        "1",
+                        "--max-backlinks",
+                        "1",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                work_exit = main(["jobs", "work", "--workspace", str(root), "--max-jobs", "3"])
+            self.assertEqual(work_exit, 0)
+            self.assertIn("Processed 3 job(s): 3 completed, 0 failed.", stdout.getvalue())
+
+            queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+            self.assertEqual(queue_payload["status_counts"]["completed"], 3)
+            self.assertEqual(queue_payload["queued_count"], 0)
+
+            manifest_payloads = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted((root / ".cognisync" / "jobs" / "manifests").glob("*.json"))
+            ]
+            self.assertEqual({payload["job_type"] for payload in manifest_payloads}, {"lint", "compile", "maintain"})
+            self.assertTrue(any(payload["result"].get("run_manifest_path") for payload in manifest_payloads))
+            self.assertTrue((root / "wiki" / "concepts" / "agent-memory.md").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

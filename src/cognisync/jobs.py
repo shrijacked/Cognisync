@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from cognisync.compile_flow import run_compile_cycle
+from cognisync.linter import lint_snapshot
+from cognisync.maintenance import run_maintenance_cycle
+from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, run_research_cycle
+from cognisync.scanner import scan_workspace
 from cognisync.training_loop import improve_research_loop
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
@@ -23,6 +28,14 @@ class JobRunResult:
     job_id: str
     job_type: str
     status: str
+
+
+@dataclass(frozen=True)
+class JobWorkerResult:
+    processed_count: int
+    completed_count: int
+    failed_count: int
+    queue_manifest_path: Path
 
 
 def enqueue_research_job(
@@ -57,6 +70,39 @@ def enqueue_improve_research_job(
         "provider_formats": list(provider_formats or []),
     }
     return _enqueue_job(workspace, "improve_research", "improve-research", parameters)
+
+
+def enqueue_compile_job(workspace: Workspace, profile_name: Optional[str] = None) -> Path:
+    return _enqueue_job(
+        workspace,
+        "compile",
+        "compile-plan",
+        {"profile_name": profile_name},
+    )
+
+
+def enqueue_lint_job(workspace: Workspace) -> Path:
+    return _enqueue_job(workspace, "lint", "workspace-lint", {})
+
+
+def enqueue_maintain_job(
+    workspace: Workspace,
+    max_concepts: int = 10,
+    max_merges: int = 10,
+    max_backlinks: int = 10,
+    max_conflicts: int = 10,
+) -> Path:
+    return _enqueue_job(
+        workspace,
+        "maintain",
+        "graph-maintenance",
+        {
+            "max_concepts": max_concepts,
+            "max_merges": max_merges,
+            "max_backlinks": max_backlinks,
+            "max_conflicts": max_conflicts,
+        },
+    )
 
 
 def list_jobs(workspace: Workspace) -> List[Dict[str, object]]:
@@ -127,6 +173,41 @@ def retry_job(
     )
 
 
+def run_job_worker(
+    workspace: Workspace,
+    max_jobs: Optional[int] = None,
+    stop_on_error: bool = False,
+) -> JobWorkerResult:
+    processed_count = 0
+    completed_count = 0
+    failed_count = 0
+
+    while True:
+        if max_jobs is not None and processed_count >= max_jobs:
+            break
+        queued_jobs = [job for job in list_jobs(workspace) if str(job.get("status", "")) == "queued"]
+        if not queued_jobs:
+            break
+        try:
+            run_next_job(workspace)
+            completed_count += 1
+        except JobError:
+            failed_count += 1
+            processed_count += 1
+            if stop_on_error:
+                break
+            continue
+        processed_count += 1
+
+    _write_queue_manifest(workspace)
+    return JobWorkerResult(
+        processed_count=processed_count,
+        completed_count=completed_count,
+        failed_count=failed_count,
+        queue_manifest_path=workspace.job_queue_manifest_path,
+    )
+
+
 def run_next_job(workspace: Workspace) -> JobRunResult:
     queued_jobs = [job for job in list_jobs(workspace) if str(job.get("status", "")) == "queued"]
     if not queued_jobs:
@@ -175,12 +256,68 @@ def run_next_job(workspace: Workspace) -> JobRunResult:
 def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, object]:
     job_type = str(job.get("job_type", ""))
     parameters = dict(job.get("parameters", {}))
+    if job_type == "compile":
+        result = run_compile_cycle(
+            workspace,
+            profile_name=_optional_string(parameters.get("profile_name")),
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+            "plan_path": workspace.relative_path(result.plan_path),
+            "packet_path": workspace.relative_path(result.packet_path),
+            "output_file": workspace.relative_path(result.output_file) if result.output_file else None,
+            "issue_count": result.issue_count,
+            "task_count": result.task_count,
+            "ran_profile": result.ran_profile,
+        }
+    if job_type == "lint":
+        snapshot = scan_workspace(workspace)
+        workspace.write_index(snapshot)
+        write_workspace_manifests(workspace, snapshot)
+        issues = lint_snapshot(snapshot, workspace=workspace)
+        issue_counts_by_severity: Dict[str, int] = {}
+        for issue in issues:
+            issue_counts_by_severity[issue.severity] = issue_counts_by_severity.get(issue.severity, 0) + 1
+        run_manifest_path = write_run_manifest(
+            workspace,
+            "lint",
+            {
+                "run_label": "workspace-lint",
+                "issue_count": len(issues),
+                "issue_counts_by_severity": dict(sorted(issue_counts_by_severity.items())),
+                "status": "completed" if not issues else "completed_with_issues",
+            },
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(run_manifest_path),
+            "issue_count": len(issues),
+            "issue_counts_by_severity": dict(sorted(issue_counts_by_severity.items())),
+            "status": "completed" if not issues else "completed_with_issues",
+        }
+    if job_type == "maintain":
+        result = run_maintenance_cycle(
+            workspace,
+            max_concepts=int(parameters.get("max_concepts", 10) or 10),
+            max_merges=int(parameters.get("max_merges", 10) or 10),
+            max_backlinks=int(parameters.get("max_backlinks", 10) or 10),
+            max_conflicts=int(parameters.get("max_conflicts", 10) or 10),
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+            "change_summary_path": workspace.relative_path(result.change_summary_path),
+            "remaining_review_count": result.remaining_review_count,
+            "issue_count": result.issue_count,
+            "accepted_concept_paths": [workspace.relative_path(path) for path in result.accepted_concept_paths],
+            "resolved_merge_keys": list(result.resolved_merge_keys),
+            "applied_backlink_targets": list(result.applied_backlink_targets),
+            "filed_conflict_keys": list(result.filed_conflict_keys),
+        }
     if job_type == "research":
         result = run_research_cycle(
             workspace,
             question=str(parameters.get("question", "")),
             limit=int(parameters.get("limit", 5) or 5),
-            profile_name=str(parameters.get("profile_name", "")) or None,
+            profile_name=_optional_string(parameters.get("profile_name")),
             mode=str(parameters.get("mode", "wiki")),
             slides=bool(parameters.get("slides", False)),
             job_profile=str(parameters.get("job_profile", DEFAULT_RESEARCH_JOB_PROFILE)),
@@ -320,3 +457,12 @@ def _read_job_by_id(workspace: Workspace, job_id: str) -> Dict[str, object]:
     if not manifest_path.exists():
         raise JobError(f"Could not find a job manifest for {normalized}.")
     return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def _optional_string(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized or normalized.lower() == "none":
+        return None
+    return normalized
