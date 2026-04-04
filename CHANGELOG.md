@@ -15,6 +15,8 @@
 - added `cognisync notify list` plus `.cognisync/notifications.json` so jobs, runs, connectors, and review state now materialize into a durable operator inbox
 - added `cognisync jobs` so research and improvement work can be queued, persisted, and executed later through local control-plane style manifests
 - added `cognisync sync export` and `sync import` so file-native workspaces can move between operators as portable bundles
+- added `cognisync access list|grant|revoke` plus `.cognisync/access.json` so workspace roles now persist as first-class file-native state
+- taught sync bundle manifests to declare included state manifests, including `.cognisync/access.json`
 - added `cognisync jobs retry` so terminal jobs can be re-queued with explicit lineage to the original manifest
 - added `cognisync jobs enqueue compile|lint|maintain` and `jobs work` so the queue now covers more of the operator loop and can drain sequentially like a lightweight worker
 - added `.cognisync/sync/history.json` and per-event sync manifests so workspace handoffs now leave an audit trail
@@ -34,6 +36,7 @@
 - expanded `cognisync ui review` again with connector-registry panels, connector-detail pages, and live `run next job` and `sync connector` actions when served locally
 - expanded `cognisync ui review` again with a live `sync all connectors` action so served dashboards can refresh the unsynced registry directly
 - expanded `cognisync ui review` again with a notifications panel sourced from `.cognisync/notifications.json`
+- expanded `cognisync ui review` again with a workspace-access panel sourced from `.cognisync/access.json`
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions
