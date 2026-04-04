@@ -148,6 +148,38 @@ The command:
 
 This keeps backlog and failure signals file-native, so later automation or UI layers can read the same inbox instead of scraping terminal logs.
 
+### `audit`
+
+Use `audit` when you want a readable control-plane event index derived from the manifests the workspace already writes.
+
+Supported path in this release:
+
+- `cognisync audit list`
+
+The command:
+
+1. writes `.cognisync/audit.json`
+2. derives events from access members, connector definitions, job manifests, run manifests, and sync events
+3. prints a human-readable audit summary for the same manifest
+
+This is not a separate database. It is a deterministic index over the same filesystem-native state the operator loop already uses.
+
+### `usage`
+
+Use `usage` when you want a compact accounting view over the current workspace.
+
+Supported path in this release:
+
+- `cognisync usage report`
+
+The command:
+
+1. writes `.cognisync/usage.json`
+2. counts runs, jobs, connectors, sync volume, access roles, and storage bytes by area
+3. makes the same summary available to later UI or automation layers without scraping terminal output
+
+This gives Cognisync a file-native usage and activity baseline before any hosted billing or quota layer exists.
+
 ### `export`
 
 Use `export` when you want the same workspace state to leave Cognisync in a portable bundle instead of staying only as Markdown and manifests.

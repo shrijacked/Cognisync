@@ -227,6 +227,8 @@ The operator loop now has a review layer too:
 - `cognisync improve research --profile <profile> --provider-format openai-chat` runs the remediation loop and refreshes the bundled training artifact in one command
 - `cognisync notify list` materializes a filesystem-native notification inbox from jobs, runs, connectors, and review state so operators can see backlog and failure signals without scraping logs
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json` so operator roles can travel with the workspace instead of living in out-of-band notes
+- `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, and the workspace roster
+- `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, and storage bytes
 - `cognisync jobs enqueue ...`, `jobs run-next`, `jobs retry`, `jobs work`, and `jobs list` provide a persisted local queue plus retry lineage for remote-style research, compile, lint, and maintenance execution
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, and now record a `state_manifests` map in each bundle manifest so the receiving side knows which file-native control-plane manifests were included
 - `cognisync connector add|list|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and both single-connector and registry-wide syncs can flow through the same worker loop
@@ -250,6 +252,7 @@ The operator loop now has a review layer too:
 - the dashboard now surfaces connector definitions from `.cognisync/connectors.json` too, with static connector-detail pages and live actions for `run next job`, `sync connector`, and `sync all connectors` when the UI is served locally
 - the same dashboard now reads `.cognisync/notifications.json` too, so backlog, validation-failure, and connector-attention signals show up as a durable inbox panel instead of living only in terminal output
 - the same dashboard now reads `.cognisync/access.json` too, so the workspace roster and role distribution are visible in the browser next to the rest of the operator state
+- the same dashboard now reads `.cognisync/audit.json` and `.cognisync/usage.json` too, so control-plane history and usage accounting show up alongside review, runs, jobs, sync, access, and notifications
 
 Maintenance policy is now configurable too. Cognisync reads defaults from `.cognisync/config.json` and lets you override them per run:
 

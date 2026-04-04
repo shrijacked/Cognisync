@@ -16,6 +16,8 @@
 - added `cognisync jobs` so research and improvement work can be queued, persisted, and executed later through local control-plane style manifests
 - added `cognisync sync export` and `sync import` so file-native workspaces can move between operators as portable bundles
 - added `cognisync access list|grant|revoke` plus `.cognisync/access.json` so workspace roles now persist as first-class file-native state
+- added `cognisync audit list` plus `.cognisync/audit.json` so runs, jobs, sync events, connectors, and access state now materialize into a readable audit index
+- added `cognisync usage report` plus `.cognisync/usage.json` so the workspace can derive counts for runs, jobs, connectors, sync volume, roles, and storage
 - taught sync bundle manifests to declare included state manifests, including `.cognisync/access.json`
 - added `cognisync jobs retry` so terminal jobs can be re-queued with explicit lineage to the original manifest
 - added `cognisync jobs enqueue compile|lint|maintain` and `jobs work` so the queue now covers more of the operator loop and can drain sequentially like a lightweight worker
@@ -37,6 +39,7 @@
 - expanded `cognisync ui review` again with a live `sync all connectors` action so served dashboards can refresh the unsynced registry directly
 - expanded `cognisync ui review` again with a notifications panel sourced from `.cognisync/notifications.json`
 - expanded `cognisync ui review` again with a workspace-access panel sourced from `.cognisync/access.json`
+- expanded `cognisync ui review` again with audit-history and usage-summary panels sourced from `.cognisync/audit.json` and `.cognisync/usage.json`
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions
