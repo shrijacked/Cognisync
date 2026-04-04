@@ -122,6 +122,7 @@ Supported paths in this release:
 
 - `cognisync export jsonl`
 - `cognisync export training-bundle`
+- `cognisync export finetune-bundle`
 - `cognisync export presentations`
 - `cognisync eval research`
 - `cognisync synth qa`
@@ -143,6 +144,12 @@ Supported paths in this release:
 - `dataset.jsonl` records for each research run
 - validation-derived labels such as citation failures, unsupported-claim failures, and conflict gates
 - a bundle `manifest.json` with record counts, label counts, and run-status counts
+
+`export finetune-bundle` writes a timestamped bundle under `outputs/reports/exports/` with:
+
+- `supervised.jsonl` examples sourced from persisted research runs plus synthetic QA records
+- `retrieval.jsonl` contrastive retrieval examples sourced from assertion support paths
+- a bundle `manifest.json` with supervised and retrieval counts plus example-type tallies
 
 `eval research` reads the same persisted research runs and writes a Markdown scorecard plus JSON payload with:
 
