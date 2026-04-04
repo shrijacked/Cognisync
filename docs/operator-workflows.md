@@ -177,6 +177,20 @@ You can also ask the same bundle to emit provider-specific supervised records. F
 
 The scanner ignores `outputs/reports/exports/` so these bridge artifacts never pollute search or retrieval.
 
+### `remediate`
+
+Use `remediate research` when you want Cognisync to turn weak research runs into executable correction jobs instead of stopping at diagnosis.
+
+The command:
+
+1. reads the low-quality candidates implied by `export feedback-bundle`
+2. writes a remediation packet for each selected run under `outputs/reports/remediation-jobs/`
+3. executes that packet through the chosen adapter profile
+4. validates the corrected answer against the original retrieved sources
+5. writes a remediation manifest and validation report beside the corrected answer
+
+`remediate research --profile codex` is intentionally conservative. It does not overwrite the original research run or filed answer. Instead it leaves a separate correction workspace under `outputs/reports/remediation-jobs/`, and the scanner ignores that directory so remediation artifacts do not leak back into retrieval until a later operator step promotes them.
+
 ### `maintain`
 
 Use `maintain` when you want Cognisync to apply the obvious graph-backed follow-up work without a manual review pass.
