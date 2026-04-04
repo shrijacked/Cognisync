@@ -127,6 +127,7 @@ Supported paths in this release:
 - `cognisync export feedback-bundle`
 - `cognisync export correction-bundle`
 - `cognisync export training-loop-bundle --provider-format openai-chat`
+- `cognisync improve research --profile codex --provider-format openai-chat`
 - `cognisync export presentations`
 - `cognisync eval research`
 - `cognisync synth qa`
@@ -207,6 +208,18 @@ The command:
 6. leaves those successful corrections ready for `export correction-bundle` without mutating the original research run
 
 `remediate research --profile codex` is intentionally conservative. It does not overwrite the original research run or filed answer. Instead it leaves a separate correction workspace under `outputs/reports/remediation-jobs/`, and the scanner ignores that directory so remediation artifacts do not leak back into retrieval until a later operator step promotes them.
+
+### `improve`
+
+Use `improve research` when you want the correction loop and the training package refresh to happen together.
+
+The command:
+
+1. remediates the weak research runs selected by the current feedback state
+2. validates the corrected answers against the original retrieved sources
+3. refreshes the umbrella `training-loop-bundle` so evaluation, feedback, corrections, and finetune artifacts stay in sync
+
+`improve research --profile codex --provider-format openai-chat` is the shortest end-to-end path from weak research runs to a provider-ready training package.
 
 ### `maintain`
 
