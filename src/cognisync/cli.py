@@ -6,6 +6,7 @@ import sys
 
 from cognisync.access import (
     AccessError,
+    DEFAULT_LOCAL_OPERATOR_ID,
     VALID_ACCESS_ROLES,
     grant_access_member,
     render_access_roster,
@@ -598,7 +599,7 @@ def cmd_ui_review(args: argparse.Namespace) -> int:
             output_file = workspace.root / output_file
         output_file = output_file.resolve()
 
-    result = write_review_ui_bundle(workspace, snapshot, output_file=output_file)
+    result = write_review_ui_bundle(workspace, snapshot, output_file=output_file, actor_id=args.actor_id)
     print(f"Wrote review UI to {result.html_path}")
     print(f"Wrote review UI export to {result.export_path}")
     print(f"Wrote review UI state to {result.state_path}")
@@ -612,6 +613,7 @@ def cmd_ui_review(args: argparse.Namespace) -> int:
         port=args.port,
         index_name=result.html_path.name,
         workspace=workspace,
+        actor_id=args.actor_id,
     )
     host, port = server.server_address
     print(f"Serving review UI at http://{host}:{port}/")
@@ -1855,6 +1857,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui_review_parser.add_argument("--serve", action="store_true")
     ui_review_parser.add_argument("--host", default="127.0.0.1")
     ui_review_parser.add_argument("--port", type=int, default=8765)
+    ui_review_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     ui_review_parser.set_defaults(func=cmd_ui_review)
 
     return parser

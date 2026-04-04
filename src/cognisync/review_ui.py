@@ -12,7 +12,16 @@ import posixpath
 from urllib.parse import parse_qs, urlparse
 from typing import Dict, List, Optional, Sequence
 
-from cognisync.access import ensure_access_manifest, load_access_manifest
+from cognisync.access import (
+    AccessError,
+    DEFAULT_LOCAL_OPERATOR_ID,
+    OPERATOR_ACTION_ROLES,
+    REVIEW_ACTION_ROLES,
+    ensure_access_manifest,
+    find_access_member,
+    load_access_manifest,
+    require_access_role,
+)
 from cognisync.maintenance import (
     MaintenanceError,
     accept_concept_candidate,
@@ -48,6 +57,7 @@ def write_review_ui_bundle(
     workspace: Workspace,
     snapshot: IndexSnapshot,
     output_file: Optional[Path] = None,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
 ) -> ReviewUiResult:
     html_path = output_file or (workspace.review_ui_dir / "index.html")
     export_path = html_path.parent / "review-export.json"
@@ -55,7 +65,7 @@ def write_review_ui_bundle(
     html_path.parent.mkdir(parents=True, exist_ok=True)
 
     review_payload = build_review_export_payload(workspace, snapshot)
-    state_payload = build_review_ui_state(workspace, snapshot, review_payload=review_payload)
+    state_payload = build_review_ui_state(workspace, snapshot, review_payload=review_payload, actor_id=actor_id)
 
     export_path.write_text(json.dumps(review_payload, indent=2, sort_keys=True), encoding="utf-8")
     state_path.write_text(json.dumps(state_payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -85,6 +95,7 @@ def create_review_ui_server(
     port: int = 8765,
     index_name: str = "index.html",
     workspace: Optional[Workspace] = None,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
 ) -> ThreadingHTTPServer:
     directory = Path(directory).resolve()
     handler = partial(
@@ -92,6 +103,7 @@ def create_review_ui_server(
         directory=str(directory),
         index_name=index_name,
         workspace=workspace,
+        actor_id=actor_id,
     )
     return ThreadingHTTPServer((host, port), handler)
 
@@ -392,13 +404,14 @@ def build_review_ui_state(
     workspace: Workspace,
     snapshot: IndexSnapshot,
     review_payload: Optional[Dict[str, object]] = None,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
 ) -> Dict[str, object]:
     review_payload = review_payload or build_review_export_payload(workspace, snapshot)
     runs = _build_run_history(workspace)
     jobs = _build_job_history(workspace)
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
-    access = _build_access_summary(workspace)
+    access = _build_access_summary(workspace, actor_id=actor_id)
     audit = _build_audit_history(workspace)
     usage = _build_usage_summary(workspace)
     notifications = _build_notifications(workspace)
@@ -924,14 +937,34 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
 
 def _render_access_summary(access: Dict[str, object]) -> str:
     members = list(access.get("members", []))
+    active_actor = dict(access.get("active_actor", {}))
     lines = [
         "          <div class=\"toolbar\">",
         f"            <span class=\"pill\">members <strong>{escape(str(access.get('member_count', 0)))}</strong></span>",
         f"            <span class=\"pill warn\">roles <strong>{escape(str(len(dict(access.get('counts_by_role', {})))))}</strong></span>",
         "          </div>",
         f"          <p class=\"muted\">manifest: <code>{escape(str(access.get('manifest_path', '')))}</code></p>",
-        _render_kind_table("Roles", dict(access.get("counts_by_role", {}))),
     ]
+    if active_actor:
+        permissions = ", ".join(str(item) for item in list(active_actor.get("permissions", [])))
+        lines.extend(
+            [
+                "          <div class=\"callout\">",
+                "            <strong>Active Actor</strong>",
+                "            <p class=\"muted\">"
+                f"{escape(str(active_actor.get('display_name', active_actor.get('principal_id', ''))))} "
+                f"(<code>{escape(str(active_actor.get('principal_id', '')))}</code>) "
+                f"as <strong>{escape(str(active_actor.get('role', 'unknown')))}</strong>"
+                "</p>",
+                f"            <p class=\"muted\">permissions: {escape(permissions or 'read-only')}</p>",
+                "          </div>",
+            ]
+        )
+    lines.extend(
+        [
+        _render_kind_table("Roles", dict(access.get("counts_by_role", {}))),
+        ]
+    )
     if not members:
         lines.append("          <p class=\"empty\">No workspace members recorded.</p>")
         return "\n".join(lines)
@@ -1684,7 +1717,11 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
     }
 
 
-def _build_access_summary(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+def _build_access_summary(
+    workspace: Workspace,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+    limit: int = 24,
+) -> Dict[str, object]:
     ensure_access_manifest(workspace)
     payload = load_access_manifest(workspace)
     members = [dict(item) for item in list(payload.get("members", []))]
@@ -1705,6 +1742,33 @@ def _build_access_summary(workspace: Workspace, limit: int = 24) -> Dict[str, ob
         "member_count": len(members),
         "counts_by_role": dict(counts_by_role),
         "members": items,
+        "active_actor": _build_active_actor_summary(workspace, actor_id),
+    }
+
+
+def _build_active_actor_summary(workspace: Workspace, actor_id: str) -> Dict[str, object]:
+    member = find_access_member(workspace, actor_id)
+    if member is None:
+        return {
+            "principal_id": actor_id,
+            "display_name": actor_id,
+            "role": "unknown",
+            "status": "missing",
+            "permissions": [],
+        }
+
+    role = str(member.get("role", "viewer"))
+    permissions = ["read"]
+    if role in REVIEW_ACTION_ROLES:
+        permissions.append("review")
+    if role in OPERATOR_ACTION_ROLES:
+        permissions.extend(["jobs", "connectors"])
+    return {
+        "principal_id": str(member.get("principal_id", actor_id)),
+        "display_name": str(member.get("display_name", actor_id)),
+        "role": role,
+        "status": str(member.get("status", "active")),
+        "permissions": permissions,
     }
 
 
@@ -2860,11 +2924,16 @@ def _relative_href(from_href: str, to_href: Optional[str]) -> str:
     return posixpath.relpath(to_href, base)
 
 
-def _refresh_review_ui_bundle(workspace: Workspace, bundle_dir: Path, index_name: str) -> None:
+def _refresh_review_ui_bundle(
+    workspace: Workspace,
+    bundle_dir: Path,
+    index_name: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> None:
     snapshot = scan_workspace(workspace)
     workspace.write_index(snapshot)
     write_workspace_manifests(workspace, snapshot)
-    write_review_ui_bundle(workspace, snapshot, output_file=bundle_dir / index_name)
+    write_review_ui_bundle(workspace, snapshot, output_file=bundle_dir / index_name, actor_id=actor_id)
 
 
 class _ReviewUiHandler(SimpleHTTPRequestHandler):
@@ -2873,10 +2942,12 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
         *args,
         index_name: str = "index.html",
         workspace: Optional[Workspace] = None,
+        actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
         **kwargs,
     ) -> None:
         self._index_name = index_name
         self._workspace = workspace
+        self._actor_id = actor_id
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
@@ -2896,7 +2967,13 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
 
         try:
             self._apply_control_action(parsed.path, payload)
-            _refresh_review_ui_bundle(self._workspace, Path(self.directory), self._index_name)
+            _refresh_review_ui_bundle(self._workspace, Path(self.directory), self._index_name, self._actor_id)
+        except AccessError as error:
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(str(error).encode("utf-8"))
+            return
         except (MaintenanceError, JobError, ConnectorError) as error:
             self.send_response(400)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -2914,30 +2991,39 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
             raise MaintenanceError("No workspace is attached to the review UI server.")
 
         if path == "/api/jobs/run-next":
+            require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "run jobs from the review ui")
             run_job_worker(workspace, max_jobs=1, stop_on_error=True)
             return
         if path == "/api/connectors/sync":
+            require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "sync connectors from the review ui")
             sync_connector(workspace, payload.get("connector_id", ""), force=False)
             return
         if path == "/api/connectors/sync-all":
+            require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "sync all connectors from the review ui")
             sync_all_connectors(workspace, force=False)
             return
         if path == "/api/review/accept-concept":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "accept review concepts")
             accept_concept_candidate(workspace, payload.get("slug", ""))
             return
         if path == "/api/review/apply-backlink":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "apply review backlinks")
             apply_backlink_suggestion(workspace, payload.get("target_path", ""))
             return
         if path == "/api/review/resolve-merge":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "resolve entity merges")
             resolve_entity_merge(workspace, payload.get("canonical_label", ""))
             return
         if path == "/api/review/file-conflict":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "file conflicts")
             file_conflict_review(workspace, payload.get("subject", ""))
             return
         if path == "/api/review/dismiss":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "dismiss review items")
             dismiss_review_item(workspace, payload.get("review_id", ""), payload.get("reason", ""))
             return
         if path == "/api/review/reopen":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "reopen review items")
             reopen_review_item(workspace, payload.get("review_id", ""))
             return
         raise MaintenanceError(f"Unknown review action endpoint: {path}")

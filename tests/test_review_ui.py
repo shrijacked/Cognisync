@@ -412,6 +412,87 @@ class ReviewUiTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_review_ui_server_enforces_access_roles_for_live_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Review UI Access Test")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["ui", "review", "--workspace", str(root)]), 0)
+
+            server = create_review_ui_server(
+                workspace.review_ui_dir,
+                host="127.0.0.1",
+                port=0,
+                index_name="index.html",
+                workspace=workspace,
+                actor_id="reviewer-1",
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                review_payload = json.loads((workspace.review_ui_dir / "review-export.json").read_text(encoding="utf-8"))
+                review_id = review_payload["open_items"][0]["review_id"]
+
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode({"review_id": review_id, "reason": "reviewed"})
+                connection.request(
+                    "POST",
+                    "/api/review/dismiss",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                state = json.loads((workspace.review_ui_dir / "dashboard-state.json").read_text(encoding="utf-8"))
+                self.assertEqual(state["review"]["summary"]["dismissed_item_count"], 1)
+                self.assertEqual(state["access"]["active_actor"]["principal_id"], "reviewer-1")
+                self.assertEqual(state["access"]["active_actor"]["role"], "reviewer")
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/run-next",
+                    body="",
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                error_body = response.read().decode("utf-8")
+                self.assertEqual(response.status, 403)
+                self.assertIn("does not have permission", error_body)
+                connection.close()
+
+                queue_payload = json.loads((workspace.jobs_dir / "queue.json").read_text(encoding="utf-8"))
+                self.assertEqual(queue_payload["queued_count"], 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
 
 if __name__ == "__main__":
     unittest.main()

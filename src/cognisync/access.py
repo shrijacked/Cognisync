@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 
 VALID_ACCESS_ROLES = ("viewer", "editor", "reviewer", "operator")
 DEFAULT_LOCAL_OPERATOR_ID = "local-operator"
+REVIEW_ACTION_ROLES = ("reviewer", "operator")
+OPERATOR_ACTION_ROLES = ("operator",)
 
 
 class AccessError(RuntimeError):
@@ -127,6 +129,37 @@ def default_access_manifest() -> Dict[str, object]:
             }
         ],
     }
+
+
+def find_access_member(workspace: "Workspace", principal_id: str) -> Optional[Dict[str, object]]:
+    normalized_id = principal_id.strip()
+    if not normalized_id:
+        return None
+    payload = load_access_manifest(workspace)
+    for member in list(payload.get("members", [])):
+        if str(member.get("principal_id", "")) == normalized_id:
+            return dict(member)
+    return None
+
+
+def require_access_role(
+    workspace: "Workspace",
+    principal_id: str,
+    allowed_roles: List[str] | tuple[str, ...],
+    action_label: str,
+) -> Dict[str, object]:
+    member = find_access_member(workspace, principal_id)
+    normalized_id = principal_id.strip()
+    if member is None or str(member.get("status", "active")) != "active":
+        raise AccessError(f"Workspace actor '{normalized_id}' is not an active member and cannot {action_label}.")
+    role = str(member.get("role", "viewer"))
+    allowed = tuple(str(item) for item in allowed_roles)
+    if role not in allowed:
+        raise AccessError(
+            f"Workspace actor '{normalized_id}' does not have permission to {action_label}. "
+            f"Required role: {', '.join(allowed)}."
+        )
+    return member
 
 
 def _normalize_access_manifest(payload: Dict[str, object]) -> Dict[str, object]:
