@@ -344,6 +344,13 @@ def _build_supervised_finetune_records(workspace: Workspace) -> List[Dict[str, o
             }
         )
 
+    for record in collect_correction_export_records(workspace):
+        prompt_text = str(record.get("prompt") or "").strip()
+        response_text = str(record.get("response") or "").strip()
+        if not prompt_text or not response_text:
+            continue
+        records.append(dict(record))
+
     for record in build_synthetic_qa_records(workspace):
         prompt_text = str(record.get("question") or "").strip()
         response_text = str(record.get("answer") or "").strip()

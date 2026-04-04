@@ -580,6 +580,134 @@ class ExportTests(unittest.TestCase):
             self.assertGreaterEqual(manifest["target_counts"]["citation_integrity"], 1)
             self.assertIn("Wrote correction export to", stdout.getvalue())
 
+    def test_export_finetune_bundle_includes_validated_remediation_corrections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Remediation Finetune Workspace"]), 0)
+
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory helps agent loops persist findings.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(root / ".cognisync" / "config.json")
+            config.llm_profiles["passer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            config.llm_profiles["failing"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops always require vector databases.')",
+                ]
+            )
+            config.llm_profiles["healer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            save_config(root / ".cognisync" / "config.json", config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "passer",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertNotEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "failing",
+                        "do agent loops always require vector databases",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "remediate",
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "healer",
+                        "--limit",
+                        "1",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "export",
+                        "finetune-bundle",
+                        "--workspace",
+                        str(root),
+                        "--provider-format",
+                        "openai-chat",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            export_dirs = sorted((root / "outputs" / "reports" / "exports").glob("finetune-bundle-*"))
+            self.assertTrue(export_dirs)
+            supervised_path = export_dirs[-1] / "supervised.jsonl"
+            provider_path = export_dirs[-1] / "supervised.openai-chat.jsonl"
+            manifest_path = export_dirs[-1] / "manifest.json"
+            self.assertTrue(supervised_path.exists())
+            self.assertTrue(provider_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            supervised_records = [
+                json.loads(line) for line in supervised_path.read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            provider_records = [
+                json.loads(line) for line in provider_path.read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            correction_records = [
+                record for record in supervised_records if record.get("example_type") == "remediation_correction"
+            ]
+            provider_correction_records = [
+                record
+                for record in provider_records
+                if dict(record.get("metadata", {})).get("example_type") == "remediation_correction"
+            ]
+
+            self.assertTrue(correction_records)
+            self.assertTrue(provider_correction_records)
+            self.assertIn("[S1]", correction_records[0]["response"])
+            self.assertIn("always require vector databases", correction_records[0]["previous_response"])
+            self.assertTrue(correction_records[0]["metadata"]["source_run_id"])
+            self.assertGreaterEqual(manifest["supervised_example_types"]["remediation_correction"], 1)
+            self.assertIn("Wrote provider export openai-chat to", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
