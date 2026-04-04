@@ -232,6 +232,7 @@ Supported paths in this release:
 - `cognisync jobs enqueue compile`
 - `cognisync jobs enqueue lint`
 - `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2`
+- `cognisync jobs enqueue connector-sync <connector-id>`
 - `cognisync jobs run-next`
 - `cognisync jobs retry <job-id> --profile codex`
 - `cognisync jobs work --max-jobs 10`
@@ -241,14 +242,14 @@ The command family:
 
 1. persists queued job manifests under `.cognisync/jobs/manifests/`
 2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
-3. reuses the same `research`, `improve research`, `compile`, `lint`, and `maintain` runtimes when a worker executes queued jobs
+3. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, and `connector sync` runtimes when a worker executes queued jobs
 4. records result paths back into the job manifest instead of dropping that state into terminal-only output
 5. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
 6. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
 
 ```mermaid
 flowchart LR
-    A["jobs enqueue research, compile, lint, maintain, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
+    A["jobs enqueue research, compile, lint, maintain, connector-sync, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
     B --> C["jobs run-next or jobs work claims queued jobs"]
     C --> D["existing runtime executes the matching operator loop"]
     D --> E["job manifest stores result paths and completion status"]
@@ -282,6 +283,27 @@ Supported paths in this release:
 Every export and import also records a sync event under `.cognisync/sync/manifests/` and refreshes `.cognisync/sync/history.json`, so a later operator or UI can inspect how the workspace moved without parsing bundle directories manually.
 
 The scanner ignores `outputs/reports/sync-bundles/` so exported handoff artifacts never re-enter retrieval.
+
+### `connector`
+
+Use `connector` when you want remote-style source definitions to live as workspace manifests instead of external shell scripts.
+
+Supported paths in this release:
+
+- `cognisync connector add repo <source> --name <name>`
+- `cognisync connector add url <source> --name <name>`
+- `cognisync connector add urls <source-list> --name <name>`
+- `cognisync connector add sitemap <source> --name <name>`
+- `cognisync connector list`
+- `cognisync connector sync <connector-id>`
+
+The command family:
+
+1. stores connector definitions in `.cognisync/connectors.json`
+2. supports `repo`, `url`, `urls`, and `sitemap` source shapes
+3. runs the existing ingest flows when `connector sync` executes
+4. writes a `connector_sync` run manifest plus a change summary when a sync completes
+5. can be routed through `jobs enqueue connector-sync <connector-id>` when you want the worker loop to own connector pulls
 
 ### `maintain`
 

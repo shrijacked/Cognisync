@@ -227,6 +227,7 @@ The operator loop now has a review layer too:
 - `cognisync improve research --profile <profile> --provider-format openai-chat` runs the remediation loop and refreshes the bundled training artifact in one command
 - `cognisync jobs enqueue ...`, `jobs run-next`, `jobs retry`, `jobs work`, and `jobs list` provide a persisted local queue plus retry lineage for remote-style research, compile, lint, and maintenance execution
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators and keep an audit trail in `.cognisync/sync/`
+- `cognisync connector add|list|sync` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and queued connector syncs can flow through the same worker loop
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
@@ -339,6 +340,7 @@ cognisync jobs enqueue improve-research --profile codex --provider-format openai
 cognisync jobs enqueue compile
 cognisync jobs enqueue lint
 cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2
+cognisync jobs enqueue connector-sync repo-remote-sample
 cognisync jobs run-next
 cognisync jobs retry research-... --profile codex
 cognisync jobs work --max-jobs 10
@@ -352,12 +354,30 @@ cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /
 - `jobs enqueue research` persists a queued research manifest under `.cognisync/jobs/manifests/`
 - `jobs enqueue improve-research` queues the one-shot correction-and-training loop for later execution
 - `jobs enqueue compile`, `jobs enqueue lint`, and `jobs enqueue maintain` let the same queue drive the rest of the operator loop instead of only question answering
+- `jobs enqueue connector-sync <connector-id>` lets connector pulls land through the same worker and audit path
 - `jobs run-next` marks the oldest queued job as running, executes it through the existing runtime, and records the result back into the job manifest plus `.cognisync/jobs/queue.json`
 - `jobs retry` re-queues a terminal job with lineage back to the original manifest, and can override the profile for another attempt
 - `jobs work` drains queued jobs sequentially until the queue is empty or a limit is reached, which makes the local queue behave like a lightweight worker
 - `sync export` writes a portable workspace bundle under `outputs/reports/sync-bundles/` with `raw/`, `wiki/`, `prompts/`, `.cognisync/`, and the important report job directories
 - `sync import` restores that bundle into another workspace root so queued state, manifests, and corpus files travel together
 - `sync history` reads `.cognisync/sync/history.json`, which records both export and import events plus their bundle manifests
+
+## Connectors
+
+You can now register file-native source connectors and sync them directly or through the job queue:
+
+```bash
+cognisync connector add repo file:///tmp/sample-repo --name remote-sample
+cognisync connector add urls /tmp/urls.txt --name batch-sources
+cognisync connector list
+cognisync connector sync repo-remote-sample
+cognisync jobs enqueue connector-sync urls-batch-sources
+```
+
+- connector definitions live in `.cognisync/connectors.json`
+- supported connector kinds are `repo`, `url`, `urls`, and `sitemap`
+- `connector sync` runs the ingest path immediately and writes a `connector_sync` run manifest plus a change summary
+- queued connector syncs use the same job-worker path and audit trail as the rest of the operator loop
 
 ## Built-In Adapter Example
 
