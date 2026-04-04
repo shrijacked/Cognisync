@@ -15,7 +15,7 @@ from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import MaintenancePolicy, save_config
 from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
-from cognisync.evaluation import evaluate_research_runs
+from cognisync.evaluation import evaluate_research_runs, export_feedback_bundle
 from cognisync.exports import (
     ExportError,
     export_finetune_bundle,
@@ -279,6 +279,22 @@ def cmd_export_finetune_bundle(args: argparse.Namespace) -> int:
         f"{result.supervised_count} supervised example(s) and "
         f"{result.retrieval_count} retrieval example(s)."
     )
+    return 0
+
+
+def cmd_export_feedback_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_feedback_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote feedback export to {result.directory}")
+    print(f"Wrote remediation dataset to {result.dataset_path}")
+    print(f"Wrote feedback manifest to {result.manifest_path}")
+    print(f"Bundled {result.record_count} remediation record(s).")
     return 0
 
 
@@ -1002,6 +1018,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optionally emit provider-specific supervised exports such as openai-chat",
     )
     export_finetune_parser.set_defaults(func=cmd_export_finetune_bundle)
+
+    export_feedback_parser = export_subparsers.add_parser(
+        "feedback-bundle",
+        help="Export remediation-ready records for low-quality research runs",
+    )
+    export_feedback_parser.add_argument("--workspace", default=".")
+    export_feedback_parser.add_argument("--output-dir", default=None)
+    export_feedback_parser.set_defaults(func=cmd_export_feedback_bundle)
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate persisted Cognisync artifacts")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)

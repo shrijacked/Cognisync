@@ -394,6 +394,86 @@ class ExportTests(unittest.TestCase):
             self.assertTrue(all("dimensions" in run for run in payload["runs"]))
             self.assertIn("Wrote research evaluation report to", stdout.getvalue())
 
+    def test_export_feedback_bundle_writes_remediation_records_for_low_quality_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Feedback Workspace"]), 0)
+
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory helps agent loops persist findings.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(root / ".cognisync" / "config.json")
+            config.llm_profiles["passer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            config.llm_profiles["failing"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops always require vector databases.')",
+                ]
+            )
+            save_config(root / ".cognisync" / "config.json", config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "passer",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertNotEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "failing",
+                        "do agent loops always require vector databases",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["export", "feedback-bundle", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            export_dirs = sorted((root / "outputs" / "reports" / "exports").glob("feedback-bundle-*"))
+            self.assertTrue(export_dirs)
+            dataset_path = export_dirs[-1] / "remediation.jsonl"
+            manifest_path = export_dirs[-1] / "manifest.json"
+            self.assertTrue(dataset_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            records = [json.loads(line) for line in dataset_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(records)
+            self.assertIn("citation_integrity", records[0]["improvement_targets"])
+            self.assertIn("grounding", records[0]["improvement_targets"])
+            self.assertGreaterEqual(manifest["record_count"], 1)
+            self.assertGreaterEqual(manifest["target_counts"]["citation_integrity"], 1)
+            self.assertIn("Wrote feedback export to", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

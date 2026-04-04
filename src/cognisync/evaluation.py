@@ -17,6 +17,14 @@ class ResearchEvaluationResult:
     run_count: int
 
 
+@dataclass(frozen=True)
+class FeedbackBundleResult:
+    directory: Path
+    dataset_path: Path
+    manifest_path: Path
+    record_count: int
+
+
 def evaluate_research_runs(
     workspace: Workspace,
     output_file: Optional[Path] = None,
@@ -39,6 +47,41 @@ def evaluate_research_runs(
     report_path.write_text(_render_evaluation_report(payload), encoding="utf-8")
     payload_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return ResearchEvaluationResult(report_path=report_path, payload_path=payload_path, run_count=len(records))
+
+
+def export_feedback_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+) -> FeedbackBundleResult:
+    records = collect_research_export_records(workspace)
+    feedback_records = _build_feedback_records(records)
+    destination = output_dir or _next_feedback_bundle_dir(workspace)
+    destination.mkdir(parents=True, exist_ok=True)
+    dataset_path = destination / "remediation.jsonl"
+    manifest_path = destination / "manifest.json"
+
+    dataset_lines = [json.dumps(record, sort_keys=True) for record in feedback_records]
+    dataset_path.write_text("\n".join(dataset_lines) + ("\n" if dataset_lines else ""), encoding="utf-8")
+
+    target_counts: Dict[str, int] = {}
+    for record in feedback_records:
+        for target in list(record.get("improvement_targets", [])):
+            target_counts[str(target)] = target_counts.get(str(target), 0) + 1
+
+    manifest_payload = {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "record_count": len(feedback_records),
+        "dataset_file": dataset_path.name,
+        "target_counts": dict(sorted(target_counts.items())),
+    }
+    manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return FeedbackBundleResult(
+        directory=destination,
+        dataset_path=dataset_path,
+        manifest_path=manifest_path,
+        record_count=len(feedback_records),
+    )
 
 
 def _build_scorecard(records: List[Dict[str, object]]) -> Dict[str, object]:
@@ -160,6 +203,73 @@ def _build_dimension_scores(record: Dict[str, object]) -> Dict[str, Optional[flo
     }
 
 
+def _build_feedback_records(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    feedback_records: List[Dict[str, object]] = []
+    for record in records:
+        dimensions = _build_dimension_scores(record)
+        improvement_targets = _select_improvement_targets(dimensions)
+        if not improvement_targets:
+            continue
+        response_text = str(record.get("answer_text") or record.get("report_text") or "").strip()
+        feedback_records.append(
+            {
+                "run_id": str(record.get("run_id", "")),
+                "question": str(record.get("question", "")),
+                "status": str(record.get("status", "")),
+                "improvement_targets": improvement_targets,
+                "dimension_scores": dimensions,
+                "labels": derive_research_labels(record),
+                "source_paths": list(record.get("sources", [])),
+                "current_response": response_text,
+                "run_manifest_path": str(record.get("run_manifest_path", "")),
+                "remediation_prompt": _build_remediation_prompt(record, improvement_targets),
+            }
+        )
+    feedback_records.sort(
+        key=lambda item: (-len(list(item.get("improvement_targets", []))), str(item.get("question", "")))
+    )
+    return feedback_records
+
+
+def _select_improvement_targets(dimensions: Dict[str, Optional[float]]) -> List[str]:
+    targets: List[str] = []
+    for name in ("citation_integrity", "grounding", "structure"):
+        value = dimensions.get(name)
+        if value is not None and value < 1.0:
+            targets.append(name)
+    contradiction_handling = dimensions.get("contradiction_handling")
+    if contradiction_handling is not None and contradiction_handling < 1.0:
+        targets.append("contradiction_handling")
+    retrieval_coverage = dimensions.get("retrieval_coverage")
+    if retrieval_coverage is not None and retrieval_coverage < 0.5:
+        targets.append("retrieval_coverage")
+    artifact_completeness = dimensions.get("artifact_completeness")
+    if artifact_completeness is not None and artifact_completeness < 1.0:
+        targets.append("artifact_completeness")
+    return targets
+
+
+def _build_remediation_prompt(record: Dict[str, object], improvement_targets: List[str]) -> str:
+    question = str(record.get("question", "")).strip()
+    source_paths = [str(path) for path in list(record.get("sources", []))]
+    bullets = [f"- Fix `{target}`" for target in improvement_targets]
+    source_lines = [f"- {path}" for path in source_paths] or ["- No stored sources recorded"]
+    return "\n".join(
+        [
+            "# Remediation Prompt",
+            "",
+            f"Question: {question}",
+            "",
+            "Improve the existing answer using the stored workspace sources.",
+            "Priorities:",
+            *bullets,
+            "",
+            "Available sources:",
+            *source_lines,
+        ]
+    )
+
+
 def _render_evaluation_report(payload: Dict[str, object]) -> str:
     lines = [
         "# Research Evaluation Report",
@@ -235,3 +345,13 @@ def _next_evaluation_report_path(workspace: Workspace) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     stem = utc_timestamp().replace(":", "").replace("-", "").replace("+", "").replace(".", "")
     return directory / f"research-eval-{stem}.md"
+
+
+def _next_feedback_bundle_dir(workspace: Workspace) -> Path:
+    directory = workspace.export_artifacts_dir / f"feedback-bundle-{_timestamp_slug()}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _timestamp_slug() -> str:
+    return utc_timestamp().replace(":", "").replace("-", "").replace("+", "").replace(".", "")
