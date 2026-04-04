@@ -58,6 +58,7 @@ from cognisync.renderers import render_compile_packet, render_marp_slides, rende
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
 from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
+from cognisync.training_loop import export_training_loop_bundle
 from cognisync.workspace import Workspace
 
 
@@ -313,6 +314,33 @@ def cmd_export_correction_bundle(args: argparse.Namespace) -> int:
     print(f"Wrote correction dataset to {result.dataset_path}")
     print(f"Wrote correction manifest to {result.manifest_path}")
     print(f"Bundled {result.record_count} correction record(s).")
+    return 0
+
+
+def cmd_export_training_loop_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    try:
+        result = export_training_loop_bundle(
+            workspace,
+            output_dir=output_dir,
+            provider_formats=list(args.provider_format or []),
+        )
+    except ExportError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Wrote training-loop bundle to {result.directory}")
+    print(f"Wrote training-loop manifest to {result.manifest_path}")
+    print(f"Wrote evaluation report to {result.evaluation_report_path}")
+    print(f"Wrote evaluation payload to {result.evaluation_payload_path}")
+    print(f"Wrote feedback manifest to {result.feedback_manifest_path}")
+    print(f"Wrote correction manifest to {result.correction_manifest_path}")
+    print(f"Wrote finetune manifest to {result.finetune_manifest_path}")
     return 0
 
 
@@ -1072,6 +1100,20 @@ def build_parser() -> argparse.ArgumentParser:
     export_correction_parser.add_argument("--workspace", default=".")
     export_correction_parser.add_argument("--output-dir", default=None)
     export_correction_parser.set_defaults(func=cmd_export_correction_bundle)
+
+    export_training_loop_parser = export_subparsers.add_parser(
+        "training-loop-bundle",
+        help="Package evaluation, remediation, correction, and finetune artifacts into one training-loop bundle",
+    )
+    export_training_loop_parser.add_argument("--workspace", default=".")
+    export_training_loop_parser.add_argument("--output-dir", default=None)
+    export_training_loop_parser.add_argument(
+        "--provider-format",
+        action="append",
+        default=[],
+        help="Optionally emit provider-specific supervised exports such as openai-chat inside the finetune subtree",
+    )
+    export_training_loop_parser.set_defaults(func=cmd_export_training_loop_bundle)
 
     remediate_parser = subparsers.add_parser("remediate", help="Replay weak research runs through remediation prompts")
     remediate_subparsers = remediate_parser.add_subparsers(dest="remediate_command", required=True)
