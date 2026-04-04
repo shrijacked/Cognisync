@@ -259,6 +259,7 @@ def _sync_event_id(operation: str) -> str:
 def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:
     manifest_paths = {
         "access": workspace.access_manifest_path,
+        "audit": workspace.audit_manifest_path,
         "connectors": workspace.connector_registry_path,
         "graph": workspace.graph_manifest_path,
         "jobs_queue": workspace.job_queue_manifest_path,
@@ -267,6 +268,7 @@ def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:
         "review_queue": workspace.review_queue_manifest_path,
         "sources": workspace.sources_manifest_path,
         "sync_history": workspace.sync_history_manifest_path,
+        "usage": workspace.usage_manifest_path,
     }
     return {
         name: workspace.relative_path(path)

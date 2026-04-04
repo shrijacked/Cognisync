@@ -71,6 +71,7 @@ from cognisync.maintenance import (
 )
 from cognisync.manifests import write_workspace_manifests
 from cognisync.notifications import render_notifications, write_notifications_manifest
+from cognisync.observability import render_audit_history, render_usage_report, write_audit_manifest, write_usage_manifest
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.remediation import RemediationError, remediate_research_runs
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, RESEARCH_JOB_PROFILES, ResearchError, run_research_cycle
@@ -382,6 +383,22 @@ def cmd_notify_list(args: argparse.Namespace) -> int:
     write_notifications_manifest(workspace)
     print(render_notifications(workspace))
     print(f"Wrote notifications to {workspace.notifications_manifest_path}")
+    return 0
+
+
+def cmd_audit_list(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    write_audit_manifest(workspace)
+    print(render_audit_history(workspace))
+    print(f"Wrote audit manifest to {workspace.audit_manifest_path}")
+    return 0
+
+
+def cmd_usage_report(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    write_usage_manifest(workspace)
+    print(render_usage_report(workspace))
+    print(f"Wrote usage manifest to {workspace.usage_manifest_path}")
     return 0
 
 
@@ -1210,6 +1227,20 @@ def build_parser() -> argparse.ArgumentParser:
     notify_list_parser = notify_subparsers.add_parser("list", help="List active notifications")
     notify_list_parser.add_argument("--workspace", default=".")
     notify_list_parser.set_defaults(func=cmd_notify_list)
+
+    audit_parser = subparsers.add_parser("audit", help="Inspect the filesystem-native audit index")
+    audit_subparsers = audit_parser.add_subparsers(dest="audit_command", required=True)
+
+    audit_list_parser = audit_subparsers.add_parser("list", help="List derived audit events from persisted manifests")
+    audit_list_parser.add_argument("--workspace", default=".")
+    audit_list_parser.set_defaults(func=cmd_audit_list)
+
+    usage_parser = subparsers.add_parser("usage", help="Inspect derived workspace usage accounting")
+    usage_subparsers = usage_parser.add_subparsers(dest="usage_command", required=True)
+
+    usage_report_parser = usage_subparsers.add_parser("report", help="Write a usage summary manifest for the workspace")
+    usage_report_parser.add_argument("--workspace", default=".")
+    usage_report_parser.set_defaults(func=cmd_usage_report)
 
     access_parser = subparsers.add_parser("access", help="Manage file-native workspace roles and permissions")
     access_subparsers = access_parser.add_subparsers(dest="access_command", required=True)

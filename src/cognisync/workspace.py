@@ -86,6 +86,14 @@ class Workspace:
         return self.state_dir / "access.json"
 
     @property
+    def audit_manifest_path(self) -> Path:
+        return self.state_dir / "audit.json"
+
+    @property
+    def usage_manifest_path(self) -> Path:
+        return self.state_dir / "usage.json"
+
+    @property
     def sources_manifest_path(self) -> Path:
         return self.state_dir / "sources.json"
 

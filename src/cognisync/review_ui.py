@@ -27,6 +27,7 @@ from cognisync.jobs import JobError, list_jobs, run_job_worker
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.linter import lint_snapshot
 from cognisync.notifications import write_notifications_manifest
+from cognisync.observability import build_audit_manifest, build_usage_manifest, write_audit_manifest, write_usage_manifest
 from cognisync.planner import build_compile_plan
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
@@ -118,6 +119,8 @@ def render_review_ui_html(
     connectors = dict(payload.get("connectors", {}))
     connector_items = list(connectors.get("items", []))
     access = dict(payload.get("access", {}))
+    audit = dict(payload.get("audit", {}))
+    usage = dict(payload.get("usage", {}))
     notifications = dict(payload.get("notifications", {}))
     run_timeline = dict(payload.get("run_timeline", {}))
     concept_graph = dict(payload.get("concept_graph", {}))
@@ -134,6 +137,7 @@ def render_review_ui_html(
         ("Sync Events", str(sync.get("total_count", 0))),
         ("Connectors", str(connectors.get("total_count", 0))),
         ("Workspace Members", str(access.get("member_count", 0))),
+        ("Audit Events", str(audit.get("total_count", 0))),
         ("Notifications", str(notifications.get("total_count", 0))),
         ("Known Conflicts", str(graph.get("conflict_count", 0))),
         ("Sources", str(source_coverage.get("source_count", 0))),
@@ -251,6 +255,14 @@ def render_review_ui_html(
             "        <article class=\"panel\">",
             "          <h2>Workspace Access</h2>",
             _render_access_summary(access),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Audit History</h2>",
+            _render_audit_summary(audit),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Usage Summary</h2>",
+            _render_usage_summary(usage),
             "        </article>",
             "        <article class=\"panel\">",
             "          <h2>Notifications</h2>",
@@ -387,6 +399,8 @@ def build_review_ui_state(
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
     access = _build_access_summary(workspace)
+    audit = _build_audit_history(workspace)
+    usage = _build_usage_summary(workspace)
     notifications = _build_notifications(workspace)
     return {
         "schema_version": 1,
@@ -403,6 +417,8 @@ def build_review_ui_state(
             "connector_registry_path": workspace.relative_path(workspace.connector_registry_path),
             "notifications_manifest_path": workspace.relative_path(workspace.notifications_manifest_path),
             "access_manifest_path": workspace.relative_path(workspace.access_manifest_path),
+            "audit_manifest_path": workspace.relative_path(workspace.audit_manifest_path),
+            "usage_manifest_path": workspace.relative_path(workspace.usage_manifest_path),
         },
         "review": review_payload,
         "source_coverage": _build_source_coverage(workspace),
@@ -413,6 +429,8 @@ def build_review_ui_state(
         "sync": sync,
         "connectors": connectors,
         "access": access,
+        "audit": audit,
+        "usage": usage,
         "notifications": notifications,
         "run_timeline": _build_run_timeline(workspace),
         "concept_graph": _build_concept_graph(workspace),
@@ -940,6 +958,66 @@ def _render_access_summary(access: Dict[str, object]) -> str:
             ]
         )
     lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_audit_summary(audit: Dict[str, object]) -> str:
+    items = list(audit.get("items", []))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">events <strong>{escape(str(audit.get('total_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">kinds <strong>{escape(str(len(dict(audit.get('counts_by_kind', {})))))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{escape(str(audit.get('manifest_path', '')))}</code></p>",
+        _render_kind_table("Event Kinds", dict(audit.get("counts_by_kind", {}))),
+        _render_kind_table("Event Statuses", dict(audit.get("counts_by_status", {}))),
+    ]
+    if not items:
+        lines.append("          <p class=\"empty\">No audit events recorded.</p>")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "          <h3>Recent Events</h3>",
+            "          <table>",
+            "            <thead><tr><th>Event</th><th>Kind</th><th>Status</th></tr></thead>",
+            "            <tbody>",
+        ]
+    )
+    for item in items[:8]:
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong>"
+                    + escape(str(item.get("label", "")))
+                    + "</strong><br><span class=\"muted\"><code>"
+                    + escape(str(item.get("path", "")))
+                    + "</code></span></td>"
+                ),
+                f"                <td>{escape(str(item.get('event_kind', '')))}</td>",
+                f"                <td>{escape(str(item.get('status', '')))}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_usage_summary(usage: Dict[str, object]) -> str:
+    summary = dict(usage.get("summary", {}))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">runs <strong>{escape(str(summary.get('run_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">jobs <strong>{escape(str(summary.get('job_count', 0)))}</strong></span>",
+        f"            <span class=\"pill danger\">bytes <strong>{escape(str(summary.get('storage_total_bytes', 0)))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{escape(str(usage.get('manifest_path', '')))}</code></p>",
+        _render_kind_table("Access Roles", dict(summary.get("access_counts_by_role", {}))),
+        _render_kind_table("Run Kinds", dict(summary.get("run_counts_by_kind", {}))),
+        _render_kind_table("Job Types", dict(summary.get("job_counts_by_type", {}))),
+        _render_kind_table("Connector Kinds", dict(summary.get("connector_counts_by_kind", {}))),
+        _render_kind_table("Storage Bytes", dict(summary.get("storage_bytes_by_area", {}))),
+    ]
     return "\n".join(lines)
 
 
@@ -1627,6 +1705,27 @@ def _build_access_summary(workspace: Workspace, limit: int = 24) -> Dict[str, ob
         "member_count": len(members),
         "counts_by_role": dict(counts_by_role),
         "members": items,
+    }
+
+
+def _build_audit_history(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    write_audit_manifest(workspace)
+    payload = build_audit_manifest(workspace, limit=limit)
+    return {
+        "manifest_path": workspace.relative_path(workspace.audit_manifest_path),
+        "total_count": int(dict(payload.get("summary", {})).get("total_count", 0) or 0),
+        "counts_by_kind": dict(dict(payload.get("summary", {})).get("counts_by_kind", {})),
+        "counts_by_status": dict(dict(payload.get("summary", {})).get("counts_by_status", {})),
+        "items": [dict(item) for item in list(payload.get("events", []))[:limit]],
+    }
+
+
+def _build_usage_summary(workspace: Workspace) -> Dict[str, object]:
+    write_usage_manifest(workspace)
+    payload = build_usage_manifest(workspace)
+    return {
+        "manifest_path": workspace.relative_path(workspace.usage_manifest_path),
+        "summary": dict(payload.get("summary", {})),
     }
 
 
