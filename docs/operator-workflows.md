@@ -161,6 +161,8 @@ You can also ask the same bundle to emit provider-specific supervised records. F
 - average source and citation usage
 - run-status and job-profile breakdowns
 - validation-label tallies for downstream evaluation tracking
+- dimension averages for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
+- per-run dimension payloads so downstream feedback loops can consume more than pass/fail labels
 
 `synth qa` reads the assertion graph and writes deterministic question-answer pairs with source ids and support paths.
 

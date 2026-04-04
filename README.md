@@ -221,7 +221,7 @@ The operator loop now has a review layer too:
 - `cognisync export finetune-bundle` writes supervised and retrieval datasets together so research runs, synthetic QA, and contrastive pairs can feed downstream finetuning jobs from one bundle
 - `cognisync export finetune-bundle --provider-format openai-chat` also emits an OpenAI-style chat JSONL alongside the generic supervised dataset
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
-- `cognisync eval research` scores persisted research runs and writes a scorecard report plus machine-readable payload
+- `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
 - `cognisync ui review` builds a lightweight browser dashboard from the same review state, with graph and run drilldowns, artifact previews, source coverage, compile health, run timelines, concept-graph views, and local review actions when served
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
@@ -305,7 +305,7 @@ cognisync synth contrastive
 - `export finetune-bundle` writes `supervised.jsonl`, `retrieval.jsonl`, and `manifest.json` so downstream trainers get research-run SFT pairs, synthetic QA examples, and contrastive retrieval pairs in one timestamped export
 - `export finetune-bundle --provider-format openai-chat` also writes `supervised.openai-chat.jsonl` with `messages` arrays for direct OpenAI chat-finetuning pipelines
 - `export presentations` copies generated slide decks and their companion reports or filed answers into a timestamped bundle with a stable `manifest.json`
-- `eval research` writes a Markdown scorecard and JSON payload with pass/fail counts, profile breakdowns, and validation-label tallies across persisted research runs
+- `eval research` writes a Markdown scorecard and JSON payload with pass/fail counts, profile breakdowns, validation-label tallies, per-run dimension scores, and aggregate quality metrics such as grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `synth qa` writes assertion-grounded question-answer pairs from `.cognisync/graph.json`
 - `synth contrastive` writes positive/negative retrieval pairs from assertion support paths
 - both export surfaces write into `outputs/reports/exports/`
