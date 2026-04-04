@@ -223,6 +223,7 @@ The operator loop now has a review layer too:
 - `cognisync export feedback-bundle` turns low-quality research runs into remediation-ready records so eval output can feed a real correction loop
 - `cognisync remediate research --profile <profile>` replays weak research runs through remediation prompts and writes validated correction jobs under `outputs/reports/remediation-jobs/`
 - `cognisync export correction-bundle` turns those validated remediation jobs into correction-training records for downstream repair or finetuning loops
+- `cognisync export training-loop-bundle --provider-format openai-chat` packages evaluation, feedback, corrections, and finetune artifacts into one portable training-loop bundle
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
@@ -299,6 +300,7 @@ cognisync export finetune-bundle --provider-format openai-chat
 cognisync export feedback-bundle
 cognisync remediate research --profile codex
 cognisync export correction-bundle
+cognisync export training-loop-bundle --provider-format openai-chat
 cognisync export presentations
 cognisync eval research
 cognisync synth qa
@@ -313,6 +315,7 @@ cognisync synth contrastive
 - `export feedback-bundle` writes `remediation.jsonl` plus `manifest.json` for runs that need improvement, including their weak dimensions, current answers, and remediation prompts
 - `remediate research --profile <profile>` consumes those weak runs, writes a remediation packet plus corrected answer and validation report under `outputs/reports/remediation-jobs/`, and keeps those job artifacts out of retrieval
 - `export correction-bundle` writes `dataset.jsonl` plus `manifest.json` for remediation jobs that passed validation, including the corrected answer, the previous failing answer, the improvement targets, and links back to the source and remediation manifests
+- `export training-loop-bundle` writes a timestamped umbrella bundle with nested `evaluation/`, `feedback/`, `corrections/`, and `finetune/` directories plus a top-level manifest so downstream training systems can ingest the full loop from one artifact
 - `export presentations` copies generated slide decks and their companion reports or filed answers into a timestamped bundle with a stable `manifest.json`
 - `eval research` writes a Markdown scorecard and JSON payload with pass/fail counts, profile breakdowns, validation-label tallies, per-run dimension scores, and aggregate quality metrics such as grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `synth qa` writes assertion-grounded question-answer pairs from `.cognisync/graph.json`

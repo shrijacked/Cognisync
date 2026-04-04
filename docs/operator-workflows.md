@@ -126,6 +126,7 @@ Supported paths in this release:
 - `cognisync export finetune-bundle --provider-format openai-chat`
 - `cognisync export feedback-bundle`
 - `cognisync export correction-bundle`
+- `cognisync export training-loop-bundle --provider-format openai-chat`
 - `cognisync export presentations`
 - `cognisync eval research`
 - `cognisync synth qa`
@@ -167,6 +168,14 @@ You can also ask the same bundle to emit provider-specific supervised records. F
 - `dataset.jsonl` records for remediation jobs that finished with passing validation
 - the corrected answer, the previous failing answer, the recorded improvement targets, and the validation payload per record
 - a bundle `manifest.json` with counts grouped by improvement target, completion status, and example type
+
+`export training-loop-bundle` writes a timestamped umbrella bundle under `outputs/reports/exports/` with:
+
+- `evaluation/` for the Markdown scorecard and JSON eval payload
+- `feedback/` for remediation-ready low-quality records
+- `corrections/` for validated remediation-correction training examples
+- `finetune/` for the supervised and retrieval training exports, including any requested provider-specific records
+- a top-level `manifest.json` that ties the whole bundle together with counts and relative paths
 
 `eval research` reads the same persisted research runs and writes a Markdown scorecard plus JSON payload with:
 

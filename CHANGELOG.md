@@ -10,6 +10,7 @@
 - added `cognisync export feedback-bundle` so low-quality research runs can be turned into remediation-ready records for correction loops
 - added `cognisync remediate research` so low-quality runs can be replayed through correction prompts and validated without overwriting the original artifacts
 - added `cognisync export correction-bundle` so validated remediation jobs can be exported as correction-training records with previous-response context
+- added `cognisync export training-loop-bundle` so evaluation, feedback, correction, and finetune artifacts can ship together as one portable training package
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
 - expanded `cognisync eval research` with dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
