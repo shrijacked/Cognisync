@@ -225,8 +225,8 @@ The operator loop now has a review layer too:
 - `cognisync export correction-bundle` turns those validated remediation jobs into correction-training records for downstream repair or finetuning loops
 - `cognisync export training-loop-bundle --provider-format openai-chat` packages evaluation, feedback, corrections, and finetune artifacts into one portable training-loop bundle
 - `cognisync improve research --profile <profile> --provider-format openai-chat` runs the remediation loop and refreshes the bundled training artifact in one command
-- `cognisync jobs enqueue ...`, `jobs run-next`, and `jobs list` provide a persisted local queue for remote-style research and improvement execution
-- `cognisync sync export` and `sync import` move portable workspace bundles between machines or operators without relying on an external database
+- `cognisync jobs enqueue ...`, `jobs run-next`, `jobs retry`, and `jobs list` provide a persisted local queue plus retry lineage for remote-style research and improvement execution
+- `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators and keep an audit trail in `.cognisync/sync/`
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
@@ -243,6 +243,7 @@ The operator loop now has a review layer too:
 - when served locally, the dashboard can accept concepts, dismiss or reopen review items, apply backlinks, file conflict notes, and resolve merge candidates against the live workspace state
 - the dashboard now surfaces graph overview data from `.cognisync/graph.json`, connected artifact summaries, recent change summaries, filtered graph/run explorers, richer run history from `.cognisync/runs/`, and browser-readable previews for referenced artifacts
 - the dashboard also surfaces source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, a run timeline page, and a static concept-graph map backed by `.cognisync/graph.json`
+- the same dashboard now also surfaces job-queue history from `.cognisync/jobs/` and sync audit history from `.cognisync/sync/`, with static job-detail and sync-detail pages for browser-first control-plane inspection
 
 Maintenance policy is now configurable too. Cognisync reads defaults from `.cognisync/config.json` and lets you override them per run:
 
@@ -336,17 +337,21 @@ You can now stage remote-style work locally instead of running everything immedi
 cognisync jobs enqueue research --profile codex "map the open questions in this corpus"
 cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat
 cognisync jobs run-next
+cognisync jobs retry research-... --profile codex
 cognisync jobs list
 
 cognisync sync export
+cognisync sync history
 cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /tmp/other-workspace
 ```
 
 - `jobs enqueue research` persists a queued research manifest under `.cognisync/jobs/manifests/`
 - `jobs enqueue improve-research` queues the one-shot correction-and-training loop for later execution
 - `jobs run-next` marks the oldest queued job as running, executes it through the existing runtime, and records the result back into the job manifest plus `.cognisync/jobs/queue.json`
+- `jobs retry` re-queues a terminal job with lineage back to the original manifest, and can override the profile for another attempt
 - `sync export` writes a portable workspace bundle under `outputs/reports/sync-bundles/` with `raw/`, `wiki/`, `prompts/`, `.cognisync/`, and the important report job directories
 - `sync import` restores that bundle into another workspace root so queued state, manifests, and corpus files travel together
+- `sync history` reads `.cognisync/sync/history.json`, which records both export and import events plus their bundle manifests
 
 ## Built-In Adapter Example
 

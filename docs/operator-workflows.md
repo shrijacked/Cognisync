@@ -112,7 +112,7 @@ The command:
 3. writes stable `review-export.json` and `dashboard-state.json` sidecars in the same directory
 4. can optionally serve that directory locally with `--serve`
 
-The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, and run history from `.cognisync/runs/`. It also writes static graph-node, run-detail, run-timeline, concept-graph, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, and run artifacts without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, and resolve merge candidates against the live workspace. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, run history from `.cognisync/runs/`, queued-job history from `.cognisync/jobs/`, and sync audit history from `.cognisync/sync/`. It also writes static graph-node, run-detail, run-timeline, concept-graph, job-detail, sync-detail, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, queued work, and sync handoffs without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, and resolve merge candidates against the live workspace. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
 
 ### `export`
 
@@ -230,6 +230,7 @@ Supported paths in this release:
 - `cognisync jobs enqueue research --profile codex "..."`
 - `cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat`
 - `cognisync jobs run-next`
+- `cognisync jobs retry <job-id> --profile codex`
 - `cognisync jobs list`
 
 The command family:
@@ -238,6 +239,7 @@ The command family:
 2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
 3. reuses the same `research` and `improve research` runtimes when a worker executes `jobs run-next`
 4. records result paths back into the job manifest instead of dropping that state into terminal-only output
+5. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
 
 ```mermaid
 flowchart LR
@@ -245,7 +247,8 @@ flowchart LR
     B --> C["jobs run-next claims oldest queued job"]
     C --> D["existing runtime executes research or improvement loop"]
     D --> E["job manifest stores result paths and completion status"]
-    E --> F["queue summary reflects remaining queued work"]
+    E --> F["jobs retry can re-queue a terminal job with lineage"]
+    F --> G["queue summary reflects remaining queued work"]
 ```
 
 ### `sync`
@@ -254,6 +257,7 @@ Use `sync` when you want to move a workspace between operators or machines witho
 
 Supported paths in this release:
 
+- `cognisync sync history`
 - `cognisync sync export`
 - `cognisync sync import <bundle-dir> --workspace /path/to/workspace`
 
@@ -269,6 +273,8 @@ Supported paths in this release:
 - `outputs/reports/remediation-jobs/`
 
 `sync import` restores those same paths into another workspace root so corpus files, job state, and execution manifests can move together.
+
+Every export and import also records a sync event under `.cognisync/sync/manifests/` and refreshes `.cognisync/sync/history.json`, so a later operator or UI can inspect how the workspace moved without parsing bundle directories manually.
 
 The scanner ignores `outputs/reports/sync-bundles/` so exported handoff artifacts never re-enter retrieval.
 

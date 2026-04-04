@@ -14,6 +14,8 @@
 - added `cognisync improve research` so the remediation loop and training-loop bundle refresh can run as one operator action
 - added `cognisync jobs` so research and improvement work can be queued, persisted, and executed later through local control-plane style manifests
 - added `cognisync sync export` and `sync import` so file-native workspaces can move between operators as portable bundles
+- added `cognisync jobs retry` so terminal jobs can be re-queued with explicit lineage to the original manifest
+- added `.cognisync/sync/history.json` and per-event sync manifests so workspace handoffs now leave an audit trail
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
 - expanded `cognisync eval research` with dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
@@ -24,6 +26,7 @@
 - added claim-level fact blocks to query and research reports so grounded assertions render separately from narrative synthesis
 - grounded accepted concept pages with assertion-backed evidence sections instead of source links alone
 - expanded `cognisync ui review` with source-coverage panels, compile-health summaries, run timelines, concept-graph pages, graph-node drilldowns, run-detail pages, artifact previews, lightweight filters, and local review actions when served
+- expanded `cognisync ui review` again with job-queue and sync-history panels, filterable explorers, and static job-detail and sync-detail pages
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions
