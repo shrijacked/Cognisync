@@ -819,7 +819,7 @@ def _render_job_history_summary(jobs: Dict[str, object]) -> str:
         _render_kind_table("Job Statuses", counts_by_status),
         "          <h3>Recent Jobs</h3>",
         "          <table>",
-        "            <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Updated</th></tr></thead>",
+        "            <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Requested By</th><th>Updated</th></tr></thead>",
         "            <tbody>",
     ]
     for item in recent_items:
@@ -828,6 +828,7 @@ def _render_job_history_summary(jobs: Dict[str, object]) -> str:
         path = escape(str(item.get("path", "")))
         job_type = escape(str(item.get("job_type", "")))
         status = escape(str(item.get("status", "")))
+        requested_by_id = escape(str(item.get("requested_by_id", "")) or "-")
         updated_at = escape(str(item.get("updated_at", "")))
         lines.extend(
             [
@@ -843,6 +844,7 @@ def _render_job_history_summary(jobs: Dict[str, object]) -> str:
                 ),
                 f"                <td>{job_type}</td>",
                 f"                <td>{status}</td>",
+                f"                <td>{requested_by_id}</td>",
                 f"                <td>{updated_at}</td>",
                 "              </tr>",
             ]
@@ -903,7 +905,7 @@ def _render_sync_history_summary(sync: Dict[str, object]) -> str:
         _render_kind_table("Sync Operations", counts_by_operation),
         "          <h3>Recent Events</h3>",
         "          <table>",
-        "            <thead><tr><th>Event</th><th>Operation</th><th>Files</th><th>Generated</th></tr></thead>",
+        "            <thead><tr><th>Event</th><th>Operation</th><th>Actor</th><th>Files</th><th>Generated</th></tr></thead>",
         "            <tbody>",
     ]
     for item in recent_items:
@@ -911,6 +913,7 @@ def _render_sync_history_summary(sync: Dict[str, object]) -> str:
         label = escape(str(item.get("label", "")))
         path = escape(str(item.get("path", "")))
         operation = escape(str(item.get("operation", "")))
+        actor_id = escape(str(item.get("actor_id", "")) or "-")
         file_count = escape(str(item.get("file_count", 0)))
         generated_at = escape(str(item.get("generated_at", "")))
         lines.extend(
@@ -926,6 +929,7 @@ def _render_sync_history_summary(sync: Dict[str, object]) -> str:
                     + "</code></span></td>"
                 ),
                 f"                <td>{operation}</td>",
+                f"                <td>{actor_id}</td>",
                 f"                <td>{file_count}</td>",
                 f"                <td>{generated_at}</td>",
                 "              </tr>",
@@ -950,7 +954,7 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
         _render_kind_table("Connector Kinds", counts_by_kind),
         "          <h3>Registered Connectors</h3>",
         "          <table>",
-        "            <thead><tr><th>Connector</th><th>Kind</th><th>Last Sync</th><th>Actions</th></tr></thead>",
+        "            <thead><tr><th>Connector</th><th>Kind</th><th>Created By</th><th>Last Sync</th><th>Actions</th></tr></thead>",
         "            <tbody>",
     ]
     for item in recent_items:
@@ -958,6 +962,7 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
         label = escape(str(item.get("label", "")))
         source = escape(str(item.get("source", "")))
         kind = escape(str(item.get("kind", "")))
+        created_by_id = escape(str(item.get("created_by_id", "")) or "-")
         last_synced_at = escape(str(item.get("last_synced_at", "")) or "-")
         lines.extend(
             [
@@ -972,6 +977,7 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
                     + "</code></span></td>"
                 ),
                 f"                <td>{kind}</td>",
+                f"                <td>{created_by_id}</td>",
                 f"                <td>{last_synced_at}</td>",
                 f"                <td>{_render_connector_actions(item)}</td>",
                 "              </tr>",
@@ -1643,6 +1649,7 @@ def _build_job_history(workspace: Workspace, limit: int = 24) -> Dict[str, objec
         job_id = str(manifest.get("job_id", ""))
         job_type = str(manifest.get("job_type", "unknown"))
         status = str(manifest.get("status", "unknown"))
+        requested_by = dict(manifest.get("requested_by", {})) if isinstance(manifest.get("requested_by"), dict) else {}
         counts_by_kind[job_type] += 1
         counts_by_status[status] += 1
         relative = workspace.relative_path(workspace.job_manifests_dir / f"{job_id}.json")
@@ -1651,6 +1658,8 @@ def _build_job_history(workspace: Workspace, limit: int = 24) -> Dict[str, objec
                 "label": job_id,
                 "job_type": job_type,
                 "status": status,
+                "requested_by_id": str(requested_by.get("principal_id", "")),
+                "requested_by_role": str(requested_by.get("role", "")),
                 "updated_at": str(manifest.get("updated_at", "")),
                 "created_at": str(manifest.get("created_at", "")),
                 "path": relative,
@@ -1665,6 +1674,7 @@ def _build_job_history(workspace: Workspace, limit: int = 24) -> Dict[str, objec
                         manifest.get("title"),
                         manifest.get("error"),
                         manifest.get("retry_of_job_id"),
+                        requested_by.get("principal_id"),
                         relative,
                     ]
                 ),
@@ -1713,6 +1723,9 @@ def _build_sync_history(workspace: Workspace, limit: int = 24) -> Dict[str, obje
         sync_id = str(event.get("sync_id", ""))
         operation = str(event.get("operation", "unknown"))
         status = str(event.get("status", "unknown"))
+        actor = dict(event.get("actor", {})) if isinstance(event.get("actor"), dict) else {}
+        source_bundle = dict(event.get("source_bundle", {})) if isinstance(event.get("source_bundle"), dict) else {}
+        source_actor = dict(source_bundle.get("actor", {})) if isinstance(source_bundle.get("actor"), dict) else {}
         counts_by_operation[operation] += 1
         relative = workspace.relative_path(workspace.sync_manifests_dir / f"{sync_id}.json")
         items.append(
@@ -1720,6 +1733,9 @@ def _build_sync_history(workspace: Workspace, limit: int = 24) -> Dict[str, obje
                 "label": sync_id,
                 "operation": operation,
                 "status": status,
+                "actor_id": str(actor.get("principal_id", "")),
+                "actor_role": str(actor.get("role", "")),
+                "source_actor_id": str(source_actor.get("principal_id", "")),
                 "generated_at": str(event.get("generated_at", "")),
                 "file_count": str(event.get("file_count", 0)),
                 "path": relative,
@@ -1730,6 +1746,8 @@ def _build_sync_history(workspace: Workspace, limit: int = 24) -> Dict[str, obje
                         sync_id,
                         operation,
                         status,
+                        actor.get("principal_id"),
+                        source_actor.get("principal_id"),
                         event.get("bundle_dir_relative"),
                         event.get("bundle_manifest_relative"),
                         relative,
@@ -1752,6 +1770,11 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
     for connector in connectors:
         connector_id = str(connector.get("connector_id", ""))
         kind = str(connector.get("kind", "unknown"))
+        created_by = dict(connector.get("created_by", {})) if isinstance(connector.get("created_by"), dict) else {}
+        updated_by = dict(connector.get("updated_by", {})) if isinstance(connector.get("updated_by"), dict) else {}
+        last_synced_by = (
+            dict(connector.get("last_synced_by", {})) if isinstance(connector.get("last_synced_by"), dict) else {}
+        )
         counts_by_kind[kind] += 1
         items.append(
             {
@@ -1759,6 +1782,9 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
                 "kind": kind,
                 "name": str(connector.get("name", "")),
                 "source": str(connector.get("source", "")),
+                "created_by_id": str(created_by.get("principal_id", "")),
+                "updated_by_id": str(updated_by.get("principal_id", "")),
+                "last_synced_by_id": str(last_synced_by.get("principal_id", "")),
                 "last_synced_at": str(connector.get("last_synced_at", "") or ""),
                 "last_result_count": str(connector.get("last_result_count", 0) or 0),
                 "last_change_summary_path": str(connector.get("last_change_summary_path", "") or ""),
@@ -1771,6 +1797,8 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
                         kind,
                         connector.get("name"),
                         connector.get("source"),
+                        created_by.get("principal_id"),
+                        last_synced_by.get("principal_id"),
                         connector.get("last_synced_at"),
                         connector.get("last_change_summary_path"),
                         connector.get("last_run_manifest_path"),
@@ -2455,6 +2483,7 @@ def _render_job_detail_html(
                 ("Title", _render_code_value(str(manifest.get("title", "")))),
                 ("Created", _render_code_value(str(manifest.get("created_at", "")))),
                 ("Updated", _render_code_value(str(manifest.get("updated_at", "")))),
+                ("Requested By", _render_actor_code_value(dict(manifest.get("requested_by", {})))),
                 ("Attempts", _render_code_value(str(manifest.get("attempts", 0)))),
                 ("Retry Of", _render_code_value(str(manifest.get("retry_of_job_id", "")) or "-")),
                 ("Error", _render_code_value(str(manifest.get("error", "")) or "-")),
@@ -2511,6 +2540,8 @@ def _render_sync_detail_html(
                 ("Operation", _render_code_value(str(manifest.get("operation", "")))),
                 ("Status", _render_code_value(str(manifest.get("status", "")))),
                 ("Generated", _render_code_value(str(manifest.get("generated_at", "")))),
+                ("Actor", _render_actor_code_value(dict(manifest.get("actor", {})))),
+                ("Source Bundle Actor", _render_actor_code_value(dict(dict(manifest.get("source_bundle", {})).get("actor", {})))),
                 ("File Count", _render_code_value(str(manifest.get("file_count", 0)))),
                 ("Bundle Directory", _render_code_value(str(manifest.get("bundle_dir_relative", "")) or str(manifest.get("bundle_dir", "")))),
                 ("Bundle Manifest", _render_code_value(str(manifest.get("bundle_manifest_relative", "")) or str(manifest.get("bundle_manifest_path", "")))),
@@ -2551,6 +2582,9 @@ def _render_connector_detail_html(
                 ("Kind", _render_code_value(str(item.get("kind", "")))),
                 ("Name", _render_code_value(str(item.get("name", "")))),
                 ("Source", _render_code_value(str(item.get("source", "")))),
+                ("Created By", _render_code_value(str(item.get("created_by_id", "")) or "-")),
+                ("Updated By", _render_code_value(str(item.get("updated_by_id", "")) or "-")),
+                ("Last Synced By", _render_code_value(str(item.get("last_synced_by_id", "")) or "-")),
                 ("Last Synced", _render_code_value(str(item.get("last_synced_at", "")) or "-")),
                 ("Last Result Count", _render_code_value(str(item.get("last_result_count", "")) or "0")),
                 ("Last Change Summary", _render_preview_value(current_href, str(item.get("last_change_summary_path", "")))),
@@ -2715,6 +2749,15 @@ def _render_sync_included_paths(paths: List[object]) -> str:
 
 def _render_code_value(value: str) -> str:
     return f"<code>{escape(value)}</code>"
+
+
+def _render_actor_code_value(actor: Dict[str, object]) -> str:
+    principal_id = str(actor.get("principal_id", "")).strip()
+    role = str(actor.get("role", "")).strip()
+    if not principal_id:
+        return _render_code_value("-")
+    label = principal_id if not role else f"{principal_id} ({role})"
+    return _render_code_value(label)
 
 
 def _render_link_value(current_href: str, label: str, target_href: str) -> str:

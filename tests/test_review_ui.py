@@ -49,6 +49,19 @@ class ReviewUiTests(unittest.TestCase):
             )
 
             self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "operator-2",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
             connector_url = "data:text/html;charset=utf-8,<html><head><title>Connector Page</title></head><body><p>Connector body.</p></body></html>"
             self.assertEqual(
                 main(
@@ -61,6 +74,8 @@ class ReviewUiTests(unittest.TestCase):
                         str(root),
                         "--name",
                         "connector-page",
+                        "--actor-id",
+                        "operator-2",
                     ]
                 ),
                 0,
@@ -73,12 +88,14 @@ class ReviewUiTests(unittest.TestCase):
                         "research",
                         "--workspace",
                         str(root),
+                        "--actor-id",
+                        "operator-2",
                         "map the open questions in this corpus",
                     ]
                 ),
                 0,
             )
-            self.assertEqual(main(["sync", "export", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["sync", "export", "--workspace", str(root), "--actor-id", "operator-2"]), 0)
             review_id = "conflict:raw-cloud.md:raw-local.md:the deployment model:is"
             self.assertEqual(
                 main(["review", "dismiss", review_id, "--reason", "tracking this manually", "--workspace", str(root)]),
@@ -159,6 +176,9 @@ class ReviewUiTests(unittest.TestCase):
             self.assertTrue(any(item["detail_href"] for item in state["jobs"]["items"]))
             self.assertTrue(any(item["detail_href"] for item in state["sync"]["items"]))
             self.assertTrue(any(item["detail_href"] for item in state["connectors"]["items"]))
+            self.assertTrue(any(item["requested_by_id"] == "operator-2" for item in state["jobs"]["items"]))
+            self.assertTrue(any(item["actor_id"] == "operator-2" for item in state["sync"]["items"]))
+            self.assertTrue(any(item["created_by_id"] == "operator-2" for item in state["connectors"]["items"]))
             self.assertEqual(payload["summary"]["dismissed_item_count"], 1)
             self.assertGreaterEqual(payload["summary"]["open_item_count"], 1)
             graph_detail_href = state["graph"]["nodes"][0]["detail_href"]
@@ -190,6 +210,9 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Job Detail", job_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Sync Detail", sync_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Connector Detail", connector_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("operator-2", job_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("operator-2", sync_detail_path.read_text(encoding="utf-8"))
+            self.assertIn("operator-2", connector_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Artifact Preview", change_detail_path.read_text(encoding="utf-8"))
             self.assertIn("Concept Graph", concept_graph_path.read_text(encoding="utf-8"))
             self.assertIn("Run Timeline", run_timeline_path.read_text(encoding="utf-8"))
