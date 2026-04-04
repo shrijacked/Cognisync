@@ -13,6 +13,10 @@ from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
 
+class ExportError(RuntimeError):
+    """Raised when an export contract cannot be materialized."""
+
+
 @dataclass(frozen=True)
 class ExportResult:
     path: Path
@@ -42,6 +46,7 @@ class FinetuneBundleResult:
     manifest_path: Path
     supervised_count: int
     retrieval_count: int
+    provider_exports: Dict[str, Path]
 
 
 def collect_research_export_records(workspace: Workspace) -> List[Dict[str, object]]:
@@ -179,6 +184,7 @@ def export_training_bundle(
 def export_finetune_bundle(
     workspace: Workspace,
     output_dir: Optional[Path] = None,
+    provider_formats: Optional[List[str]] = None,
 ) -> FinetuneBundleResult:
     destination = output_dir or _next_finetune_bundle_dir(workspace)
     destination.mkdir(parents=True, exist_ok=True)
@@ -188,11 +194,23 @@ def export_finetune_bundle(
 
     supervised_records = _build_supervised_finetune_records(workspace)
     retrieval_records = _build_retrieval_finetune_records(workspace)
+    requested_provider_formats = _normalize_provider_formats(provider_formats)
 
     supervised_lines = [json.dumps(record, sort_keys=True) for record in supervised_records]
     retrieval_lines = [json.dumps(record, sort_keys=True) for record in retrieval_records]
     supervised_path.write_text("\n".join(supervised_lines) + ("\n" if supervised_lines else ""), encoding="utf-8")
     retrieval_path.write_text("\n".join(retrieval_lines) + ("\n" if retrieval_lines else ""), encoding="utf-8")
+
+    provider_exports: Dict[str, Path] = {}
+    for provider_format in requested_provider_formats:
+        if provider_format == "openai-chat":
+            provider_path = destination / "supervised.openai-chat.jsonl"
+            provider_records = _build_openai_chat_supervised_records(supervised_records)
+            provider_lines = [json.dumps(record, sort_keys=True) for record in provider_records]
+            provider_path.write_text("\n".join(provider_lines) + ("\n" if provider_lines else ""), encoding="utf-8")
+            provider_exports[provider_format] = provider_path
+            continue
+        raise ExportError(f"Unsupported provider format: {provider_format}")
 
     manifest_payload = {
         "schema_version": 1,
@@ -204,6 +222,7 @@ def export_finetune_bundle(
         "retrieval_count": len(retrieval_records),
         "supervised_example_types": _count_example_types(supervised_records),
         "retrieval_example_types": _count_example_types(retrieval_records),
+        "provider_exports": {name: path.name for name, path in sorted(provider_exports.items())},
     }
     manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
     return FinetuneBundleResult(
@@ -213,6 +232,7 @@ def export_finetune_bundle(
         manifest_path=manifest_path,
         supervised_count=len(supervised_records),
         retrieval_count=len(retrieval_records),
+        provider_exports=provider_exports,
     )
 
 
@@ -310,6 +330,41 @@ def _count_example_types(records: List[Dict[str, object]]) -> Dict[str, int]:
     for record in records:
         counts[str(record.get("example_type", "unknown"))] += 1
     return dict(sorted(counts.items()))
+
+
+def _build_openai_chat_supervised_records(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    payload: List[Dict[str, object]] = []
+    for record in records:
+        prompt_text = str(record.get("prompt") or "").strip()
+        response_text = str(record.get("response") or "").strip()
+        if not prompt_text or not response_text:
+            continue
+        payload.append(
+            {
+                "messages": [
+                    {"role": "user", "content": prompt_text},
+                    {"role": "assistant", "content": response_text},
+                ],
+                "metadata": {
+                    "example_type": str(record.get("example_type", "")),
+                    "source_paths": list(record.get("source_paths", [])),
+                    "citations": list(record.get("citations", [])),
+                    "details": dict(record.get("metadata", {})),
+                },
+            }
+        )
+    return payload
+
+
+def _normalize_provider_formats(provider_formats: Optional[List[str]]) -> List[str]:
+    normalized: List[str] = []
+    for value in provider_formats or []:
+        item = str(value).strip().lower()
+        if not item:
+            continue
+        if item not in normalized:
+            normalized.append(item)
+    return normalized
 
 
 def _build_research_export_record(

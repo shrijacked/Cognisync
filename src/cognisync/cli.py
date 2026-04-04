@@ -17,6 +17,7 @@ from cognisync.demo import DemoError, create_demo_workspace
 from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
 from cognisync.evaluation import evaluate_research_runs
 from cognisync.exports import (
+    ExportError,
     export_finetune_bundle,
     export_presentations_bundle,
     export_research_jsonl,
@@ -258,11 +259,21 @@ def cmd_export_finetune_bundle(args: argparse.Namespace) -> int:
         if not output_dir.is_absolute():
             output_dir = workspace.root / output_dir
         output_dir = output_dir.resolve()
-    result = export_finetune_bundle(workspace, output_dir=output_dir)
+    try:
+        result = export_finetune_bundle(
+            workspace,
+            output_dir=output_dir,
+            provider_formats=list(args.provider_format or []),
+        )
+    except ExportError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Wrote finetune export to {result.directory}")
     print(f"Wrote supervised dataset to {result.supervised_path}")
     print(f"Wrote retrieval dataset to {result.retrieval_path}")
     print(f"Wrote finetune manifest to {result.manifest_path}")
+    for provider_name, provider_path in sorted(result.provider_exports.items()):
+        print(f"Wrote provider export {provider_name} to {provider_path}")
     print(
         "Bundled "
         f"{result.supervised_count} supervised example(s) and "
@@ -984,6 +995,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_finetune_parser.add_argument("--workspace", default=".")
     export_finetune_parser.add_argument("--output-dir", default=None)
+    export_finetune_parser.add_argument(
+        "--provider-format",
+        action="append",
+        default=[],
+        help="Optionally emit provider-specific supervised exports such as openai-chat",
+    )
     export_finetune_parser.set_defaults(func=cmd_export_finetune_bundle)
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate persisted Cognisync artifacts")

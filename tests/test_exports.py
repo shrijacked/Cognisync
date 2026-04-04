@@ -147,6 +147,80 @@ class ExportTests(unittest.TestCase):
             self.assertGreaterEqual(manifest["retrieval_count"], 1)
             self.assertIn("Wrote finetune export to", stdout.getvalue())
 
+    def test_export_finetune_bundle_can_emit_openai_chat_supervised_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Provider Export Workspace"]), 0)
+
+            (root / "raw" / "memory-a.md").write_text(
+                "# Memory A\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory-b.md").write_text(
+                "# Memory B\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(root / ".cognisync" / "config.json")
+            config.llm_profiles["researcher"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent memory uses vector databases. [S1]')",
+                ]
+            )
+            save_config(root / ".cognisync" / "config.json", config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "researcher",
+                        "how does agent memory work",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "export",
+                        "finetune-bundle",
+                        "--workspace",
+                        str(root),
+                        "--provider-format",
+                        "openai-chat",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            export_dirs = sorted((root / "outputs" / "reports" / "exports").glob("finetune-bundle-*"))
+            self.assertTrue(export_dirs)
+            provider_path = export_dirs[-1] / "supervised.openai-chat.jsonl"
+            manifest_path = export_dirs[-1] / "manifest.json"
+            self.assertTrue(provider_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            provider_records = [
+                json.loads(line) for line in provider_path.read_text(encoding="utf-8").splitlines() if line.strip()
+            ]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(provider_records)
+            self.assertIn("messages", provider_records[0])
+            self.assertEqual(provider_records[0]["messages"][0]["role"], "user")
+            self.assertEqual(provider_records[0]["messages"][1]["role"], "assistant")
+            self.assertEqual(
+                manifest["provider_exports"]["openai-chat"],
+                provider_path.name,
+            )
+            self.assertIn("Wrote provider export openai-chat to", stdout.getvalue())
+
     def test_export_jsonl_writes_research_dataset_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
