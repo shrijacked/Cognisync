@@ -48,6 +48,7 @@ from cognisync.maintenance import (
 )
 from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
+from cognisync.remediation import RemediationError, remediate_research_runs
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, RESEARCH_JOB_PROFILES, ResearchError, run_research_cycle
 from cognisync.review_exports import write_review_export
 from cognisync.review_queue import build_review_queue, render_review_queue
@@ -295,6 +296,26 @@ def cmd_export_feedback_bundle(args: argparse.Namespace) -> int:
     print(f"Wrote remediation dataset to {result.dataset_path}")
     print(f"Wrote feedback manifest to {result.manifest_path}")
     print(f"Bundled {result.record_count} remediation record(s).")
+    return 0
+
+
+def cmd_remediate_research(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = remediate_research_runs(
+            workspace,
+            profile_name=args.profile,
+            limit=args.limit,
+        )
+    except RemediationError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    if not result.remediated_count:
+        print("No remediation candidates found.")
+        return 0
+    print(f"Remediated {result.remediated_count} research run(s).")
+    for manifest_path in result.manifest_paths:
+        print(f"- {manifest_path}")
     return 0
 
 
@@ -1026,6 +1047,18 @@ def build_parser() -> argparse.ArgumentParser:
     export_feedback_parser.add_argument("--workspace", default=".")
     export_feedback_parser.add_argument("--output-dir", default=None)
     export_feedback_parser.set_defaults(func=cmd_export_feedback_bundle)
+
+    remediate_parser = subparsers.add_parser("remediate", help="Replay weak research runs through remediation prompts")
+    remediate_subparsers = remediate_parser.add_subparsers(dest="remediate_command", required=True)
+
+    remediate_research_parser = remediate_subparsers.add_parser(
+        "research",
+        help="Remediate low-quality research runs with a configured adapter profile",
+    )
+    remediate_research_parser.add_argument("--workspace", default=".")
+    remediate_research_parser.add_argument("--profile", required=True)
+    remediate_research_parser.add_argument("--limit", type=int, default=5)
+    remediate_research_parser.set_defaults(func=cmd_remediate_research)
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate persisted Cognisync artifacts")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)

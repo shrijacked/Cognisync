@@ -53,8 +53,7 @@ def export_feedback_bundle(
     workspace: Workspace,
     output_dir: Optional[Path] = None,
 ) -> FeedbackBundleResult:
-    records = collect_research_export_records(workspace)
-    feedback_records = _build_feedback_records(records)
+    feedback_records = collect_feedback_records(workspace)
     destination = output_dir or _next_feedback_bundle_dir(workspace)
     destination.mkdir(parents=True, exist_ok=True)
     dataset_path = destination / "remediation.jsonl"
@@ -82,6 +81,10 @@ def export_feedback_bundle(
         manifest_path=manifest_path,
         record_count=len(feedback_records),
     )
+
+
+def collect_feedback_records(workspace: Workspace) -> List[Dict[str, object]]:
+    return _build_feedback_records(collect_research_export_records(workspace))
 
 
 def _build_scorecard(records: List[Dict[str, object]]) -> Dict[str, object]:

@@ -138,6 +138,28 @@ Transformers rely on attention and influence [[agents]].
             self.assertIn("raw/note.md", snapshot.artifact_paths())
             self.assertNotIn("outputs/reports/research-jobs/research-run-1/working-set.md", snapshot.artifact_paths())
 
+    def test_scan_ignores_remediation_job_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Scanner Ignore Remediation Job Test")
+
+            (workspace.raw_dir / "note.md").write_text("# Note\n\nCorpus content.\n", encoding="utf-8")
+            remediation_dir = workspace.outputs_dir / "reports" / "remediation-jobs" / "remediation-run-1"
+            remediation_dir.mkdir(parents=True, exist_ok=True)
+            (remediation_dir / "remediation-packet.md").write_text(
+                "# Remediation Prompt\n\nOperator correction packet.\n",
+                encoding="utf-8",
+            )
+
+            snapshot = scan_workspace(workspace)
+
+            self.assertIn("raw/note.md", snapshot.artifact_paths())
+            self.assertNotIn(
+                "outputs/reports/remediation-jobs/remediation-run-1/remediation-packet.md",
+                snapshot.artifact_paths(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

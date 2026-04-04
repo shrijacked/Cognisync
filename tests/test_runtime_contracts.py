@@ -52,6 +52,108 @@ def _build_test_pdf_bytes(text: str) -> bytes:
 
 
 class RuntimeContractsTests(unittest.TestCase):
+    def test_remediate_research_replays_low_quality_runs_with_feedback_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="Remediation Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory helps agent loops persist findings.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["passer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            config.llm_profiles["failing"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops always require vector databases.')",
+                ]
+            )
+            config.llm_profiles["healer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(workspace.root),
+                        "--profile",
+                        "passer",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertNotEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(workspace.root),
+                        "--profile",
+                        "failing",
+                        "do agent loops always require vector databases",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "remediate",
+                        "research",
+                        "--workspace",
+                        str(workspace.root),
+                        "--profile",
+                        "healer",
+                        "--limit",
+                        "1",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            remediation_dirs = sorted((workspace.outputs_dir / "reports" / "remediation-jobs").glob("remediation-*"))
+            self.assertTrue(remediation_dirs)
+            manifest_path = remediation_dirs[-1] / "manifest.json"
+            prompt_path = remediation_dirs[-1] / "remediation-packet.md"
+            answer_path = remediation_dirs[-1] / "answer.md"
+            validation_report_path = remediation_dirs[-1] / "validation-report.md"
+            self.assertTrue(manifest_path.exists())
+            self.assertTrue(prompt_path.exists())
+            self.assertTrue(answer_path.exists())
+            self.assertTrue(validation_report_path.exists())
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "completed")
+            self.assertTrue(manifest["validation"]["passed"])
+            self.assertIn("citation_integrity", manifest["improvement_targets"])
+            self.assertIn("grounding", manifest["improvement_targets"])
+            self.assertIn("Remediation Prompt", prompt_path.read_text(encoding="utf-8"))
+            self.assertIn("[S1]", answer_path.read_text(encoding="utf-8"))
+            self.assertIn("Remediated 1 research run(s).", stdout.getvalue())
+
     def test_scan_writes_change_summary_for_new_conflicts_and_orphan_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

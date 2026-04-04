@@ -84,6 +84,10 @@ class Workspace:
     def research_jobs_dir(self) -> Path:
         return self.outputs_dir / "reports" / "research-jobs"
 
+    @property
+    def remediation_jobs_dir(self) -> Path:
+        return self.outputs_dir / "reports" / "remediation-jobs"
+
     def initialize(self, name: Optional[str] = None, force: bool = False) -> None:
         directories = [
             self.raw_dir,
