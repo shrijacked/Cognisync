@@ -124,6 +124,7 @@ Supported paths in this release:
 - `cognisync export training-bundle`
 - `cognisync export finetune-bundle`
 - `cognisync export finetune-bundle --provider-format openai-chat`
+- `cognisync export feedback-bundle`
 - `cognisync export presentations`
 - `cognisync eval research`
 - `cognisync synth qa`
@@ -153,6 +154,12 @@ Supported paths in this release:
 - a bundle `manifest.json` with supervised and retrieval counts plus example-type tallies
 
 You can also ask the same bundle to emit provider-specific supervised records. For example, `--provider-format openai-chat` writes `supervised.openai-chat.jsonl` with `messages` arrays for direct chat-finetuning flows while keeping the generic files intact.
+
+`export feedback-bundle` writes a timestamped remediation bundle under `outputs/reports/exports/` with:
+
+- `remediation.jsonl` records for runs whose quality dimensions fell below the remediation threshold
+- the current answer text, weak dimensions, and a remediation prompt per record
+- a bundle `manifest.json` with counts grouped by improvement target
 
 `eval research` reads the same persisted research runs and writes a Markdown scorecard plus JSON payload with:
 
