@@ -378,10 +378,12 @@ cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /
 - `jobs work --worker-id worker-a` drains claimable jobs sequentially under the same worker identity and lease settings
 - `jobs workers` renders `.cognisync/jobs/workers.json`, a derived worker registry that shows the last-seen time, active lease, and idle/completed state for every worker that has touched the queue
 - `jobs enqueue ...` and `jobs retry` now accept `--actor-id`, so operators can submit queue work under an explicit principal while workers still claim and execute jobs through `--worker-id`
+- queued job manifests now persist `requested_by`, so scheduled work keeps the submitting principal in `.cognisync/jobs/manifests/`
 - `sync export` writes a portable workspace bundle under `outputs/reports/sync-bundles/` with `raw/`, `wiki/`, `prompts/`, `.cognisync/`, and the important report job directories
 - `sync export` and `sync import` now accept `--actor-id`, require an operator workspace member, and persist that actor in both the bundle manifest and sync event history
 - `sync import` restores that bundle into another workspace root so queued state, manifests, and corpus files travel together
 - `sync history` reads `.cognisync/sync/history.json`, which now records export/import events, acting principals, and bundle lineage
+- connector registry entries and connector run manifests now persist the mutating or syncing actor, so `.cognisync/connectors.json` and `.cognisync/runs/` agree on who touched a connector
 
 ## Connectors
 

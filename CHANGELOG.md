@@ -49,6 +49,7 @@
 - expanded `cognisync ui review` with a worker panel sourced from `.cognisync/jobs/workers.json`
 - taught `cognisync sync export` and `sync import` to require explicit operator actors and persist those principals in sync bundle manifests plus `.cognisync/sync/history.json`
 - taught `access` mutations, connector mutations, and job queue submission/retry commands to accept `--actor-id` and require operator principals
+- taught queued job manifests and connector manifests to persist the acting principal, so scheduler intent and connector ownership are durable in the filesystem state
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions

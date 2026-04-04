@@ -325,6 +325,7 @@ The command family:
 10. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
 11. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
 12. derives `.cognisync/jobs/workers.json` so queue ownership can be inspected as a worker roster instead of only by reading individual job manifests
+13. persists the scheduling principal as `requested_by` in each queued job manifest, so submitted work keeps its actor provenance even when a different worker executes it later
 
 ```mermaid
 flowchart LR
@@ -393,6 +394,7 @@ The command family:
 7. lets `connector sync-all` walk the registry and skip already-synced connectors unless `--force` is provided
 8. lets `connector sync-all --scheduled-only` select only connectors whose subscription window is currently due
 9. can be routed through `jobs enqueue connector-sync <connector-id>` or `jobs enqueue connector-sync-all --scheduled-only` when you want the worker loop to own connector pulls
+10. persists `created_by`, `updated_by`, and `last_synced_by` in `.cognisync/connectors.json`, while connector run manifests record the same actor snapshot in `.cognisync/runs/`
 
 ### `maintain`
 
