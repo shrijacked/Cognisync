@@ -63,6 +63,7 @@ from cognisync.maintenance import (
     run_maintenance_cycle,
 )
 from cognisync.manifests import write_workspace_manifests
+from cognisync.notifications import render_notifications, write_notifications_manifest
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.remediation import RemediationError, remediate_research_runs
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, RESEARCH_JOB_PROFILES, ResearchError, run_research_cycle
@@ -366,6 +367,14 @@ def cmd_sync_history(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     print(render_sync_history(workspace))
     print(f"Wrote sync history to {workspace.sync_history_manifest_path}")
+    return 0
+
+
+def cmd_notify_list(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    write_notifications_manifest(workspace)
+    print(render_notifications(workspace))
+    print(f"Wrote notifications to {workspace.notifications_manifest_path}")
     return 0
 
 
@@ -1151,6 +1160,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--workspace", default=".")
     doctor_parser.add_argument("--strict", action="store_true")
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    notify_parser = subparsers.add_parser("notify", help="Inspect the filesystem-native operator notification inbox")
+    notify_subparsers = notify_parser.add_subparsers(dest="notify_command", required=True)
+
+    notify_list_parser = notify_subparsers.add_parser("list", help="List active notifications")
+    notify_list_parser.add_argument("--workspace", default=".")
+    notify_list_parser.set_defaults(func=cmd_notify_list)
 
     jobs_parser = subparsers.add_parser("jobs", help="Manage persisted local job queues for remote-style execution")
     jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command", required=True)

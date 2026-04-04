@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.ingest import IngestError, IngestResult, ingest_repo, ingest_sitemap, ingest_url, ingest_urls
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
+from cognisync.notifications import write_notifications_manifest
 from cognisync.scanner import scan_workspace
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
@@ -74,6 +75,7 @@ def add_connector(
     connectors.append(record)
     registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
     _write_connector_registry(workspace, registry)
+    write_notifications_manifest(workspace)
     return record
 
 

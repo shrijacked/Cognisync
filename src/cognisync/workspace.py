@@ -77,6 +77,10 @@ class Workspace:
         return self.state_dir / "connectors.json"
 
     @property
+    def notifications_manifest_path(self) -> Path:
+        return self.state_dir / "notifications.json"
+
+    @property
     def sources_manifest_path(self) -> Path:
         return self.state_dir / "sources.json"
 

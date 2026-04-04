@@ -25,6 +25,7 @@ from cognisync.connectors import ConnectorError, list_connectors, sync_all_conne
 from cognisync.jobs import JobError, list_jobs, run_job_worker
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.linter import lint_snapshot
+from cognisync.notifications import write_notifications_manifest
 from cognisync.planner import build_compile_plan
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
@@ -115,6 +116,7 @@ def render_review_ui_html(
     sync_items = list(sync.get("items", []))
     connectors = dict(payload.get("connectors", {}))
     connector_items = list(connectors.get("items", []))
+    notifications = dict(payload.get("notifications", {}))
     run_timeline = dict(payload.get("run_timeline", {}))
     concept_graph = dict(payload.get("concept_graph", {}))
     recent_change_summaries = list(payload.get("change_summaries", []))
@@ -129,6 +131,7 @@ def render_review_ui_html(
         ("Queued Jobs", str(jobs.get("queued_count", 0))),
         ("Sync Events", str(sync.get("total_count", 0))),
         ("Connectors", str(connectors.get("total_count", 0))),
+        ("Notifications", str(notifications.get("total_count", 0))),
         ("Known Conflicts", str(graph.get("conflict_count", 0))),
         ("Sources", str(source_coverage.get("source_count", 0))),
     ]
@@ -241,6 +244,10 @@ def render_review_ui_html(
             "        <article class=\"panel\">",
             "          <h2>Connectors</h2>",
             _render_connector_summary(connectors),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Notifications</h2>",
+            _render_notifications_summary(notifications),
             "        </article>",
             "        <article class=\"panel\">",
             "          <h2>Recent Change Summaries</h2>",
@@ -372,6 +379,7 @@ def build_review_ui_state(
     jobs = _build_job_history(workspace)
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
+    notifications = _build_notifications(workspace)
     return {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
@@ -385,6 +393,7 @@ def build_review_ui_state(
             "job_queue_manifest_path": workspace.relative_path(workspace.job_queue_manifest_path),
             "sync_history_manifest_path": workspace.relative_path(workspace.sync_history_manifest_path),
             "connector_registry_path": workspace.relative_path(workspace.connector_registry_path),
+            "notifications_manifest_path": workspace.relative_path(workspace.notifications_manifest_path),
         },
         "review": review_payload,
         "source_coverage": _build_source_coverage(workspace),
@@ -394,6 +403,7 @@ def build_review_ui_state(
         "jobs": jobs,
         "sync": sync,
         "connectors": connectors,
+        "notifications": notifications,
         "run_timeline": _build_run_timeline(workspace),
         "concept_graph": _build_concept_graph(workspace),
         "change_summaries": _read_recent_change_summaries(workspace),
@@ -877,6 +887,41 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
                 f"                <td>{kind}</td>",
                 f"                <td>{last_synced_at}</td>",
                 f"                <td>{_render_connector_actions(item)}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_notifications_summary(notifications: Dict[str, object]) -> str:
+    items = list(notifications.get("items", []))
+    if not items:
+        return "          <p class=\"empty\">No active notifications.</p>"
+    counts_by_severity = dict(notifications.get("counts_by_severity", {}))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">notifications <strong>{escape(str(notifications.get('total_count', 0)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Notification Severities", counts_by_severity),
+        "          <h3>Inbox</h3>",
+        "          <table>",
+        "            <thead><tr><th>Notification</th><th>Severity</th><th>Path</th></tr></thead>",
+        "            <tbody>",
+    ]
+    for item in items[:6]:
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong>"
+                    + escape(str(item.get("title", "")))
+                    + "</strong><br><span class=\"muted\">"
+                    + escape(str(item.get("detail", "")))
+                    + "</span></td>"
+                ),
+                f"                <td>{escape(str(item.get('severity', '')))}</td>",
+                f"                <td><code>{escape(str(item.get('path', '')))}</code></td>",
                 "              </tr>",
             ]
         )
@@ -1509,6 +1554,40 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
         "synced_count": sum(1 for connector in connectors if connector.get("last_synced_at")),
         "counts_by_kind": dict(counts_by_kind),
         "items": items[:limit],
+    }
+
+
+def _build_notifications(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    write_notifications_manifest(workspace)
+    if not workspace.notifications_manifest_path.exists():
+        return {
+            "manifest_path": workspace.relative_path(workspace.notifications_manifest_path),
+            "total_count": 0,
+            "counts_by_kind": {},
+            "counts_by_severity": {},
+            "items": [],
+        }
+    payload = read_json_manifest(workspace.notifications_manifest_path)
+    items = []
+    for item in list(payload.get("notifications", []))[:limit]:
+        items.append(
+            {
+                "id": str(item.get("id", "")),
+                "kind": str(item.get("kind", "")),
+                "severity": str(item.get("severity", "")),
+                "title": str(item.get("title", "")),
+                "detail": str(item.get("detail", "")),
+                "path": str(item.get("path", "")),
+                "related_paths": [str(path) for path in list(item.get("related_paths", []))],
+            }
+        )
+    summary = dict(payload.get("summary", {}))
+    return {
+        "manifest_path": workspace.relative_path(workspace.notifications_manifest_path),
+        "total_count": int(summary.get("total_count", 0) or 0),
+        "counts_by_kind": dict(summary.get("counts_by_kind", {})),
+        "counts_by_severity": dict(summary.get("counts_by_severity", {})),
+        "items": items,
     }
 
 

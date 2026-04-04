@@ -11,6 +11,7 @@ from cognisync.connectors import sync_all_connectors, sync_connector
 from cognisync.linter import lint_snapshot
 from cognisync.maintenance import run_maintenance_cycle
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
+from cognisync.notifications import write_notifications_manifest
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, run_research_cycle
 from cognisync.scanner import scan_workspace
 from cognisync.training_loop import improve_research_loop
@@ -504,6 +505,7 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    write_notifications_manifest(workspace)
     return workspace.job_queue_manifest_path
 
 
