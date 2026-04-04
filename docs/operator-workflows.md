@@ -300,28 +300,33 @@ Supported paths in this release:
 - `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2`
 - `cognisync jobs enqueue connector-sync <connector-id>`
 - `cognisync jobs enqueue connector-sync-all`
-- `cognisync jobs run-next`
+- `cognisync jobs claim-next --worker-id worker-a`
+- `cognisync jobs run-next --worker-id worker-a`
 - `cognisync jobs retry <job-id> --profile codex`
-- `cognisync jobs work --max-jobs 10`
+- `cognisync jobs work --worker-id worker-a --max-jobs 10`
 - `cognisync jobs list`
 
 The command family:
 
 1. persists queued job manifests under `.cognisync/jobs/manifests/`
 2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
-3. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
-4. records result paths back into the job manifest instead of dropping that state into terminal-only output
-5. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
-6. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
+3. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
+4. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
+5. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
+6. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
+7. records result paths back into the job manifest instead of dropping that state into terminal-only output
+8. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
+9. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
 
 ```mermaid
 flowchart LR
     A["jobs enqueue research, compile, lint, maintain, connector-sync, connector-sync-all, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
-    B --> C["jobs run-next or jobs work claims queued jobs"]
-    C --> D["existing runtime executes the matching operator loop"]
-    D --> E["job manifest stores result paths and completion status"]
-    E --> F["jobs retry can re-queue a terminal job with lineage"]
-    F --> G["queue summary reflects remaining queued work"]
+    B --> C["jobs claim-next records worker lease"]
+    C --> D["jobs run-next or jobs work resumes owned claims or claims fresh work"]
+    D --> E["existing runtime executes the matching operator loop"]
+    E --> F["job manifest stores result paths, lease history, and completion status"]
+    F --> G["jobs retry can re-queue a terminal job with lineage"]
+    G --> H["queue summary reflects remaining queued work"]
 ```
 
 ### `sync`
