@@ -236,6 +236,7 @@ The operator loop now has a review layer too:
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
 - `cognisync ui review` builds a lightweight browser dashboard from the same review state, with graph and run drilldowns, artifact previews, source coverage, compile health, run timelines, concept-graph views, and local review actions when served
+- `cognisync ui review --serve --actor-id reviewer-1` serves the same dashboard as an explicit workspace actor, so browser-side actions respect the file-native access roster instead of assuming every user is an operator
 - `cognisync maintain` applies open concept, merge, backlink, and conflict actions automatically, then writes a maintenance run manifest
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
@@ -246,6 +247,7 @@ The operator loop now has a review layer too:
 - general export bundles land under `outputs/reports/exports/` and are also ignored by the scanner so bridge artifacts do not leak back into retrieval
 - the review dashboard lands under `outputs/reports/review-ui/`, writes stable `review-export.json` and `dashboard-state.json` sidecars, emits static graph-node, run-detail, and artifact-preview pages, and can be served with `cognisync ui review --serve`
 - when served locally, the dashboard can accept concepts, dismiss or reopen review items, apply backlinks, file conflict notes, and resolve merge candidates against the live workspace state
+- the served dashboard now runs as an explicit `--actor-id`, shows that actor in the access panel, and returns a hard `403` when a reviewer tries operator-only actions like job execution or connector sync
 - the dashboard now surfaces graph overview data from `.cognisync/graph.json`, connected artifact summaries, recent change summaries, filtered graph/run explorers, richer run history from `.cognisync/runs/`, and browser-readable previews for referenced artifacts
 - the dashboard also surfaces source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, a run timeline page, and a static concept-graph map backed by `.cognisync/graph.json`
 - the same dashboard now also surfaces job-queue history from `.cognisync/jobs/` and sync audit history from `.cognisync/sync/`, with static job-detail and sync-detail pages for browser-first control-plane inspection
