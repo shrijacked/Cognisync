@@ -26,10 +26,15 @@ The goal is not to replace your favorite model or agent runner. The goal is to p
 
 ```text
 workspace/
+├── AGENTS.md
+├── log.md
 ├── raw/
 │   └── ... source documents, repos, datasets, images
 ├── wiki/
 │   ├── index.md
+│   ├── sources.md
+│   ├── concepts.md
+│   ├── queries.md
 │   ├── sources/
 │   ├── concepts/
 │   └── queries/
@@ -56,10 +61,13 @@ workspace/
 ## What Ships In This Reference Implementation
 
 - Workspace scaffolding
+- A root `AGENTS.md` workspace schema that explains the file-native contract to agents
+- A root `log.md` activity ledger that records init, ingest, lint, compile, research, and maintenance work
 - Deterministic corpus scanner and manifest builder
 - Stable source and graph manifests under `.cognisync/`
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
+- Regenerated wiki navigation catalogs at `wiki/index.md`, `wiki/sources.md`, `wiki/concepts.md`, and `wiki/queries.md`
 - Deterministic corpus change summaries after scan, ingest, maintenance, and research runs
 - Export bridges for JSONL research datasets, training bundles, and presentation bundles
 - Evaluation reports over persisted research runs
@@ -127,6 +135,18 @@ Each scan, ingest, maintenance, and research pass now also writes a small change
 - newly dismissed review items
 - newly surfaced conflicts
 - suggested follow-up questions based on new conflicts, assertion growth, and coverage gaps
+
+The workspace root now carries two operator-facing files inspired by the idea-file workflow:
+
+- `AGENTS.md` is the durable workspace schema that tells an LLM how to treat `raw/`, `wiki/`, `outputs/`, and `.cognisync/`
+- `log.md` is an append-only human-readable timeline of important workspace actions
+
+The wiki root also regenerates four navigation surfaces on refresh:
+
+- `wiki/index.md` is the top-level agent entry point
+- `wiki/sources.md`, `wiki/concepts.md`, and `wiki/queries.md` catalog the durable pages in each section
+- source and concept catalogs count as stable navigation backlinks
+- query catalogs only become backlink-bearing when an explicit review action promotes them, so query pages can still surface as orphan review candidates until they are intentionally filed
 
 The richer ingest layer now makes the loop more useful before an LLM even runs:
 

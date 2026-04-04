@@ -6,6 +6,7 @@ This document describes the day-to-day operational loop for Cognisync.
 
 It focuses on seven commands that make the framework feel like a product rather than a toolkit:
 
+- `cognisync init`
 - `cognisync doctor`
 - `cognisync ingest ...`
 - `cognisync review`
@@ -20,7 +21,7 @@ It focuses on seven commands that make the framework feel like a product rather 
 ```mermaid
 flowchart TD
     A["doctor validates workspace and adapters"] --> B["ingest adds new raw material into raw/"]
-    B --> C["scan updates the deterministic index"]
+    B --> C["scan refreshes AGENTS.md, log.md, and wiki catalogs"]
     C --> D["review surfaces concept, merge, and conflict follow-ups"]
     D --> E["review actions accept concepts or resolve merges"]
     E --> F["ui review renders a browser dashboard from the same manifests"]
@@ -46,6 +47,19 @@ It checks:
 - config readability
 - index snapshot presence
 - whether configured adapter commands resolve on the current machine
+
+### `init`
+
+Use `init` to create the workspace contract before you ingest or compile anything.
+
+The command now materializes:
+
+- the canonical directories under `raw/`, `wiki/`, `outputs/`, `prompts/`, and `.cognisync/`
+- a root `AGENTS.md` schema file that tells agents how to maintain the workspace
+- a root `log.md` activity ledger
+- generated navigation surfaces at `wiki/index.md`, `wiki/sources.md`, `wiki/concepts.md`, and `wiki/queries.md`
+
+Those files are not just scaffolding. They are part of the operator surface and get refreshed as the corpus evolves.
 
 ### `ingest`
 
@@ -100,6 +114,12 @@ Dismissed items persist in `.cognisync/review-actions.json` with a reason, and t
 `reopen` removes a persisted dismissal so the next queue refresh can surface the item again if the underlying condition still exists.
 `list-dismissed` and `clear-dismissed` make the dismissal ledger reviewable without opening the manifest file directly.
 `export` writes a machine-readable snapshot under `outputs/reports/review-exports/` with the open queue, dismissal ledger, and review-action state, and those artifacts are ignored by the scanner so they do not pollute retrieval.
+
+The catalog pages matter here too:
+
+- `wiki/sources.md` and `wiki/concepts.md` count as durable navigation backlinks
+- `wiki/queries.md` stays non-binding until a review action explicitly promotes a query page into navigable state
+- that keeps query pages visible as orphan candidates until someone files them intentionally
 
 ### `ui review`
 

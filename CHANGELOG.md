@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- added a root `AGENTS.md` workspace schema so every Cognisync workspace now carries an explicit agent-facing contract alongside the corpus
+- added a root `log.md` activity ledger so init, ingest, lint, compile, research, and maintenance work leave a readable append-only trail
+- added regenerated wiki navigation catalogs at `wiki/index.md`, `wiki/sources.md`, `wiki/concepts.md`, and `wiki/queries.md`
+- taught workspace refresh flows to rebuild those navigation surfaces before persisting `.cognisync/index.json`
+- taught navigation catalogs to behave like metadata instead of corpus assertions, so generated indexes no longer distort review queues, orphan deltas, or synthetic QA exports
+- taught query-page backlinking to persist through the generated catalogs by rendering explicit review-approved wikilinks back into `wiki/queries.md`
 - added `cognisync export jsonl` so research runs can be emitted as portable JSONL dataset artifacts
 - added `cognisync export training-bundle` so research runs can be packaged as label-bearing training datasets
 - added `cognisync export finetune-bundle` so research runs and synthetic graph-derived examples can be emitted together as supervised and retrieval datasets
