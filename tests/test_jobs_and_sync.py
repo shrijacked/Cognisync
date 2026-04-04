@@ -89,6 +89,85 @@ class JobsAndSyncTests(unittest.TestCase):
                 2,
             )
 
+    def test_worker_registry_tracks_claim_heartbeat_and_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Worker Registry Workspace"]), 0)
+
+            (root / "raw" / "retrieval.md").write_text(
+                "# Retrieval Systems\n\nAgent memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "claim-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                    ]
+                ),
+                0,
+            )
+
+            workers_path = root / ".cognisync" / "jobs" / "workers.json"
+            workers_payload = json.loads(workers_path.read_text(encoding="utf-8"))
+            worker = workers_payload["workers"][0]
+            self.assertEqual(worker["worker_id"], "worker-a")
+            self.assertEqual(worker["status"], "claimed")
+            self.assertTrue(worker["current_job_id"])
+            self.assertTrue(worker["lease_expires_at"])
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "heartbeat",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                        "--lease-seconds",
+                        "600",
+                    ]
+                ),
+                0,
+            )
+
+            workers_payload = json.loads(workers_path.read_text(encoding="utf-8"))
+            worker = workers_payload["workers"][0]
+            self.assertEqual(worker["status"], "claimed")
+            self.assertTrue(worker["last_seen_at"])
+            self.assertEqual(worker["current_job_type"], "lint")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(main(["jobs", "workers", "--workspace", str(root)]), 0)
+            self.assertIn("worker-a", stdout.getvalue())
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "run-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "worker-a",
+                    ]
+                ),
+                0,
+            )
+
+            workers_payload = json.loads(workers_path.read_text(encoding="utf-8"))
+            worker = workers_payload["workers"][0]
+            self.assertEqual(worker["status"], "idle")
+            self.assertEqual(worker["current_job_id"], "")
+            self.assertEqual(worker["current_job_type"], "")
+
     def test_jobs_can_be_claimed_and_run_by_a_specific_worker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

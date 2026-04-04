@@ -210,6 +210,32 @@ def render_jobs_list(workspace: Workspace) -> str:
     return "\n".join(lines)
 
 
+def render_worker_registry(workspace: Workspace) -> str:
+    _write_queue_manifest(workspace)
+    payload = _read_worker_registry(workspace)
+    workers = list(payload.get("workers", []))
+    lines = [
+        "# Worker Registry",
+        "",
+        f"- Worker count: `{len(workers)}`",
+        f"- Status counts: `{json.dumps(dict(payload.get('counts_by_status', {})), sort_keys=True)}`",
+    ]
+    if not workers:
+        lines.extend(["", "No workers have interacted with the queue yet."])
+        return "\n".join(lines)
+    lines.extend(["", "## Workers", ""])
+    for worker in workers:
+        current_job_id = str(worker.get("current_job_id", "") or "")
+        current_suffix = f" job:{current_job_id}" if current_job_id else ""
+        lines.append(
+            "- "
+            f"`{worker.get('worker_id', '')}` "
+            f"`{worker.get('status', '')}` "
+            f"last-seen:{worker.get('last_seen_at', '')}{current_suffix}"
+        )
+    return "\n".join(lines)
+
+
 def retry_job(
     workspace: Workspace,
     job_id: str,
@@ -676,6 +702,7 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    _write_worker_registry(workspace, jobs)
     write_notifications_manifest(workspace)
     return workspace.job_queue_manifest_path
 
@@ -779,3 +806,72 @@ def _job_has_active_lease(job: Dict[str, object]) -> bool:
         return datetime.fromisoformat(expires_at) > datetime.now(timezone.utc)
     except ValueError:
         return False
+
+
+def _write_worker_registry(workspace: Workspace, jobs: Optional[List[Dict[str, object]]] = None) -> None:
+    jobs = jobs if jobs is not None else list_jobs(workspace)
+    workers_by_id: Dict[str, Dict[str, object]] = {}
+
+    for job in jobs:
+        lease = dict(job.get("lease", {}))
+        worker_id = str(lease.get("worker_id", "")).strip()
+        if not worker_id:
+            continue
+        worker = workers_by_id.setdefault(
+            worker_id,
+            {
+                "worker_id": worker_id,
+                "status": "idle",
+                "current_job_id": "",
+                "current_job_type": "",
+                "lease_expires_at": "",
+                "claim_count": 0,
+                "last_seen_at": "",
+            },
+        )
+        last_seen_at = (
+            str(lease.get("last_heartbeat_at", ""))
+            or str(job.get("updated_at", ""))
+            or str(lease.get("claimed_at", ""))
+        )
+        if last_seen_at > str(worker.get("last_seen_at", "")):
+            worker["last_seen_at"] = last_seen_at
+        claim_count = int(lease.get("claim_count", job.get("claim_count", 0)) or 0)
+        if claim_count > int(worker.get("claim_count", 0) or 0):
+            worker["claim_count"] = claim_count
+        if _job_has_active_lease(job):
+            worker["status"] = str(job.get("status", "claimed"))
+            worker["current_job_id"] = str(job.get("job_id", ""))
+            worker["current_job_type"] = str(job.get("job_type", ""))
+            worker["lease_expires_at"] = str(lease.get("lease_expires_at", ""))
+
+    workers = sorted(workers_by_id.values(), key=lambda item: str(item.get("worker_id", "")))
+    counts_by_status: Dict[str, int] = {}
+    for worker in workers:
+        status = str(worker.get("status", "unknown"))
+        counts_by_status[status] = counts_by_status.get(status, 0) + 1
+
+    payload = {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "worker_count": len(workers),
+        "counts_by_status": dict(sorted(counts_by_status.items())),
+        "workers": workers,
+    }
+    workspace.worker_registry_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace.worker_registry_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _read_worker_registry(workspace: Workspace) -> Dict[str, object]:
+    if not workspace.worker_registry_path.exists():
+        return {
+            "schema_version": 1,
+            "generated_at": utc_timestamp(),
+            "worker_count": 0,
+            "counts_by_status": {},
+            "workers": [],
+        }
+    return json.loads(workspace.worker_registry_path.read_text(encoding="utf-8"))

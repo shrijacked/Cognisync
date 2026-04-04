@@ -64,6 +64,7 @@ from cognisync.jobs import (
     heartbeat_job,
     retry_job,
     render_jobs_list,
+    render_worker_registry,
     run_job_worker,
     run_next_job,
 )
@@ -213,6 +214,13 @@ def cmd_jobs_list(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     print(render_jobs_list(workspace))
     print(f"Wrote queue summary to {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_workers(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_worker_registry(workspace))
+    print(f"Worker registry: {workspace.worker_registry_path}")
     return 0
 
 
@@ -1358,6 +1366,10 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_list_parser = jobs_subparsers.add_parser("list", help="List queued and historical jobs")
     jobs_list_parser.add_argument("--workspace", default=".")
     jobs_list_parser.set_defaults(func=cmd_jobs_list)
+
+    jobs_workers_parser = jobs_subparsers.add_parser("workers", help="List the derived worker registry for queue activity")
+    jobs_workers_parser.add_argument("--workspace", default=".")
+    jobs_workers_parser.set_defaults(func=cmd_jobs_workers)
 
     jobs_enqueue_parser = jobs_subparsers.add_parser("enqueue", help="Queue a persisted job manifest")
     jobs_enqueue_subparsers = jobs_enqueue_parser.add_subparsers(dest="jobs_enqueue_command", required=True)

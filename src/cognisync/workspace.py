@@ -62,6 +62,10 @@ class Workspace:
         return self.jobs_dir / "queue.json"
 
     @property
+    def worker_registry_path(self) -> Path:
+        return self.jobs_dir / "workers.json"
+
+    @property
     def sync_state_dir(self) -> Path:
         return self.state_dir / "sync"
 
