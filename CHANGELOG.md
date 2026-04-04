@@ -12,6 +12,8 @@
 - added `cognisync export correction-bundle` so validated remediation jobs can be exported as correction-training records with previous-response context
 - added `cognisync export training-loop-bundle` so evaluation, feedback, correction, and finetune artifacts can ship together as one portable training package
 - added `cognisync improve research` so the remediation loop and training-loop bundle refresh can run as one operator action
+- added `cognisync jobs` so research and improvement work can be queued, persisted, and executed later through local control-plane style manifests
+- added `cognisync sync export` and `sync import` so file-native workspaces can move between operators as portable bundles
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
 - expanded `cognisync eval research` with dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling

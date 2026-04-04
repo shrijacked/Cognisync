@@ -225,6 +225,8 @@ The operator loop now has a review layer too:
 - `cognisync export correction-bundle` turns those validated remediation jobs into correction-training records for downstream repair or finetuning loops
 - `cognisync export training-loop-bundle --provider-format openai-chat` packages evaluation, feedback, corrections, and finetune artifacts into one portable training-loop bundle
 - `cognisync improve research --profile <profile> --provider-format openai-chat` runs the remediation loop and refreshes the bundled training artifact in one command
+- `cognisync jobs enqueue ...`, `jobs run-next`, and `jobs list` provide a persisted local queue for remote-style research and improvement execution
+- `cognisync sync export` and `sync import` move portable workspace bundles between machines or operators without relying on an external database
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
@@ -325,6 +327,26 @@ cognisync synth contrastive
 - `synth contrastive` writes positive/negative retrieval pairs from assertion support paths
 - both export surfaces write into `outputs/reports/exports/`
 - scanner ignores these bundles so dataset and sharing artifacts do not re-enter retrieval
+
+## Queue And Sync
+
+You can now stage remote-style work locally instead of running everything immediately:
+
+```bash
+cognisync jobs enqueue research --profile codex "map the open questions in this corpus"
+cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat
+cognisync jobs run-next
+cognisync jobs list
+
+cognisync sync export
+cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /tmp/other-workspace
+```
+
+- `jobs enqueue research` persists a queued research manifest under `.cognisync/jobs/manifests/`
+- `jobs enqueue improve-research` queues the one-shot correction-and-training loop for later execution
+- `jobs run-next` marks the oldest queued job as running, executes it through the existing runtime, and records the result back into the job manifest plus `.cognisync/jobs/queue.json`
+- `sync export` writes a portable workspace bundle under `outputs/reports/sync-bundles/` with `raw/`, `wiki/`, `prompts/`, `.cognisync/`, and the important report job directories
+- `sync import` restores that bundle into another workspace root so queued state, manifests, and corpus files travel together
 
 ## Built-In Adapter Example
 

@@ -221,6 +221,57 @@ The command:
 
 `improve research --profile codex --provider-format openai-chat` is the shortest end-to-end path from weak research runs to a provider-ready training package.
 
+### `jobs`
+
+Use `jobs` when you want Cognisync to behave more like a local control plane than a one-shot CLI.
+
+Supported paths in this release:
+
+- `cognisync jobs enqueue research --profile codex "..."`
+- `cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat`
+- `cognisync jobs run-next`
+- `cognisync jobs list`
+
+The command family:
+
+1. persists queued job manifests under `.cognisync/jobs/manifests/`
+2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
+3. reuses the same `research` and `improve research` runtimes when a worker executes `jobs run-next`
+4. records result paths back into the job manifest instead of dropping that state into terminal-only output
+
+```mermaid
+flowchart LR
+    A["jobs enqueue research or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
+    B --> C["jobs run-next claims oldest queued job"]
+    C --> D["existing runtime executes research or improvement loop"]
+    D --> E["job manifest stores result paths and completion status"]
+    E --> F["queue summary reflects remaining queued work"]
+```
+
+### `sync`
+
+Use `sync` when you want to move a workspace between operators or machines without requiring a hosted database first.
+
+Supported paths in this release:
+
+- `cognisync sync export`
+- `cognisync sync import <bundle-dir> --workspace /path/to/workspace`
+
+`sync export` writes a portable bundle under `outputs/reports/sync-bundles/` and currently includes:
+
+- `raw/`
+- `wiki/`
+- `prompts/`
+- `.cognisync/`
+- `outputs/slides/`
+- `outputs/reports/change-summaries/`
+- `outputs/reports/research-jobs/`
+- `outputs/reports/remediation-jobs/`
+
+`sync import` restores those same paths into another workspace root so corpus files, job state, and execution manifests can move together.
+
+The scanner ignores `outputs/reports/sync-bundles/` so exported handoff artifacts never re-enter retrieval.
+
 ### `maintain`
 
 Use `maintain` when you want Cognisync to apply the obvious graph-backed follow-up work without a manual review pass.
