@@ -22,9 +22,12 @@
 - added `cognisync jobs retry` so terminal jobs can be re-queued with explicit lineage to the original manifest
 - added `cognisync jobs enqueue compile|lint|maintain` and `jobs work` so the queue now covers more of the operator loop and can drain sequentially like a lightweight worker
 - added `cognisync jobs claim-next` plus worker leases so queued jobs can be claimed, resumed, and reclaimed across worker identities without inventing a second queue system
+- added `cognisync jobs heartbeat` so active workers can renew leased jobs without dropping ownership
 - added `.cognisync/sync/history.json` and per-event sync manifests so workspace handoffs now leave an audit trail
 - added `cognisync connector add|list|sync` plus queued `connector-sync` jobs so remote-style source definitions now live as workspace manifests too
 - added `cognisync connector sync-all` plus queued `connector-sync-all` jobs so the control plane can refresh the connector registry in one pass
+- added `cognisync connector subscribe|unsubscribe` plus scheduled-only connector sync selection so connector pulls can run on durable file-native subscription metadata
+- taught `cognisync notify list` to surface due connector subscriptions in the operator inbox
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
 - expanded `cognisync eval research` with dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling

@@ -143,7 +143,7 @@ Supported path in this release:
 The command:
 
 1. writes `.cognisync/notifications.json`
-2. derives notifications from queued and failed jobs, validation-failed runs, warning-bearing runs, and unsynced connectors
+2. derives notifications from queued and failed jobs, validation-failed runs, warning-bearing runs, unsynced connectors, and due connector subscriptions
 3. prints a human-readable inbox view for the same manifest
 
 This keeps backlog and failure signals file-native, so later automation or UI layers can read the same inbox instead of scraping terminal logs.
@@ -300,7 +300,9 @@ Supported paths in this release:
 - `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2`
 - `cognisync jobs enqueue connector-sync <connector-id>`
 - `cognisync jobs enqueue connector-sync-all`
+- `cognisync jobs enqueue connector-sync-all --scheduled-only`
 - `cognisync jobs claim-next --worker-id worker-a`
+- `cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900`
 - `cognisync jobs run-next --worker-id worker-a`
 - `cognisync jobs retry <job-id> --profile codex`
 - `cognisync jobs work --worker-id worker-a --max-jobs 10`
@@ -311,22 +313,24 @@ The command family:
 1. persists queued job manifests under `.cognisync/jobs/manifests/`
 2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
 3. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
-4. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
-5. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
-6. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
-7. records result paths back into the job manifest instead of dropping that state into terminal-only output
-8. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
-9. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
+4. can renew that lease with `jobs heartbeat`, so long-running workers do not need to drop and reclaim ownership just to stay alive
+5. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
+6. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
+7. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
+8. records result paths back into the job manifest instead of dropping that state into terminal-only output
+9. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
+10. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
 
 ```mermaid
 flowchart LR
     A["jobs enqueue research, compile, lint, maintain, connector-sync, connector-sync-all, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
     B --> C["jobs claim-next records worker lease"]
-    C --> D["jobs run-next or jobs work resumes owned claims or claims fresh work"]
-    D --> E["existing runtime executes the matching operator loop"]
-    E --> F["job manifest stores result paths, lease history, and completion status"]
-    F --> G["jobs retry can re-queue a terminal job with lineage"]
-    G --> H["queue summary reflects remaining queued work"]
+    C --> D["jobs heartbeat can renew the active worker lease"]
+    D --> E["jobs run-next or jobs work resumes owned claims or claims fresh work"]
+    E --> F["existing runtime executes the matching operator loop"]
+    F --> G["job manifest stores result paths, lease history, and completion status"]
+    G --> H["jobs retry can re-queue a terminal job with lineage"]
+    H --> I["queue summary reflects remaining queued work"]
 ```
 
 ### `sync`
@@ -367,17 +371,22 @@ Supported paths in this release:
 - `cognisync connector add urls <source-list> --name <name>`
 - `cognisync connector add sitemap <source> --name <name>`
 - `cognisync connector list`
+- `cognisync connector subscribe <connector-id> --every-hours 6`
+- `cognisync connector unsubscribe <connector-id>`
 - `cognisync connector sync <connector-id>`
 - `cognisync connector sync-all`
+- `cognisync connector sync-all --scheduled-only`
 
 The command family:
 
 1. stores connector definitions in `.cognisync/connectors.json`
 2. supports `repo`, `url`, `urls`, and `sitemap` source shapes
-3. runs the existing ingest flows when `connector sync` executes
-4. writes a `connector_sync` run manifest plus a change summary when a sync completes
-5. lets `connector sync-all` walk the registry and skip already-synced connectors unless `--force` is provided
-6. can be routed through `jobs enqueue connector-sync <connector-id>` or `jobs enqueue connector-sync-all` when you want the worker loop to own connector pulls
+3. can persist schedule metadata per connector, including interval hours, `next_sync_at`, and `last_scheduled_sync_at`
+4. runs the existing ingest flows when `connector sync` executes
+5. writes a `connector_sync` run manifest plus a change summary when a sync completes
+6. lets `connector sync-all` walk the registry and skip already-synced connectors unless `--force` is provided
+7. lets `connector sync-all --scheduled-only` select only connectors whose subscription window is currently due
+8. can be routed through `jobs enqueue connector-sync <connector-id>` or `jobs enqueue connector-sync-all --scheduled-only` when you want the worker loop to own connector pulls
 
 ### `maintain`
 

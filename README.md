@@ -225,13 +225,13 @@ The operator loop now has a review layer too:
 - `cognisync export correction-bundle` turns those validated remediation jobs into correction-training records for downstream repair or finetuning loops
 - `cognisync export training-loop-bundle --provider-format openai-chat` packages evaluation, feedback, corrections, and finetune artifacts into one portable training-loop bundle
 - `cognisync improve research --profile <profile> --provider-format openai-chat` runs the remediation loop and refreshes the bundled training artifact in one command
-- `cognisync notify list` materializes a filesystem-native notification inbox from jobs, runs, connectors, and review state so operators can see backlog and failure signals without scraping logs
+- `cognisync notify list` materializes a filesystem-native notification inbox from jobs, runs, connectors, and review state so operators can see backlog, due subscriptions, and failure signals without scraping logs
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json` so operator roles can travel with the workspace instead of living in out-of-band notes
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, and the workspace roster
 - `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, and storage bytes
-- `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs run-next`, `jobs retry`, `jobs work`, and `jobs list` provide a persisted local queue plus retry lineage and worker leases for remote-style research, compile, lint, and maintenance execution
+- `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, and `jobs list` provide a persisted local queue plus retry lineage and renewable worker leases for remote-style research, compile, lint, maintenance, and scheduled connector execution
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, and now record a `state_manifests` map in each bundle manifest so the receiving side knows which file-native control-plane manifests were included
-- `cognisync connector add|list|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and both single-connector and registry-wide syncs can flow through the same worker loop
+- `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and both single-connector and registry-wide syncs can flow through the same worker loop or scheduled subscription state
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
@@ -349,7 +349,9 @@ cognisync jobs enqueue compile
 cognisync jobs enqueue lint
 cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2
 cognisync jobs enqueue connector-sync repo-remote-sample
+cognisync jobs enqueue connector-sync-all --scheduled-only
 cognisync jobs claim-next --worker-id worker-a
+cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900
 cognisync jobs run-next --worker-id worker-a
 cognisync jobs retry research-... --profile codex
 cognisync jobs work --worker-id worker-a --max-jobs 10
@@ -364,7 +366,9 @@ cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /
 - `jobs enqueue improve-research` queues the one-shot correction-and-training loop for later execution
 - `jobs enqueue compile`, `jobs enqueue lint`, and `jobs enqueue maintain` let the same queue drive the rest of the operator loop instead of only question answering
 - `jobs enqueue connector-sync <connector-id>` lets connector pulls land through the same worker and audit path
+- `jobs enqueue connector-sync-all --scheduled-only` lets the queue execute only due connector subscriptions instead of re-walking the whole registry
 - `jobs claim-next --worker-id worker-a` records an explicit lease on the oldest claimable job so ownership is durable in the manifest
+- `jobs heartbeat --worker-id worker-a --lease-seconds 900` renews that worker's active lease and records the heartbeat in both the job manifest and queue summary
 - `jobs run-next --worker-id worker-a` resumes that same worker's active claim or claims a fresh job when none is held
 - `jobs retry` re-queues a terminal job with lineage back to the original manifest, and can override the profile for another attempt
 - `jobs work --worker-id worker-a` drains claimable jobs sequentially under the same worker identity and lease settings
@@ -379,17 +383,21 @@ You can now register file-native source connectors and sync them directly or thr
 ```bash
 cognisync connector add repo file:///tmp/sample-repo --name remote-sample
 cognisync connector add urls /tmp/urls.txt --name batch-sources
+cognisync connector subscribe repo-remote-sample --every-hours 6
 cognisync connector list
 cognisync connector sync repo-remote-sample
-cognisync connector sync-all
+cognisync connector sync-all --scheduled-only
 cognisync jobs enqueue connector-sync urls-batch-sources
-cognisync jobs enqueue connector-sync-all
+cognisync jobs enqueue connector-sync-all --scheduled-only
 ```
 
 - connector definitions live in `.cognisync/connectors.json`
 - supported connector kinds are `repo`, `url`, `urls`, and `sitemap`
+- `connector subscribe <connector-id> --every-hours N` enables durable schedule metadata in the connector registry, including `next_sync_at` and `last_scheduled_sync_at`
+- `connector unsubscribe <connector-id>` disables the scheduled subscription without deleting the connector definition
 - `connector sync` runs the ingest path immediately and writes a `connector_sync` run manifest plus a change summary
 - `connector sync-all` skips already-synced connectors by default and uses `--force` when you want to re-pull the whole registry
+- `connector sync-all --scheduled-only` only pulls connectors whose subscription window is currently due
 - queued connector syncs, including `connector-sync-all`, use the same job-worker path and audit trail as the rest of the operator loop
 
 ## Built-In Adapter Example
