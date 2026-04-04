@@ -18,6 +18,7 @@ from cognisync.doctor import doctor_exit_code, render_doctor_report, run_doctor
 from cognisync.evaluation import evaluate_research_runs, export_feedback_bundle
 from cognisync.exports import (
     ExportError,
+    export_correction_bundle,
     export_finetune_bundle,
     export_presentations_bundle,
     export_research_jsonl,
@@ -296,6 +297,22 @@ def cmd_export_feedback_bundle(args: argparse.Namespace) -> int:
     print(f"Wrote remediation dataset to {result.dataset_path}")
     print(f"Wrote feedback manifest to {result.manifest_path}")
     print(f"Bundled {result.record_count} remediation record(s).")
+    return 0
+
+
+def cmd_export_correction_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_correction_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote correction export to {result.directory}")
+    print(f"Wrote correction dataset to {result.dataset_path}")
+    print(f"Wrote correction manifest to {result.manifest_path}")
+    print(f"Bundled {result.record_count} correction record(s).")
     return 0
 
 
@@ -1047,6 +1064,14 @@ def build_parser() -> argparse.ArgumentParser:
     export_feedback_parser.add_argument("--workspace", default=".")
     export_feedback_parser.add_argument("--output-dir", default=None)
     export_feedback_parser.set_defaults(func=cmd_export_feedback_bundle)
+
+    export_correction_parser = export_subparsers.add_parser(
+        "correction-bundle",
+        help="Export validated remediation jobs as correction-training records",
+    )
+    export_correction_parser.add_argument("--workspace", default=".")
+    export_correction_parser.add_argument("--output-dir", default=None)
+    export_correction_parser.set_defaults(func=cmd_export_correction_bundle)
 
     remediate_parser = subparsers.add_parser("remediate", help="Replay weak research runs through remediation prompts")
     remediate_subparsers = remediate_parser.add_subparsers(dest="remediate_command", required=True)

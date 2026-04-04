@@ -49,6 +49,14 @@ class FinetuneBundleResult:
     provider_exports: Dict[str, Path]
 
 
+@dataclass(frozen=True)
+class CorrectionBundleResult:
+    directory: Path
+    dataset_path: Path
+    manifest_path: Path
+    record_count: int
+
+
 def collect_research_export_records(workspace: Workspace) -> List[Dict[str, object]]:
     records: List[Dict[str, object]] = []
     for manifest_path in sorted(workspace.runs_dir.glob("*.json")):
@@ -236,6 +244,45 @@ def export_finetune_bundle(
     )
 
 
+def export_correction_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+) -> CorrectionBundleResult:
+    destination = output_dir or _next_correction_bundle_dir(workspace)
+    destination.mkdir(parents=True, exist_ok=True)
+    dataset_path = destination / "dataset.jsonl"
+    manifest_path = destination / "manifest.json"
+
+    correction_records = collect_correction_export_records(workspace)
+    dataset_lines = [json.dumps(record, sort_keys=True) for record in correction_records]
+    dataset_path.write_text("\n".join(dataset_lines) + ("\n" if dataset_lines else ""), encoding="utf-8")
+
+    target_counts: Dict[str, int] = defaultdict(int)
+    status_counts: Dict[str, int] = defaultdict(int)
+    for record in correction_records:
+        status_counts[str(record.get("status", ""))] += 1
+        for target in list(record.get("improvement_targets", [])):
+            target_counts[str(target)] += 1
+
+    manifest_payload = {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "bundle_type": "correction-bundle",
+        "dataset_file": dataset_path.name,
+        "record_count": len(correction_records),
+        "status_counts": dict(sorted(status_counts.items())),
+        "target_counts": dict(sorted(target_counts.items())),
+        "example_types": _count_example_types(correction_records),
+    }
+    manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return CorrectionBundleResult(
+        directory=destination,
+        dataset_path=dataset_path,
+        manifest_path=manifest_path,
+        record_count=len(correction_records),
+    )
+
+
 def derive_research_labels(record: Dict[str, object]) -> Dict[str, object]:
     validation = dict(record.get("validation", {}))
     checks = dict(validation.get("checks", {}))
@@ -252,6 +299,22 @@ def derive_research_labels(record: Dict[str, object]) -> Dict[str, object]:
         "has_unsupported_claims": bool(unsupported_claims.get("errors", [])),
         "has_conflict_gate": bool(source_conflicts.get("errors", [])),
     }
+
+
+def collect_correction_export_records(workspace: Workspace) -> List[Dict[str, object]]:
+    research_records = {str(record.get("run_id", "")): record for record in collect_research_export_records(workspace)}
+    records: List[Dict[str, object]] = []
+    for manifest_path in sorted(workspace.remediation_jobs_dir.glob("remediation-*/manifest.json")):
+        manifest = read_json_manifest(manifest_path)
+        if str(manifest.get("run_kind", "")) != "research_remediation":
+            continue
+        validation = dict(manifest.get("validation", {}))
+        if str(manifest.get("status", "")) != "completed" or not bool(validation.get("passed", False)):
+            continue
+        source_run_id = str(manifest.get("source_run_id", "")).strip()
+        source_record = research_records.get(source_run_id)
+        records.append(_build_correction_export_record(workspace, manifest_path, manifest, source_record))
+    return records
 
 
 def _build_supervised_finetune_records(workspace: Workspace) -> List[Dict[str, object]]:
@@ -300,6 +363,54 @@ def _build_supervised_finetune_records(workspace: Workspace) -> List[Dict[str, o
             }
         )
     return records
+
+
+def _build_correction_export_record(
+    workspace: Workspace,
+    manifest_path: Path,
+    manifest: Dict[str, object],
+    source_record: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    answer_path = _resolve_workspace_relative(workspace, str(manifest.get("answer_path", "") or ""))
+    prompt_path = _resolve_workspace_relative(workspace, str(manifest.get("prompt_path", "") or ""))
+    validation_report_path = _resolve_workspace_relative(
+        workspace,
+        str(manifest.get("validation_report_path", "") or ""),
+    )
+    validation = dict(manifest.get("validation", {}))
+    previous_response = ""
+    source_paths: List[str] = []
+    if source_record is not None:
+        previous_response = str(source_record.get("answer_text") or source_record.get("report_text") or "").strip()
+        source_paths = [
+            str(source.get("path", "")).strip()
+            for source in list(source_record.get("sources", []))
+            if isinstance(source, dict) and str(source.get("path", "")).strip()
+        ]
+    corrected_response = _read_text(answer_path) or ""
+    return {
+        "example_type": "remediation_correction",
+        "question": str(manifest.get("question", "")),
+        "prompt": str(manifest.get("question", "")),
+        "response": corrected_response.strip(),
+        "previous_response": previous_response,
+        "status": str(manifest.get("status", "")),
+        "improvement_targets": list(manifest.get("improvement_targets", [])),
+        "citations": list(validation.get("used", [])),
+        "source_paths": source_paths,
+        "validation": validation,
+        "metadata": {
+            "source_run_id": str(manifest.get("source_run_id", "")),
+            "source_run_manifest_path": str(manifest.get("source_run_manifest_path", "")),
+            "remediation_run_manifest_path": workspace.relative_path(manifest_path),
+            "prompt_path": workspace.relative_path(prompt_path) if prompt_path else None,
+            "answer_path": workspace.relative_path(answer_path) if answer_path else None,
+            "validation_report_path": (
+                workspace.relative_path(validation_report_path) if validation_report_path else None
+            ),
+            "dimension_scores_before": dict(manifest.get("dimension_scores_before", {})),
+        },
+    }
 
 
 def _build_retrieval_finetune_records(workspace: Workspace) -> List[Dict[str, object]]:
@@ -447,5 +558,11 @@ def _next_training_bundle_dir(workspace: Workspace) -> Path:
 
 def _next_finetune_bundle_dir(workspace: Workspace) -> Path:
     directory = workspace.export_artifacts_dir / f"finetune-bundle-{_timestamp_slug()}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _next_correction_bundle_dir(workspace: Workspace) -> Path:
+    directory = workspace.export_artifacts_dir / f"correction-bundle-{_timestamp_slug()}"
     directory.mkdir(parents=True, exist_ok=True)
     return directory

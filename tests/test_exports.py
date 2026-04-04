@@ -474,6 +474,112 @@ class ExportTests(unittest.TestCase):
             self.assertGreaterEqual(manifest["target_counts"]["citation_integrity"], 1)
             self.assertIn("Wrote feedback export to", stdout.getvalue())
 
+    def test_export_correction_bundle_writes_validated_remediation_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(main(["init", str(root), "--name", "Correction Bundle Workspace"]), 0)
+
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory helps agent loops persist findings.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(root / ".cognisync" / "config.json")
+            config.llm_profiles["passer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            config.llm_profiles["failing"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops always require vector databases.')",
+                ]
+            )
+            config.llm_profiles["healer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ]
+            )
+            save_config(root / ".cognisync" / "config.json", config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "passer",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertNotEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "failing",
+                        "do agent loops always require vector databases",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "remediate",
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "healer",
+                        "--limit",
+                        "1",
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["export", "correction-bundle", "--workspace", str(root)])
+
+            self.assertEqual(exit_code, 0)
+            export_dirs = sorted((root / "outputs" / "reports" / "exports").glob("correction-bundle-*"))
+            self.assertTrue(export_dirs)
+            dataset_path = export_dirs[-1] / "dataset.jsonl"
+            manifest_path = export_dirs[-1] / "manifest.json"
+            self.assertTrue(dataset_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            records = [json.loads(line) for line in dataset_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["example_type"], "remediation_correction")
+            self.assertIn("citation_integrity", records[0]["improvement_targets"])
+            self.assertEqual(records[0]["validation"]["passed"], True)
+            self.assertIn("[S1]", records[0]["response"])
+            self.assertIn("always require vector databases", records[0]["previous_response"])
+            self.assertEqual(manifest["record_count"], 1)
+            self.assertEqual(manifest["status_counts"]["completed"], 1)
+            self.assertGreaterEqual(manifest["target_counts"]["citation_integrity"], 1)
+            self.assertIn("Wrote correction export to", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
