@@ -122,14 +122,15 @@ Use `access` when you want a durable roster of workspace roles that travels with
 Supported paths in this release:
 
 - `cognisync access list`
-- `cognisync access grant <principal-id> <viewer|editor|reviewer|operator>`
-- `cognisync access revoke <principal-id>`
+- `cognisync access grant <principal-id> <viewer|editor|reviewer|operator> --actor-id <principal-id>`
+- `cognisync access revoke <principal-id> --actor-id <principal-id>`
 
 The command set:
 
 1. materializes `.cognisync/access.json` if it does not exist yet
 2. keeps a default `local-operator` member so a local workspace always has one explicit operator identity
-3. lets sync bundles carry the same roster to another machine through the copied `.cognisync` state
+3. requires an operator actor for grant and revoke mutations, so roster edits follow the same workspace role model as the rest of the control plane
+4. lets sync bundles carry the same roster to another machine through the copied `.cognisync` state
 
 This keeps the control-plane surface file-native too. The roster is simple on purpose: it is meant to be durable workspace state first, and a future hosted permission layer second.
 
@@ -294,18 +295,18 @@ Use `jobs` when you want Cognisync to behave more like a local control plane tha
 
 Supported paths in this release:
 
-- `cognisync jobs enqueue research --profile codex "..."`
-- `cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat`
-- `cognisync jobs enqueue compile`
-- `cognisync jobs enqueue lint`
-- `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2`
-- `cognisync jobs enqueue connector-sync <connector-id>`
-- `cognisync jobs enqueue connector-sync-all`
-- `cognisync jobs enqueue connector-sync-all --scheduled-only`
+- `cognisync jobs enqueue research --profile codex "..." --actor-id local-operator`
+- `cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat --actor-id local-operator`
+- `cognisync jobs enqueue compile --actor-id local-operator`
+- `cognisync jobs enqueue lint --actor-id local-operator`
+- `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2 --actor-id local-operator`
+- `cognisync jobs enqueue connector-sync <connector-id> --actor-id local-operator`
+- `cognisync jobs enqueue connector-sync-all --actor-id local-operator`
+- `cognisync jobs enqueue connector-sync-all --scheduled-only --actor-id local-operator`
 - `cognisync jobs claim-next --worker-id worker-a`
 - `cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900`
 - `cognisync jobs run-next --worker-id worker-a`
-- `cognisync jobs retry <job-id> --profile codex`
+- `cognisync jobs retry <job-id> --profile codex --actor-id local-operator`
 - `cognisync jobs work --worker-id worker-a --max-jobs 10`
 - `cognisync jobs workers`
 - `cognisync jobs list`
@@ -314,15 +315,16 @@ The command family:
 
 1. persists queued job manifests under `.cognisync/jobs/manifests/`
 2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
-3. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
-4. can renew that lease with `jobs heartbeat`, so long-running workers do not need to drop and reclaim ownership just to stay alive
-5. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
-6. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
-7. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
-8. records result paths back into the job manifest instead of dropping that state into terminal-only output
-9. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
-10. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
-11. derives `.cognisync/jobs/workers.json` so queue ownership can be inspected as a worker roster instead of only by reading individual job manifests
+3. requires an operator actor for queue submission and retry mutations, so scheduler-facing actions obey the same workspace role model as sync and the review UI
+4. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
+5. can renew that lease with `jobs heartbeat`, so long-running workers do not need to drop and reclaim ownership just to stay alive
+6. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
+7. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
+8. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
+9. records result paths back into the job manifest instead of dropping that state into terminal-only output
+10. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
+11. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
+12. derives `.cognisync/jobs/workers.json` so queue ownership can be inspected as a worker roster instead of only by reading individual job manifests
 
 ```mermaid
 flowchart LR
@@ -343,10 +345,10 @@ Use `sync` when you want to move a workspace between operators or machines witho
 Supported paths in this release:
 
 - `cognisync sync history`
-- `cognisync sync export`
-- `cognisync sync import <bundle-dir> --workspace /path/to/workspace`
+- `cognisync sync export --actor-id <principal-id>`
+- `cognisync sync import <bundle-dir> --workspace /path/to/workspace --actor-id <principal-id>`
 
-`sync export` writes a portable bundle under `outputs/reports/sync-bundles/` and currently includes:
+`sync export` writes a portable bundle under `outputs/reports/sync-bundles/`, requires an operator actor from `.cognisync/access.json`, and currently includes:
 
 - `raw/`
 - `wiki/`
@@ -357,9 +359,9 @@ Supported paths in this release:
 - `outputs/reports/research-jobs/`
 - `outputs/reports/remediation-jobs/`
 
-`sync import` restores those same paths into another workspace root so corpus files, job state, and execution manifests can move together.
+`sync import` also requires an operator actor from the target workspace roster, then restores those same paths into another workspace root so corpus files, job state, and execution manifests can move together.
 
-Every export and import also records a sync event under `.cognisync/sync/manifests/` and refreshes `.cognisync/sync/history.json`, so a later operator or UI can inspect how the workspace moved without parsing bundle directories manually.
+Every export and import also records a sync event under `.cognisync/sync/manifests/` and refreshes `.cognisync/sync/history.json`, so a later operator or UI can inspect how the workspace moved without parsing bundle directories manually. Those events now include the acting principal and, on import, the source bundle actor too.
 
 The scanner ignores `outputs/reports/sync-bundles/` so exported handoff artifacts never re-enter retrieval.
 
@@ -374,22 +376,23 @@ Supported paths in this release:
 - `cognisync connector add urls <source-list> --name <name>`
 - `cognisync connector add sitemap <source> --name <name>`
 - `cognisync connector list`
-- `cognisync connector subscribe <connector-id> --every-hours 6`
-- `cognisync connector unsubscribe <connector-id>`
-- `cognisync connector sync <connector-id>`
-- `cognisync connector sync-all`
-- `cognisync connector sync-all --scheduled-only`
+- `cognisync connector subscribe <connector-id> --every-hours 6 --actor-id local-operator`
+- `cognisync connector unsubscribe <connector-id> --actor-id local-operator`
+- `cognisync connector sync <connector-id> --actor-id local-operator`
+- `cognisync connector sync-all --actor-id local-operator`
+- `cognisync connector sync-all --scheduled-only --actor-id local-operator`
 
 The command family:
 
 1. stores connector definitions in `.cognisync/connectors.json`
 2. supports `repo`, `url`, `urls`, and `sitemap` source shapes
-3. can persist schedule metadata per connector, including interval hours, `next_sync_at`, and `last_scheduled_sync_at`
-4. runs the existing ingest flows when `connector sync` executes
-5. writes a `connector_sync` run manifest plus a change summary when a sync completes
-6. lets `connector sync-all` walk the registry and skip already-synced connectors unless `--force` is provided
-7. lets `connector sync-all --scheduled-only` select only connectors whose subscription window is currently due
-8. can be routed through `jobs enqueue connector-sync <connector-id>` or `jobs enqueue connector-sync-all --scheduled-only` when you want the worker loop to own connector pulls
+3. requires an operator actor for register, subscribe, unsubscribe, and sync mutations
+4. can persist schedule metadata per connector, including interval hours, `next_sync_at`, and `last_scheduled_sync_at`
+5. runs the existing ingest flows when `connector sync` executes
+6. writes a `connector_sync` run manifest plus a change summary when a sync completes
+7. lets `connector sync-all` walk the registry and skip already-synced connectors unless `--force` is provided
+8. lets `connector sync-all --scheduled-only` select only connectors whose subscription window is currently due
+9. can be routed through `jobs enqueue connector-sync <connector-id>` or `jobs enqueue connector-sync-all --scheduled-only` when you want the worker loop to own connector pulls
 
 ### `maintain`
 
