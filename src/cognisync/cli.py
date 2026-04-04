@@ -124,8 +124,8 @@ def _refresh_workspace_with_change_summary(workspace: Workspace, trigger: str, f
     return snapshot, write_change_summary(workspace, trigger, previous_state, snapshot)
 
 
-def _require_operator_actor(workspace: Workspace, actor_id: str, action_label: str) -> None:
-    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, action_label)
+def _require_operator_actor(workspace: Workspace, actor_id: str, action_label: str) -> dict:
+    return require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, action_label)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -233,7 +233,7 @@ def cmd_jobs_workers(args: argparse.Namespace) -> int:
 def cmd_jobs_enqueue_research(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
         manifest_path = enqueue_research_job(
             workspace,
             question=args.question,
@@ -242,6 +242,7 @@ def cmd_jobs_enqueue_research(args: argparse.Namespace) -> int:
             mode=args.mode,
             slides=args.slides,
             job_profile=args.job_profile,
+            requested_by=actor,
         )
     except AccessError as error:
         print(str(error), file=sys.stderr)
@@ -254,8 +255,8 @@ def cmd_jobs_enqueue_research(args: argparse.Namespace) -> int:
 def cmd_jobs_enqueue_compile(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
-        manifest_path = enqueue_compile_job(workspace, profile_name=args.profile)
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_compile_job(workspace, profile_name=args.profile, requested_by=actor)
     except AccessError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -267,11 +268,12 @@ def cmd_jobs_enqueue_compile(args: argparse.Namespace) -> int:
 def cmd_jobs_enqueue_connector_sync(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
         manifest_path = enqueue_connector_sync_job(
             workspace,
             connector_id=args.connector_id,
             force=args.force,
+            requested_by=actor,
         )
     except AccessError as error:
         print(str(error), file=sys.stderr)
@@ -284,12 +286,13 @@ def cmd_jobs_enqueue_connector_sync(args: argparse.Namespace) -> int:
 def cmd_jobs_enqueue_connector_sync_all(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
         manifest_path = enqueue_connector_sync_all_job(
             workspace,
             force=args.force,
             limit=args.limit,
             scheduled_only=args.scheduled_only,
+            requested_by=actor,
         )
     except AccessError as error:
         print(str(error), file=sys.stderr)
@@ -302,8 +305,8 @@ def cmd_jobs_enqueue_connector_sync_all(args: argparse.Namespace) -> int:
 def cmd_jobs_enqueue_lint(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
-        manifest_path = enqueue_lint_job(workspace)
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_lint_job(workspace, requested_by=actor)
     except AccessError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -315,13 +318,14 @@ def cmd_jobs_enqueue_lint(args: argparse.Namespace) -> int:
 def cmd_jobs_enqueue_maintain(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
         manifest_path = enqueue_maintain_job(
             workspace,
             max_concepts=args.max_concepts,
             max_merges=args.max_merges,
             max_backlinks=args.max_backlinks,
             max_conflicts=args.max_conflicts,
+            requested_by=actor,
         )
     except AccessError as error:
         print(str(error), file=sys.stderr)
@@ -334,12 +338,13 @@ def cmd_jobs_enqueue_maintain(args: argparse.Namespace) -> int:
 def cmd_jobs_enqueue_improve_research(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
         manifest_path = enqueue_improve_research_job(
             workspace,
             profile_name=args.profile,
             limit=args.limit,
             provider_formats=list(args.provider_format or []),
+            requested_by=actor,
         )
     except AccessError as error:
         print(str(error), file=sys.stderr)
@@ -409,12 +414,13 @@ def cmd_jobs_heartbeat(args: argparse.Namespace) -> int:
 def cmd_jobs_retry(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "retry jobs")
+        actor = _require_operator_actor(workspace, args.actor_id, "retry jobs")
         manifest_path = retry_job(
             workspace,
             job_id=args.job_id,
             profile_name=args.profile,
             provider_formats=list(args.provider_format or []),
+            requested_by=actor,
         )
     except JobError as error:
         print(str(error), file=sys.stderr)
@@ -570,12 +576,13 @@ def cmd_connector_list(args: argparse.Namespace) -> int:
 def cmd_connector_add(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "register connectors")
+        actor = _require_operator_actor(workspace, args.actor_id, "register connectors")
         connector = add_connector(
             workspace,
             kind=args.kind,
             source=args.source,
             name=args.name,
+            actor=actor,
         )
     except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
@@ -588,11 +595,12 @@ def cmd_connector_add(args: argparse.Namespace) -> int:
 def cmd_connector_sync(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "sync connectors")
+        actor = _require_operator_actor(workspace, args.actor_id, "sync connectors")
         result = sync_connector(
             workspace,
             connector_id=args.connector_id,
             force=args.force,
+            actor=actor,
         )
     except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
@@ -608,12 +616,13 @@ def cmd_connector_sync(args: argparse.Namespace) -> int:
 def cmd_connector_sync_all(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "sync connectors")
+        actor = _require_operator_actor(workspace, args.actor_id, "sync connectors")
         result = sync_all_connectors(
             workspace,
             force=args.force,
             limit=args.limit,
             scheduled_only=args.scheduled_only,
+            actor=actor,
         )
     except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
@@ -628,11 +637,12 @@ def cmd_connector_sync_all(args: argparse.Namespace) -> int:
 def cmd_connector_subscribe(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "manage connector subscriptions")
+        actor = _require_operator_actor(workspace, args.actor_id, "manage connector subscriptions")
         connector = subscribe_connector(
             workspace,
             connector_id=args.connector_id,
             every_hours=args.every_hours,
+            actor=actor,
         )
     except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
@@ -648,8 +658,8 @@ def cmd_connector_subscribe(args: argparse.Namespace) -> int:
 def cmd_connector_unsubscribe(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
-        _require_operator_actor(workspace, args.actor_id, "manage connector subscriptions")
-        connector = unsubscribe_connector(workspace, connector_id=args.connector_id)
+        actor = _require_operator_actor(workspace, args.actor_id, "manage connector subscriptions")
+        connector = unsubscribe_connector(workspace, connector_id=args.connector_id, actor=actor)
     except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2

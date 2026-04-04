@@ -47,6 +47,7 @@ def subscribe_connector(
     workspace: Workspace,
     connector_id: str,
     every_hours: int,
+    actor: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     if every_hours < 1:
         raise ConnectorError("Connector subscription intervals must be at least 1 hour.")
@@ -66,13 +67,18 @@ def subscribe_connector(
         "last_scheduled_sync_at": str(dict(connector.get("subscription", {})).get("last_scheduled_sync_at", "")) or None,
     }
     connector["updated_at"] = subscribed_at
+    connector["updated_by"] = _serialize_actor(actor)
     registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
     _write_connector_registry(workspace, registry)
     write_notifications_manifest(workspace)
     return connector
 
 
-def unsubscribe_connector(workspace: Workspace, connector_id: str) -> Dict[str, object]:
+def unsubscribe_connector(
+    workspace: Workspace,
+    connector_id: str,
+    actor: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
     registry = _load_connector_registry(workspace)
     connectors = list(registry.get("connectors", []))
     connector = next((item for item in connectors if str(item.get("connector_id", "")) == connector_id), None)
@@ -85,6 +91,7 @@ def unsubscribe_connector(workspace: Workspace, connector_id: str) -> Dict[str, 
     subscription["next_sync_at"] = None
     connector["subscription"] = subscription
     connector["updated_at"] = utc_timestamp()
+    connector["updated_by"] = _serialize_actor(actor)
     registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
     _write_connector_registry(workspace, registry)
     write_notifications_manifest(workspace)
@@ -96,6 +103,7 @@ def add_connector(
     kind: str,
     source: str,
     name: Optional[str] = None,
+    actor: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     normalized_kind = kind.strip().lower()
     if normalized_kind not in SUPPORTED_CONNECTOR_KINDS:
@@ -116,7 +124,10 @@ def add_connector(
         "source": normalized_source,
         "created_at": utc_timestamp(),
         "updated_at": utc_timestamp(),
+        "created_by": _serialize_actor(actor),
+        "updated_by": _serialize_actor(actor),
         "last_synced_at": None,
+        "last_synced_by": None,
         "last_change_summary_path": None,
         "last_run_manifest_path": None,
         "last_result_count": 0,
@@ -169,6 +180,7 @@ def sync_connector(
     connector_id: str,
     force: bool = False,
     scheduled: bool = False,
+    actor: Optional[Dict[str, object]] = None,
 ) -> ConnectorSyncResult:
     registry = _load_connector_registry(workspace)
     connectors = list(registry.get("connectors", []))
@@ -194,6 +206,7 @@ def sync_connector(
             "connector_id": connector_id,
             "connector_kind": str(connector.get("kind", "")),
             "connector_source": str(connector.get("source", "")),
+            "actor": _serialize_actor(actor),
             "scheduled": scheduled,
             "result_paths": [workspace.relative_path(result.path) for result in results],
             "change_summary_path": workspace.relative_path(change_summary.path),
@@ -203,7 +216,9 @@ def sync_connector(
 
     synced_at = utc_timestamp()
     connector["updated_at"] = synced_at
+    connector["updated_by"] = _serialize_actor(actor)
     connector["last_synced_at"] = synced_at
+    connector["last_synced_by"] = _serialize_actor(actor)
     connector["last_change_summary_path"] = workspace.relative_path(change_summary.path)
     connector["last_run_manifest_path"] = workspace.relative_path(run_manifest_path)
     connector["last_result_count"] = len(results)
@@ -227,6 +242,7 @@ def sync_all_connectors(
     force: bool = False,
     limit: Optional[int] = None,
     scheduled_only: bool = False,
+    actor: Optional[Dict[str, object]] = None,
 ) -> ConnectorBatchSyncResult:
     connectors = list_connectors(workspace)
     if not connectors:
@@ -245,6 +261,7 @@ def sync_all_connectors(
                 connector_id=str(connector.get("connector_id", "")),
                 force=force,
                 scheduled=scheduled_only,
+                actor=actor,
             )
         )
 
@@ -253,6 +270,7 @@ def sync_all_connectors(
         "connector_sync_all",
         {
             "run_label": "connector-sync-all",
+            "actor": _serialize_actor(actor),
             "force": force,
             "scheduled_only": scheduled_only,
             "selected_connector_ids": [str(item.get("connector_id", "")) for item in selected_connectors],
@@ -349,6 +367,9 @@ def _looks_like_remote_source(source: str) -> bool:
 def _normalize_connector_record(connector: Dict[str, object]) -> Dict[str, object]:
     normalized = dict(connector)
     normalized["subscription"] = _normalize_subscription(connector.get("subscription", {}))
+    normalized["created_by"] = _serialize_actor(connector.get("created_by"))
+    normalized["updated_by"] = _serialize_actor(connector.get("updated_by"))
+    normalized["last_synced_by"] = _serialize_actor(connector.get("last_synced_by"))
     return normalized
 
 
@@ -396,3 +417,14 @@ def _connector_subscription_is_due(connector: Dict[str, object]) -> bool:
 
 def _future_timestamp(*, hours: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=hours)).replace(microsecond=0).isoformat()
+
+
+def _serialize_actor(actor: object) -> Optional[Dict[str, str]]:
+    if not isinstance(actor, dict):
+        return None
+    return {
+        "principal_id": str(actor.get("principal_id", "")),
+        "display_name": str(actor.get("display_name", "")),
+        "role": str(actor.get("role", "")),
+        "status": str(actor.get("status", "")),
+    }

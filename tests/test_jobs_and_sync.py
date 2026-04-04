@@ -48,6 +48,44 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("does not have permission", stderr.getvalue())
 
+    def test_job_manifests_record_requesting_actor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Queue Attribution Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "operator-2",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "lint",
+                        "--workspace",
+                        str(root),
+                        "--actor-id",
+                        "operator-2",
+                    ]
+                ),
+                0,
+            )
+
+            manifest_path = next((root / ".cognisync" / "jobs" / "manifests").glob("*.json"))
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["requested_by"]["principal_id"], "operator-2")
+            self.assertEqual(payload["requested_by"]["role"], "operator")
+
     def test_job_heartbeat_extends_the_active_worker_lease(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

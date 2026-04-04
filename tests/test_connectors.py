@@ -85,6 +85,69 @@ class ConnectorTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("does not have permission", stderr.getvalue())
 
+    def test_connector_registry_and_runs_record_mutating_actor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Connector Attribution Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "operator-2",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            url = "data:text/html;charset=utf-8," + quote("<html><head><title>Attribution Source</title></head><body><p>One.</p></body></html>")
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "attribution-source",
+                        "--actor-id",
+                        "operator-2",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "sync",
+                        "url-attribution-source",
+                        "--workspace",
+                        str(root),
+                        "--actor-id",
+                        "operator-2",
+                    ]
+                ),
+                0,
+            )
+
+            registry = json.loads((root / ".cognisync" / "connectors.json").read_text(encoding="utf-8"))
+            connector = registry["connectors"][0]
+            self.assertEqual(connector["created_by"]["principal_id"], "operator-2")
+            self.assertEqual(connector["last_synced_by"]["principal_id"], "operator-2")
+
+            run_manifests = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted((root / ".cognisync" / "runs").glob("connector*.json"))
+            ]
+            self.assertTrue(run_manifests)
+            self.assertEqual(run_manifests[-1]["actor"]["principal_id"], "operator-2")
+
     def test_connector_subscriptions_limit_scheduled_syncs_to_due_connectors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

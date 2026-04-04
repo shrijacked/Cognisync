@@ -3065,12 +3065,12 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
             run_job_worker(workspace, max_jobs=1, stop_on_error=True)
             return
         if path == "/api/connectors/sync":
-            require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "sync connectors from the review ui")
-            sync_connector(workspace, payload.get("connector_id", ""), force=False)
+            actor = require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "sync connectors from the review ui")
+            sync_connector(workspace, payload.get("connector_id", ""), force=False, actor=actor)
             return
         if path == "/api/connectors/sync-all":
-            require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "sync all connectors from the review ui")
-            sync_all_connectors(workspace, force=False)
+            actor = require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "sync all connectors from the review ui")
+            sync_all_connectors(workspace, force=False, actor=actor)
             return
         if path == "/api/review/accept-concept":
             require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "accept review concepts")

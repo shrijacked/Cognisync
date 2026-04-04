@@ -70,6 +70,7 @@ def enqueue_research_job(
     mode: str = "wiki",
     slides: bool = False,
     job_profile: str = DEFAULT_RESEARCH_JOB_PROFILE,
+    requested_by: Optional[Dict[str, object]] = None,
 ) -> Path:
     parameters = {
         "question": question,
@@ -79,7 +80,7 @@ def enqueue_research_job(
         "slides": slides,
         "job_profile": job_profile,
     }
-    return _enqueue_job(workspace, "research", question, parameters)
+    return _enqueue_job(workspace, "research", question, parameters, requested_by=requested_by)
 
 
 def enqueue_improve_research_job(
@@ -87,25 +88,42 @@ def enqueue_improve_research_job(
     profile_name: str,
     limit: int = 5,
     provider_formats: Optional[List[str]] = None,
+    requested_by: Optional[Dict[str, object]] = None,
 ) -> Path:
     parameters = {
         "profile_name": profile_name,
         "limit": limit,
         "provider_formats": list(provider_formats or []),
     }
-    return _enqueue_job(workspace, "improve_research", "improve-research", parameters)
+    return _enqueue_job(
+        workspace,
+        "improve_research",
+        "improve-research",
+        parameters,
+        requested_by=requested_by,
+    )
 
 
-def enqueue_compile_job(workspace: Workspace, profile_name: Optional[str] = None) -> Path:
+def enqueue_compile_job(
+    workspace: Workspace,
+    profile_name: Optional[str] = None,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
     return _enqueue_job(
         workspace,
         "compile",
         "compile-plan",
         {"profile_name": profile_name},
+        requested_by=requested_by,
     )
 
 
-def enqueue_connector_sync_job(workspace: Workspace, connector_id: str, force: bool = False) -> Path:
+def enqueue_connector_sync_job(
+    workspace: Workspace,
+    connector_id: str,
+    force: bool = False,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
     return _enqueue_job(
         workspace,
         "connector_sync",
@@ -114,6 +132,7 @@ def enqueue_connector_sync_job(workspace: Workspace, connector_id: str, force: b
             "connector_id": connector_id,
             "force": force,
         },
+        requested_by=requested_by,
     )
 
 
@@ -122,6 +141,7 @@ def enqueue_connector_sync_all_job(
     force: bool = False,
     limit: Optional[int] = None,
     scheduled_only: bool = False,
+    requested_by: Optional[Dict[str, object]] = None,
 ) -> Path:
     return _enqueue_job(
         workspace,
@@ -132,11 +152,12 @@ def enqueue_connector_sync_all_job(
             "limit": limit,
             "scheduled_only": scheduled_only,
         },
+        requested_by=requested_by,
     )
 
 
-def enqueue_lint_job(workspace: Workspace) -> Path:
-    return _enqueue_job(workspace, "lint", "workspace-lint", {})
+def enqueue_lint_job(workspace: Workspace, requested_by: Optional[Dict[str, object]] = None) -> Path:
+    return _enqueue_job(workspace, "lint", "workspace-lint", {}, requested_by=requested_by)
 
 
 def enqueue_maintain_job(
@@ -145,6 +166,7 @@ def enqueue_maintain_job(
     max_merges: int = 10,
     max_backlinks: int = 10,
     max_conflicts: int = 10,
+    requested_by: Optional[Dict[str, object]] = None,
 ) -> Path:
     return _enqueue_job(
         workspace,
@@ -156,6 +178,7 @@ def enqueue_maintain_job(
             "max_backlinks": max_backlinks,
             "max_conflicts": max_conflicts,
         },
+        requested_by=requested_by,
     )
 
 
@@ -245,6 +268,7 @@ def retry_job(
     job_id: str,
     profile_name: Optional[str] = None,
     provider_formats: Optional[List[str]] = None,
+    requested_by: Optional[Dict[str, object]] = None,
 ) -> Path:
     original = _read_job_by_id(workspace, job_id)
     if str(original.get("status", "")) not in {"completed", "failed"}:
@@ -263,6 +287,7 @@ def retry_job(
         title_seed=str(original.get("title", job_type)),
         parameters=parameters,
         retry_of_job_id=str(original.get("job_id", "")),
+        requested_by=requested_by,
     )
 
 
@@ -525,10 +550,12 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "filed_conflict_keys": list(result.filed_conflict_keys),
         }
     if job_type == "connector_sync":
+        requested_by = dict(job.get("requested_by", {})) if isinstance(job.get("requested_by", {}), dict) else None
         result = sync_connector(
             workspace,
             connector_id=str(parameters.get("connector_id", "")),
             force=bool(parameters.get("force", False)),
+            actor=requested_by,
         )
         return {
             "run_manifest_path": workspace.relative_path(result.run_manifest_path),
@@ -540,11 +567,13 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "result_paths": [workspace.relative_path(path) for path in result.result_paths],
         }
     if job_type == "connector_sync_all":
+        requested_by = dict(job.get("requested_by", {})) if isinstance(job.get("requested_by", {}), dict) else None
         result = sync_all_connectors(
             workspace,
             force=bool(parameters.get("force", False)),
             limit=int(parameters["limit"]) if parameters.get("limit") is not None else None,
             scheduled_only=bool(parameters.get("scheduled_only", False)),
+            actor=requested_by,
         )
         return {
             "run_manifest_path": workspace.relative_path(result.run_manifest_path),
@@ -602,6 +631,7 @@ def _enqueue_job(
     title_seed: str,
     parameters: Dict[str, object],
     retry_of_job_id: Optional[str] = None,
+    requested_by: Optional[Dict[str, object]] = None,
 ) -> Path:
     workspace.job_manifests_dir.mkdir(parents=True, exist_ok=True)
     job_id = _job_id(job_type, title_seed)
@@ -618,6 +648,7 @@ def _enqueue_job(
         "claim_count": 0,
         "lease": {},
         "parameters": parameters,
+        "requested_by": _serialize_actor(requested_by),
         "result": {},
         "error": None,
         "retry_of_job_id": retry_of_job_id,
@@ -632,6 +663,17 @@ def _enqueue_job(
     manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     _write_queue_manifest(workspace)
     return manifest_path
+
+
+def _serialize_actor(actor: Optional[Dict[str, object]]) -> Optional[Dict[str, str]]:
+    if actor is None:
+        return None
+    return {
+        "principal_id": str(actor.get("principal_id", "")),
+        "display_name": str(actor.get("display_name", "")),
+        "role": str(actor.get("role", "")),
+        "status": str(actor.get("status", "")),
+    }
 
 
 def _update_job_manifest(manifest_path: Path, audit_entry: Optional[str] = None, **updates) -> Dict[str, object]:
