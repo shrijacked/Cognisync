@@ -112,7 +112,7 @@ The command:
 3. writes stable `review-export.json` and `dashboard-state.json` sidecars in the same directory
 4. can optionally serve that directory locally with `--serve`
 
-The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, run history from `.cognisync/runs/`, queued-job history from `.cognisync/jobs/`, sync audit history from `.cognisync/sync/`, and connector definitions from `.cognisync/connectors.json`. It also writes static graph-node, run-detail, run-timeline, concept-graph, job-detail, sync-detail, connector-detail, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, queued work, connector registry, and sync handoffs without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, resolve merge candidates, run the next queued job, and sync a registered connector against the live workspace. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, run history from `.cognisync/runs/`, queued-job history from `.cognisync/jobs/`, sync audit history from `.cognisync/sync/`, and connector definitions from `.cognisync/connectors.json`. It also writes static graph-node, run-detail, run-timeline, concept-graph, job-detail, sync-detail, connector-detail, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, queued work, connector registry, and sync handoffs without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, resolve merge candidates, run the next queued job, sync one registered connector, or sync the unsynced portion of the whole connector registry. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
 
 ### `export`
 
@@ -233,6 +233,7 @@ Supported paths in this release:
 - `cognisync jobs enqueue lint`
 - `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2`
 - `cognisync jobs enqueue connector-sync <connector-id>`
+- `cognisync jobs enqueue connector-sync-all`
 - `cognisync jobs run-next`
 - `cognisync jobs retry <job-id> --profile codex`
 - `cognisync jobs work --max-jobs 10`
@@ -242,14 +243,14 @@ The command family:
 
 1. persists queued job manifests under `.cognisync/jobs/manifests/`
 2. keeps a lightweight queue summary in `.cognisync/jobs/queue.json`
-3. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, and `connector sync` runtimes when a worker executes queued jobs
+3. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
 4. records result paths back into the job manifest instead of dropping that state into terminal-only output
 5. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
 6. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
 
 ```mermaid
 flowchart LR
-    A["jobs enqueue research, compile, lint, maintain, connector-sync, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
+    A["jobs enqueue research, compile, lint, maintain, connector-sync, connector-sync-all, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
     B --> C["jobs run-next or jobs work claims queued jobs"]
     C --> D["existing runtime executes the matching operator loop"]
     D --> E["job manifest stores result paths and completion status"]
@@ -296,6 +297,7 @@ Supported paths in this release:
 - `cognisync connector add sitemap <source> --name <name>`
 - `cognisync connector list`
 - `cognisync connector sync <connector-id>`
+- `cognisync connector sync-all`
 
 The command family:
 
@@ -303,7 +305,8 @@ The command family:
 2. supports `repo`, `url`, `urls`, and `sitemap` source shapes
 3. runs the existing ingest flows when `connector sync` executes
 4. writes a `connector_sync` run manifest plus a change summary when a sync completes
-5. can be routed through `jobs enqueue connector-sync <connector-id>` when you want the worker loop to own connector pulls
+5. lets `connector sync-all` walk the registry and skip already-synced connectors unless `--force` is provided
+6. can be routed through `jobs enqueue connector-sync <connector-id>` or `jobs enqueue connector-sync-all` when you want the worker loop to own connector pulls
 
 ### `maintain`
 

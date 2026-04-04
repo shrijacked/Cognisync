@@ -227,7 +227,7 @@ The operator loop now has a review layer too:
 - `cognisync improve research --profile <profile> --provider-format openai-chat` runs the remediation loop and refreshes the bundled training artifact in one command
 - `cognisync jobs enqueue ...`, `jobs run-next`, `jobs retry`, `jobs work`, and `jobs list` provide a persisted local queue plus retry lineage for remote-style research, compile, lint, and maintenance execution
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators and keep an audit trail in `.cognisync/sync/`
-- `cognisync connector add|list|sync` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and queued connector syncs can flow through the same worker loop
+- `cognisync connector add|list|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and both single-connector and registry-wide syncs can flow through the same worker loop
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
 - `cognisync synth qa` and `cognisync synth contrastive` generate assertion-grounded synthetic QA and retrieval data from the graph
@@ -245,7 +245,7 @@ The operator loop now has a review layer too:
 - the dashboard now surfaces graph overview data from `.cognisync/graph.json`, connected artifact summaries, recent change summaries, filtered graph/run explorers, richer run history from `.cognisync/runs/`, and browser-readable previews for referenced artifacts
 - the dashboard also surfaces source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, a run timeline page, and a static concept-graph map backed by `.cognisync/graph.json`
 - the same dashboard now also surfaces job-queue history from `.cognisync/jobs/` and sync audit history from `.cognisync/sync/`, with static job-detail and sync-detail pages for browser-first control-plane inspection
-- the dashboard now surfaces connector definitions from `.cognisync/connectors.json` too, with static connector-detail pages and live actions for `run next job` and `sync connector` when the UI is served locally
+- the dashboard now surfaces connector definitions from `.cognisync/connectors.json` too, with static connector-detail pages and live actions for `run next job`, `sync connector`, and `sync all connectors` when the UI is served locally
 
 Maintenance policy is now configurable too. Cognisync reads defaults from `.cognisync/config.json` and lets you override them per run:
 
@@ -372,13 +372,16 @@ cognisync connector add repo file:///tmp/sample-repo --name remote-sample
 cognisync connector add urls /tmp/urls.txt --name batch-sources
 cognisync connector list
 cognisync connector sync repo-remote-sample
+cognisync connector sync-all
 cognisync jobs enqueue connector-sync urls-batch-sources
+cognisync jobs enqueue connector-sync-all
 ```
 
 - connector definitions live in `.cognisync/connectors.json`
 - supported connector kinds are `repo`, `url`, `urls`, and `sitemap`
 - `connector sync` runs the ingest path immediately and writes a `connector_sync` run manifest plus a change summary
-- queued connector syncs use the same job-worker path and audit trail as the rest of the operator loop
+- `connector sync-all` skips already-synced connectors by default and uses `--force` when you want to re-pull the whole registry
+- queued connector syncs, including `connector-sync-all`, use the same job-worker path and audit trail as the rest of the operator loop
 
 ## Built-In Adapter Example
 

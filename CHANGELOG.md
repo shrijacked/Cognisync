@@ -18,6 +18,7 @@
 - added `cognisync jobs enqueue compile|lint|maintain` and `jobs work` so the queue now covers more of the operator loop and can drain sequentially like a lightweight worker
 - added `.cognisync/sync/history.json` and per-event sync manifests so workspace handoffs now leave an audit trail
 - added `cognisync connector add|list|sync` plus queued `connector-sync` jobs so remote-style source definitions now live as workspace manifests too
+- added `cognisync connector sync-all` plus queued `connector-sync-all` jobs so the control plane can refresh the connector registry in one pass
 - added `cognisync export presentations` so generated slide decks and companion reports can be bundled for downstream sharing
 - added `cognisync eval research` so persisted research runs can be scored into Markdown and JSON evaluation reports
 - expanded `cognisync eval research` with dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
@@ -30,6 +31,7 @@
 - expanded `cognisync ui review` with source-coverage panels, compile-health summaries, run timelines, concept-graph pages, graph-node drilldowns, run-detail pages, artifact previews, lightweight filters, and local review actions when served
 - expanded `cognisync ui review` again with job-queue and sync-history panels, filterable explorers, and static job-detail and sync-detail pages
 - expanded `cognisync ui review` again with connector-registry panels, connector-detail pages, and live `run next job` and `sync connector` actions when served locally
+- expanded `cognisync ui review` again with a live `sync all connectors` action so served dashboards can refresh the unsynced registry directly
 - added `cognisync review export` so the open review queue, dismissal ledger, and review-action state can be handed to other tools as a deterministic JSON artifact
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions
