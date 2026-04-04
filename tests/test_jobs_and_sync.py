@@ -3,7 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +14,40 @@ from cognisync.config import LLMProfile, load_config, save_config
 
 
 class JobsAndSyncTests(unittest.TestCase):
+    def test_jobs_enqueue_cli_enforces_operator_role(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Queue Access Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "reviewer-1",
+                        "reviewer",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "lint",
+                        "--workspace",
+                        str(root),
+                        "--actor-id",
+                        "reviewer-1",
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("does not have permission", stderr.getvalue())
+
     def test_job_heartbeat_extends_the_active_worker_lease(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -514,7 +548,16 @@ class JobsAndSyncTests(unittest.TestCase):
 
             stdout = io.StringIO()
             with redirect_stdout(stdout):
-                export_exit = main(["sync", "export", "--workspace", str(source_root)])
+                export_exit = main(
+                    [
+                        "sync",
+                        "export",
+                        "--workspace",
+                        str(source_root),
+                        "--actor-id",
+                        "local-operator",
+                    ]
+                )
             self.assertEqual(export_exit, 0)
             self.assertIn("Wrote sync bundle to", stdout.getvalue())
 
@@ -524,16 +567,30 @@ class JobsAndSyncTests(unittest.TestCase):
             manifest_path = bundle_dir / "manifest.json"
             self.assertTrue(manifest_path.exists())
             self.assertTrue((source_root / ".cognisync" / "sync" / "history.json").exists())
+            exported_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(exported_manifest["actor"]["principal_id"], "local-operator")
+            self.assertEqual(exported_manifest["actor"]["role"], "operator")
 
             stdout = io.StringIO()
             with redirect_stdout(stdout):
                 history_exit = main(["sync", "history", "--workspace", str(source_root)])
             self.assertEqual(history_exit, 0)
             self.assertIn("Sync History", stdout.getvalue())
+            self.assertIn("local-operator", stdout.getvalue())
 
             stdout = io.StringIO()
             with redirect_stdout(stdout):
-                import_exit = main(["sync", "import", str(bundle_dir), "--workspace", str(target_root)])
+                import_exit = main(
+                    [
+                        "sync",
+                        "import",
+                        str(bundle_dir),
+                        "--workspace",
+                        str(target_root),
+                        "--actor-id",
+                        "local-operator",
+                    ]
+                )
             self.assertEqual(import_exit, 0)
             self.assertIn("Imported sync bundle into", stdout.getvalue())
 
@@ -542,9 +599,8 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertTrue((target_root / ".cognisync" / "sources.json").exists())
             self.assertTrue((target_root / ".cognisync" / "access.json").exists())
             self.assertTrue((target_root / ".cognisync" / "sync" / "history.json").exists())
-            imported_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertGreaterEqual(imported_manifest["file_count"], 3)
-            self.assertEqual(imported_manifest["state_manifests"]["access"], ".cognisync/access.json")
+            self.assertGreaterEqual(exported_manifest["file_count"], 3)
+            self.assertEqual(exported_manifest["state_manifests"]["access"], ".cognisync/access.json")
 
             target_access = json.loads((target_root / ".cognisync" / "access.json").read_text(encoding="utf-8"))
             members = {item["principal_id"]: item for item in target_access["members"]}
@@ -557,6 +613,96 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertEqual(target_history["operation_counts"]["import"], 1)
             self.assertEqual(source_history["event_count"], 1)
             self.assertEqual(target_history["event_count"], 1)
+            self.assertEqual(source_history["events"][0]["actor_id"], "local-operator")
+            self.assertEqual(target_history["events"][0]["actor_id"], "local-operator")
+            self.assertEqual(target_history["events"][0]["source_actor_id"], "local-operator")
+
+    def test_sync_commands_enforce_operator_role(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = Path(tmp) / "source"
+            target_root = Path(tmp) / "target"
+            self.assertEqual(main(["init", str(source_root), "--name", "Source Workspace"]), 0)
+            self.assertEqual(main(["init", str(target_root), "--name", "Target Workspace"]), 0)
+
+            (source_root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["scan", "--workspace", str(source_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "reviewer-1",
+                        "reviewer",
+                        "--workspace",
+                        str(source_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "reviewer-1",
+                        "reviewer",
+                        "--workspace",
+                        str(target_root),
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                export_exit = main(
+                    [
+                        "sync",
+                        "export",
+                        "--workspace",
+                        str(source_root),
+                        "--actor-id",
+                        "reviewer-1",
+                    ]
+                )
+            self.assertEqual(export_exit, 2)
+            self.assertIn("does not have permission", stderr.getvalue())
+
+            bundle_dir = source_root / "outputs" / "reports" / "sync-bundles" / "operator-bundle"
+            self.assertEqual(
+                main(
+                    [
+                        "sync",
+                        "export",
+                        "--workspace",
+                        str(source_root),
+                        "--actor-id",
+                        "local-operator",
+                        "--output-dir",
+                        str(bundle_dir),
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                import_exit = main(
+                    [
+                        "sync",
+                        "import",
+                        str(bundle_dir),
+                        "--workspace",
+                        str(target_root),
+                        "--actor-id",
+                        "reviewer-1",
+                    ]
+                )
+            self.assertEqual(import_exit, 2)
+            self.assertIn("does not have permission", stderr.getvalue())
 
     def test_jobs_worker_drains_compile_lint_and_maintain_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

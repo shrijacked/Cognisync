@@ -3,7 +3,7 @@ import json
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -14,6 +14,77 @@ from cognisync.cli import main
 
 
 class ConnectorTests(unittest.TestCase):
+    def test_connector_cli_enforces_operator_role_for_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Connector Access Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "reviewer-1",
+                        "reviewer",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            url = "data:text/html;charset=utf-8," + quote("<html><head><title>Denied Source</title></head><body><p>One.</p></body></html>")
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "denied-source",
+                        "--actor-id",
+                        "reviewer-1",
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("does not have permission", stderr.getvalue())
+
+            self.assertEqual(
+                main(
+                    [
+                        "connector",
+                        "add",
+                        "url",
+                        url,
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "allowed-source",
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "connector",
+                        "sync",
+                        "url-allowed-source",
+                        "--workspace",
+                        str(root),
+                        "--actor-id",
+                        "reviewer-1",
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("does not have permission", stderr.getvalue())
+
     def test_connector_subscriptions_limit_scheduled_syncs_to_due_connectors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

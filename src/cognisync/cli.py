@@ -7,8 +7,10 @@ import sys
 from cognisync.access import (
     AccessError,
     DEFAULT_LOCAL_OPERATOR_ID,
+    OPERATOR_ACTION_ROLES,
     VALID_ACCESS_ROLES,
     grant_access_member,
+    require_access_role,
     render_access_roster,
     revoke_access_member,
 )
@@ -122,6 +124,10 @@ def _refresh_workspace_with_change_summary(workspace: Workspace, trigger: str, f
     return snapshot, write_change_summary(workspace, trigger, previous_state, snapshot)
 
 
+def _require_operator_actor(workspace: Workspace, actor_id: str, action_label: str) -> None:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, action_label)
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.path)
     workspace.initialize(name=args.name, force=args.force)
@@ -226,15 +232,20 @@ def cmd_jobs_workers(args: argparse.Namespace) -> int:
 
 def cmd_jobs_enqueue_research(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    manifest_path = enqueue_research_job(
-        workspace,
-        question=args.question,
-        profile_name=args.profile,
-        limit=args.limit,
-        mode=args.mode,
-        slides=args.slides,
-        job_profile=args.job_profile,
-    )
+    try:
+        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_research_job(
+            workspace,
+            question=args.question,
+            profile_name=args.profile,
+            limit=args.limit,
+            mode=args.mode,
+            slides=args.slides,
+            job_profile=args.job_profile,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Queued research job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
@@ -242,7 +253,12 @@ def cmd_jobs_enqueue_research(args: argparse.Namespace) -> int:
 
 def cmd_jobs_enqueue_compile(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    manifest_path = enqueue_compile_job(workspace, profile_name=args.profile)
+    try:
+        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_compile_job(workspace, profile_name=args.profile)
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Queued compile job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
@@ -250,11 +266,16 @@ def cmd_jobs_enqueue_compile(args: argparse.Namespace) -> int:
 
 def cmd_jobs_enqueue_connector_sync(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    manifest_path = enqueue_connector_sync_job(
-        workspace,
-        connector_id=args.connector_id,
-        force=args.force,
-    )
+    try:
+        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_connector_sync_job(
+            workspace,
+            connector_id=args.connector_id,
+            force=args.force,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Queued connector-sync job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
@@ -262,12 +283,17 @@ def cmd_jobs_enqueue_connector_sync(args: argparse.Namespace) -> int:
 
 def cmd_jobs_enqueue_connector_sync_all(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    manifest_path = enqueue_connector_sync_all_job(
-        workspace,
-        force=args.force,
-        limit=args.limit,
-        scheduled_only=args.scheduled_only,
-    )
+    try:
+        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_connector_sync_all_job(
+            workspace,
+            force=args.force,
+            limit=args.limit,
+            scheduled_only=args.scheduled_only,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Queued connector-sync-all job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
@@ -275,7 +301,12 @@ def cmd_jobs_enqueue_connector_sync_all(args: argparse.Namespace) -> int:
 
 def cmd_jobs_enqueue_lint(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    manifest_path = enqueue_lint_job(workspace)
+    try:
+        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_lint_job(workspace)
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Queued lint job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
@@ -283,13 +314,18 @@ def cmd_jobs_enqueue_lint(args: argparse.Namespace) -> int:
 
 def cmd_jobs_enqueue_maintain(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    manifest_path = enqueue_maintain_job(
-        workspace,
-        max_concepts=args.max_concepts,
-        max_merges=args.max_merges,
-        max_backlinks=args.max_backlinks,
-        max_conflicts=args.max_conflicts,
-    )
+    try:
+        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_maintain_job(
+            workspace,
+            max_concepts=args.max_concepts,
+            max_merges=args.max_merges,
+            max_backlinks=args.max_backlinks,
+            max_conflicts=args.max_conflicts,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Queued maintain job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
@@ -297,12 +333,17 @@ def cmd_jobs_enqueue_maintain(args: argparse.Namespace) -> int:
 
 def cmd_jobs_enqueue_improve_research(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    manifest_path = enqueue_improve_research_job(
-        workspace,
-        profile_name=args.profile,
-        limit=args.limit,
-        provider_formats=list(args.provider_format or []),
-    )
+    try:
+        _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_improve_research_job(
+            workspace,
+            profile_name=args.profile,
+            limit=args.limit,
+            provider_formats=list(args.provider_format or []),
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Queued improve-research job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
@@ -316,7 +357,7 @@ def cmd_jobs_claim_next(args: argparse.Namespace) -> int:
             worker_id=args.worker_id,
             lease_seconds=args.lease_seconds,
         )
-    except JobError as error:
+    except (JobError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(
@@ -368,6 +409,7 @@ def cmd_jobs_heartbeat(args: argparse.Namespace) -> int:
 def cmd_jobs_retry(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "retry jobs")
         manifest_path = retry_job(
             workspace,
             job_id=args.job_id,
@@ -409,7 +451,15 @@ def cmd_sync_export(args: argparse.Namespace) -> int:
         if not output_dir.is_absolute():
             output_dir = workspace.root / output_dir
         output_dir = output_dir.resolve()
-    result = export_sync_bundle(workspace, output_dir=output_dir)
+    try:
+        result = export_sync_bundle(
+            workspace,
+            output_dir=output_dir,
+            actor_id=args.actor_id,
+        )
+    except (SyncError, AccessError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
     print(f"Wrote sync bundle to {result.directory}")
     print(f"Wrote sync manifest to {result.manifest_path}")
     print(f"Wrote sync event to {result.event_manifest_path}")
@@ -425,8 +475,12 @@ def cmd_sync_import(args: argparse.Namespace) -> int:
         bundle_dir = Path.cwd() / bundle_dir
     bundle_dir = bundle_dir.resolve()
     try:
-        result = import_sync_bundle(workspace, bundle_dir=bundle_dir)
-    except SyncError as error:
+        result = import_sync_bundle(
+            workspace,
+            bundle_dir=bundle_dir,
+            actor_id=args.actor_id,
+        )
+    except (SyncError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Imported sync bundle into {workspace.root}")
@@ -478,6 +532,7 @@ def cmd_access_list(args: argparse.Namespace) -> int:
 def cmd_access_grant(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "grant workspace access")
         member = grant_access_member(
             workspace,
             principal_id=args.principal_id,
@@ -495,6 +550,7 @@ def cmd_access_grant(args: argparse.Namespace) -> int:
 def cmd_access_revoke(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "revoke workspace access")
         member = revoke_access_member(workspace, principal_id=args.principal_id)
     except AccessError as error:
         print(str(error), file=sys.stderr)
@@ -514,13 +570,14 @@ def cmd_connector_list(args: argparse.Namespace) -> int:
 def cmd_connector_add(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "register connectors")
         connector = add_connector(
             workspace,
             kind=args.kind,
             source=args.source,
             name=args.name,
         )
-    except ConnectorError as error:
+    except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Registered connector {connector['connector_id']} ({connector['kind']})")
@@ -531,12 +588,13 @@ def cmd_connector_add(args: argparse.Namespace) -> int:
 def cmd_connector_sync(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "sync connectors")
         result = sync_connector(
             workspace,
             connector_id=args.connector_id,
             force=args.force,
         )
-    except ConnectorError as error:
+    except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Synced connector {result.connector_id} ({result.connector_kind})")
@@ -550,13 +608,14 @@ def cmd_connector_sync(args: argparse.Namespace) -> int:
 def cmd_connector_sync_all(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "sync connectors")
         result = sync_all_connectors(
             workspace,
             force=args.force,
             limit=args.limit,
             scheduled_only=args.scheduled_only,
         )
-    except ConnectorError as error:
+    except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Synced {result.synced_connector_count} connector(s).")
@@ -569,12 +628,13 @@ def cmd_connector_sync_all(args: argparse.Namespace) -> int:
 def cmd_connector_subscribe(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "manage connector subscriptions")
         connector = subscribe_connector(
             workspace,
             connector_id=args.connector_id,
             every_hours=args.every_hours,
         )
-    except ConnectorError as error:
+    except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(
@@ -588,8 +648,9 @@ def cmd_connector_subscribe(args: argparse.Namespace) -> int:
 def cmd_connector_unsubscribe(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
+        _require_operator_actor(workspace, args.actor_id, "manage connector subscriptions")
         connector = unsubscribe_connector(workspace, connector_id=args.connector_id)
-    except ConnectorError as error:
+    except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Unsubscribed connector {connector['connector_id']}")
@@ -1353,11 +1414,13 @@ def build_parser() -> argparse.ArgumentParser:
     access_grant_parser.add_argument("role", choices=VALID_ACCESS_ROLES)
     access_grant_parser.add_argument("--workspace", default=".")
     access_grant_parser.add_argument("--name", default=None)
+    access_grant_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     access_grant_parser.set_defaults(func=cmd_access_grant)
 
     access_revoke_parser = access_subparsers.add_parser("revoke", help="Remove a workspace access member")
     access_revoke_parser.add_argument("principal_id")
     access_revoke_parser.add_argument("--workspace", default=".")
+    access_revoke_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     access_revoke_parser.set_defaults(func=cmd_access_revoke)
 
     jobs_parser = subparsers.add_parser("jobs", help="Manage persisted local job queues for remote-style execution")
@@ -1384,6 +1447,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_research_parser.add_argument("--mode", default="wiki")
     jobs_enqueue_research_parser.add_argument("--slides", action="store_true")
     jobs_enqueue_research_parser.add_argument("--job-profile", default=DEFAULT_RESEARCH_JOB_PROFILE)
+    jobs_enqueue_research_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_research_parser.add_argument("question")
     jobs_enqueue_research_parser.set_defaults(func=cmd_jobs_enqueue_research)
 
@@ -1393,6 +1457,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     jobs_enqueue_compile_parser.add_argument("--workspace", default=".")
     jobs_enqueue_compile_parser.add_argument("--profile", default=None)
+    jobs_enqueue_compile_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_compile_parser.set_defaults(func=cmd_jobs_enqueue_compile)
 
     jobs_enqueue_connector_sync_parser = jobs_enqueue_subparsers.add_parser(
@@ -1402,6 +1467,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_connector_sync_parser.add_argument("connector_id")
     jobs_enqueue_connector_sync_parser.add_argument("--workspace", default=".")
     jobs_enqueue_connector_sync_parser.add_argument("--force", action="store_true")
+    jobs_enqueue_connector_sync_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_connector_sync_parser.set_defaults(func=cmd_jobs_enqueue_connector_sync)
 
     jobs_enqueue_connector_sync_all_parser = jobs_enqueue_subparsers.add_parser(
@@ -1412,6 +1478,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_connector_sync_all_parser.add_argument("--force", action="store_true")
     jobs_enqueue_connector_sync_all_parser.add_argument("--limit", type=int, default=None)
     jobs_enqueue_connector_sync_all_parser.add_argument("--scheduled-only", action="store_true")
+    jobs_enqueue_connector_sync_all_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_connector_sync_all_parser.set_defaults(func=cmd_jobs_enqueue_connector_sync_all)
 
     jobs_enqueue_lint_parser = jobs_enqueue_subparsers.add_parser(
@@ -1419,6 +1486,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Queue a lint pass for later worker execution",
     )
     jobs_enqueue_lint_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_lint_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_lint_parser.set_defaults(func=cmd_jobs_enqueue_lint)
 
     jobs_enqueue_maintain_parser = jobs_enqueue_subparsers.add_parser(
@@ -1430,6 +1498,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_maintain_parser.add_argument("--max-merges", type=int, default=10)
     jobs_enqueue_maintain_parser.add_argument("--max-backlinks", type=int, default=10)
     jobs_enqueue_maintain_parser.add_argument("--max-conflicts", type=int, default=10)
+    jobs_enqueue_maintain_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_maintain_parser.set_defaults(func=cmd_jobs_enqueue_maintain)
 
     jobs_enqueue_improve_parser = jobs_enqueue_subparsers.add_parser(
@@ -1440,6 +1509,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_improve_parser.add_argument("--profile", required=True)
     jobs_enqueue_improve_parser.add_argument("--limit", type=int, default=5)
     jobs_enqueue_improve_parser.add_argument("--provider-format", action="append", default=[])
+    jobs_enqueue_improve_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_improve_parser.set_defaults(func=cmd_jobs_enqueue_improve_research)
 
     jobs_claim_next_parser = jobs_subparsers.add_parser(
@@ -1471,6 +1541,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_retry_parser.add_argument("--workspace", default=".")
     jobs_retry_parser.add_argument("--profile", default=None)
     jobs_retry_parser.add_argument("--provider-format", action="append", default=[])
+    jobs_retry_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_retry_parser.set_defaults(func=cmd_jobs_retry)
 
     jobs_work_parser = jobs_subparsers.add_parser(
@@ -1494,11 +1565,13 @@ def build_parser() -> argparse.ArgumentParser:
     sync_export_parser = sync_subparsers.add_parser("export", help="Write a portable workspace sync bundle")
     sync_export_parser.add_argument("--workspace", default=".")
     sync_export_parser.add_argument("--output-dir", default=None)
+    sync_export_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     sync_export_parser.set_defaults(func=cmd_sync_export)
 
     sync_import_parser = sync_subparsers.add_parser("import", help="Import a portable workspace sync bundle")
     sync_import_parser.add_argument("bundle")
     sync_import_parser.add_argument("--workspace", default=".")
+    sync_import_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     sync_import_parser.set_defaults(func=cmd_sync_import)
 
     connector_parser = subparsers.add_parser("connector", help="Manage file-native source connector definitions")
@@ -1513,12 +1586,14 @@ def build_parser() -> argparse.ArgumentParser:
     connector_add_parser.add_argument("source")
     connector_add_parser.add_argument("--workspace", default=".")
     connector_add_parser.add_argument("--name", default=None)
+    connector_add_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     connector_add_parser.set_defaults(func=cmd_connector_add)
 
     connector_sync_parser = connector_subparsers.add_parser("sync", help="Run a connector immediately")
     connector_sync_parser.add_argument("connector_id")
     connector_sync_parser.add_argument("--workspace", default=".")
     connector_sync_parser.add_argument("--force", action="store_true")
+    connector_sync_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     connector_sync_parser.set_defaults(func=cmd_connector_sync)
 
     connector_sync_all_parser = connector_subparsers.add_parser(
@@ -1529,6 +1604,7 @@ def build_parser() -> argparse.ArgumentParser:
     connector_sync_all_parser.add_argument("--force", action="store_true")
     connector_sync_all_parser.add_argument("--limit", type=int, default=None)
     connector_sync_all_parser.add_argument("--scheduled-only", action="store_true")
+    connector_sync_all_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     connector_sync_all_parser.set_defaults(func=cmd_connector_sync_all)
 
     connector_subscribe_parser = connector_subparsers.add_parser(
@@ -1538,6 +1614,7 @@ def build_parser() -> argparse.ArgumentParser:
     connector_subscribe_parser.add_argument("connector_id")
     connector_subscribe_parser.add_argument("--workspace", default=".")
     connector_subscribe_parser.add_argument("--every-hours", type=int, required=True)
+    connector_subscribe_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     connector_subscribe_parser.set_defaults(func=cmd_connector_subscribe)
 
     connector_unsubscribe_parser = connector_subparsers.add_parser(
@@ -1546,6 +1623,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connector_unsubscribe_parser.add_argument("connector_id")
     connector_unsubscribe_parser.add_argument("--workspace", default=".")
+    connector_unsubscribe_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     connector_unsubscribe_parser.set_defaults(func=cmd_connector_unsubscribe)
 
     ingest_parser = subparsers.add_parser("ingest", help="Bring source material into raw/")

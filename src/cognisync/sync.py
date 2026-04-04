@@ -7,7 +7,12 @@ from pathlib import Path
 import shutil
 from typing import Dict, List, Optional
 
-from cognisync.access import ensure_access_manifest
+from cognisync.access import (
+    DEFAULT_LOCAL_OPERATOR_ID,
+    OPERATOR_ACTION_ROLES,
+    ensure_access_manifest,
+    require_access_role,
+)
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -60,18 +65,31 @@ def render_sync_history(workspace: Workspace) -> str:
     lines.append(f"- Operation counts: `{json.dumps(dict(sorted(operation_counts.items())), sort_keys=True)}`")
     lines.extend(["", "## Events", ""])
     for event in events:
+        actor = dict(event.get("actor", {}))
+        actor_label = str(actor.get("principal_id", "")) or "unknown-actor"
         lines.append(
             "- "
             f"`{event.get('sync_id', '')}` "
             f"`{event.get('operation', '')}` "
             f"`{event.get('status', '')}` "
+            f"`{actor_label}` "
             f"{event.get('bundle_dir_relative', event.get('bundle_dir', ''))}"
         )
     return "\n".join(lines)
 
 
-def export_sync_bundle(workspace: Workspace, output_dir: Optional[Path] = None) -> SyncBundleResult:
+def export_sync_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> SyncBundleResult:
     ensure_access_manifest(workspace)
+    actor = require_access_role(
+        workspace,
+        actor_id,
+        OPERATOR_ACTION_ROLES,
+        "export workspace sync bundles",
+    )
     destination = output_dir or _next_sync_bundle_dir(workspace)
     destination.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +120,7 @@ def export_sync_bundle(workspace: Workspace, output_dir: Optional[Path] = None) 
         "schema_version": 1,
         "generated_at": utc_timestamp(),
         "bundle_type": "workspace-sync-bundle",
+        "actor": _serialize_actor(actor),
         "workspace_root": workspace.root.as_posix(),
         "included_paths": copied_paths,
         "file_count": file_count,
@@ -116,6 +135,7 @@ def export_sync_bundle(workspace: Workspace, output_dir: Optional[Path] = None) 
         bundle_manifest_path=manifest_path,
         file_count=file_count,
         included_paths=copied_paths,
+        actor=actor,
     )
     history_manifest_path = _write_sync_history_manifest(workspace)
     return SyncBundleResult(
@@ -127,13 +147,23 @@ def export_sync_bundle(workspace: Workspace, output_dir: Optional[Path] = None) 
     )
 
 
-def import_sync_bundle(workspace: Workspace, bundle_dir: Path) -> SyncImportResult:
+def import_sync_bundle(
+    workspace: Workspace,
+    bundle_dir: Path,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> SyncImportResult:
     bundle_root = Path(bundle_dir).expanduser().resolve()
     manifest_path = bundle_root / "manifest.json"
     if not manifest_path.exists():
         raise SyncError(f"Could not find sync manifest at {manifest_path}.")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    actor = require_access_role(
+        workspace,
+        actor_id,
+        OPERATOR_ACTION_ROLES,
+        "import workspace sync bundles",
+    )
     workspace.initialize(name=workspace.root.name, force=False)
 
     file_count = 0
@@ -152,6 +182,8 @@ def import_sync_bundle(workspace: Workspace, bundle_dir: Path) -> SyncImportResu
         bundle_manifest_path=manifest_path,
         file_count=file_count,
         included_paths=[str(item) for item in list(manifest.get("included_paths", []))],
+        actor=actor,
+        source_manifest=manifest,
     )
     history_manifest_path = _write_sync_history_manifest(workspace)
     return SyncImportResult(
@@ -197,6 +229,8 @@ def _record_sync_event(
     bundle_manifest_path: Path,
     file_count: int,
     included_paths: List[str],
+    actor: Dict[str, object],
+    source_manifest: Optional[Dict[str, object]] = None,
 ) -> Path:
     sync_id = _sync_event_id(operation)
     payload = {
@@ -205,6 +239,7 @@ def _record_sync_event(
         "sync_id": sync_id,
         "operation": operation,
         "status": "completed",
+        "actor": _serialize_actor(actor),
         "bundle_dir": bundle_dir.as_posix(),
         "bundle_dir_relative": workspace.relative_path(bundle_dir),
         "bundle_manifest_path": bundle_manifest_path.as_posix(),
@@ -212,6 +247,12 @@ def _record_sync_event(
         "file_count": file_count,
         "included_paths": list(included_paths),
     }
+    if source_manifest is not None:
+        payload["source_bundle"] = {
+            "generated_at": str(source_manifest.get("generated_at", "")),
+            "bundle_type": str(source_manifest.get("bundle_type", "")),
+            "actor": dict(source_manifest.get("actor", {})),
+        }
     workspace.sync_manifests_dir.mkdir(parents=True, exist_ok=True)
     path = workspace.sync_manifests_dir / f"{sync_id}.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -236,6 +277,9 @@ def _write_sync_history_manifest(workspace: Workspace) -> Path:
                 "operation": str(event.get("operation", "")),
                 "status": str(event.get("status", "")),
                 "generated_at": str(event.get("generated_at", "")),
+                "actor_id": str(dict(event.get("actor", {})).get("principal_id", "")),
+                "actor_role": str(dict(event.get("actor", {})).get("role", "")),
+                "source_actor_id": str(dict(dict(event.get("source_bundle", {})).get("actor", {})).get("principal_id", "")),
                 "file_count": int(event.get("file_count", 0) or 0),
                 "bundle_dir_relative": str(event.get("bundle_dir_relative", "")),
                 "event_manifest_path": workspace.relative_path(workspace.sync_manifests_dir / f"{event.get('sync_id', '')}.json"),
@@ -254,6 +298,15 @@ def _write_sync_history_manifest(workspace: Workspace) -> Path:
 def _sync_event_id(operation: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"sync-{operation}-{stamp}"
+
+
+def _serialize_actor(actor: Dict[str, object]) -> Dict[str, str]:
+    return {
+        "principal_id": str(actor.get("principal_id", "")),
+        "display_name": str(actor.get("display_name", "")),
+        "role": str(actor.get("role", "")),
+        "status": str(actor.get("status", "")),
+    }
 
 
 def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:

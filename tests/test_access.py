@@ -2,7 +2,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from tests import support  # noqa: F401
@@ -62,6 +62,57 @@ class AccessTests(unittest.TestCase):
             self.assertIn("bob", members)
             self.assertNotIn("alice", members)
             self.assertEqual(members["bob"]["role"], "editor")
+
+    def test_access_cli_enforces_operator_role_for_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Access Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "access",
+                        "grant",
+                        "reviewer-1",
+                        "reviewer",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "access",
+                        "grant",
+                        "alice",
+                        "editor",
+                        "--workspace",
+                        str(root),
+                        "--actor-id",
+                        "reviewer-1",
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("does not have permission", stderr.getvalue())
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "access",
+                        "revoke",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--actor-id",
+                        "reviewer-1",
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("does not have permission", stderr.getvalue())
 
 
 if __name__ == "__main__":
