@@ -38,10 +38,10 @@ class ChangeSummaryResult:
 
 def capture_change_state(workspace: Workspace, fallback_to_live_scan: bool = False) -> ChangeState:
     snapshot: Optional[IndexSnapshot] = None
-    if workspace.index_path.exists():
-        snapshot = workspace.read_index()
-    elif fallback_to_live_scan:
+    if fallback_to_live_scan:
         snapshot = scan_workspace(workspace)
+    elif workspace.index_path.exists():
+        snapshot = workspace.read_index()
 
     actions = read_review_actions(workspace)
     return _build_change_state(workspace, snapshot, actions)

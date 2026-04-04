@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.config import MaintenancePolicy
 from cognisync.graph_intelligence import extract_claim_tuples
+from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.linter import lint_snapshot
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.review_queue import build_review_queue
@@ -316,6 +317,19 @@ def run_maintenance_cycle(
             "status": "completed",
         },
     )
+    append_workspace_log(
+        workspace,
+        operation="maintain",
+        title="Ran graph maintenance",
+        details=[
+            f"Accepted {len(accepted_paths)} concept(s), resolved {len(merge_keys)} merge(s), "
+            f"applied {len(backlink_targets)} backlink(s), and filed {len(filed_conflict_keys)} conflict note(s)."
+        ],
+        related_paths=[
+            workspace.relative_path(change_summary.path),
+            workspace.relative_path(run_manifest_path),
+        ],
+    )
     return MaintenanceResult(
         accepted_concept_paths=accepted_paths,
         resolved_merge_keys=merge_keys,
@@ -329,8 +343,7 @@ def run_maintenance_cycle(
 
 
 def _refresh_workspace_state(workspace: Workspace) -> IndexSnapshot:
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     return snapshot
 

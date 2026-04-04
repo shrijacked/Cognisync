@@ -156,6 +156,9 @@ class OperationsTests(unittest.TestCase):
 
             self.assertTrue((workspace.root / "raw" / "files" / "note.md").exists())
             self.assertTrue((workspace.root / "raw" / "pdfs" / "paper.pdf").exists())
+            log_text = workspace.log_path.read_text(encoding="utf-8")
+            self.assertIn("ingest | Filed source note.md", log_text)
+            self.assertIn("ingest | Filed PDF paper.pdf", log_text)
 
     def test_ingest_pdf_extracts_text_into_a_sidecar_markdown_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

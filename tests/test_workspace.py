@@ -27,8 +27,21 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue((workspace.outputs_dir / "slides").exists())
             self.assertTrue(workspace.prompts_dir.exists())
             self.assertTrue(workspace.state_dir.exists())
+            self.assertTrue(workspace.schema_path.exists())
+            self.assertTrue(workspace.log_path.exists())
             self.assertTrue((workspace.wiki_dir / "index.md").exists())
+            self.assertTrue((workspace.wiki_dir / "sources.md").exists())
+            self.assertTrue((workspace.wiki_dir / "concepts.md").exists())
+            self.assertTrue((workspace.wiki_dir / "queries.md").exists())
             self.assertTrue(workspace.config_path.exists())
+
+            schema_text = workspace.schema_path.read_text(encoding="utf-8")
+            log_text = workspace.log_path.read_text(encoding="utf-8")
+            self.assertIn("Cognisync Workspace Schema", schema_text)
+            self.assertIn("wiki/index.md", schema_text)
+            self.assertIn("log.md", schema_text)
+            self.assertIn("## [", log_text)
+            self.assertIn("init | Initialized", log_text)
 
             config = load_config(workspace.config_path)
 

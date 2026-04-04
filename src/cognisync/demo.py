@@ -6,7 +6,7 @@ from typing import Dict
 from cognisync.manifests import write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
-from cognisync.scanner import scan_workspace
+from cognisync.review_state import read_review_actions, write_review_actions
 from cognisync.search import SearchEngine
 from cognisync.workspace import Workspace
 
@@ -28,7 +28,7 @@ def create_demo_workspace(workspace: Workspace, force: bool = False) -> Dict[str
     workspace.initialize(name="Cognisync Demo Garden", force=force)
     _write_demo_files(workspace, force=True)
 
-    seeded_snapshot = scan_workspace(workspace)
+    seeded_snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, seeded_snapshot)
     engine = SearchEngine.from_workspace(workspace, seeded_snapshot)
     hits = engine.search(DEMO_QUESTION, limit=5)
@@ -55,16 +55,24 @@ def create_demo_workspace(workspace: Workspace, force: bool = False) -> Dict[str
         ),
         force=force,
     )
+    actions = read_review_actions(workspace)
+    actions["applied_backlinks"]["wiki/queries/research-garden-brief.md"] = {
+        "navigation_path": "wiki/queries.md",
+        "related_paths": [
+            "wiki/concepts/knowledge-gardens.md",
+            "wiki/concepts/agent-loops.md",
+        ],
+    }
+    write_review_actions(workspace, actions)
 
-    snapshot = scan_workspace(workspace)
+    snapshot = workspace.refresh_index()
     plan = build_compile_plan(snapshot)
     workspace.write_plan_json("compile-plan", plan)
     plan_path = workspace.plans_dir / "compile-plan.md"
     plan_path.write_text(render_compile_plan(plan), encoding="utf-8")
     compile_packet_path = render_compile_packet(workspace, plan)
 
-    final_snapshot = scan_workspace(workspace)
-    workspace.write_index(final_snapshot)
+    final_snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, final_snapshot)
 
     return {

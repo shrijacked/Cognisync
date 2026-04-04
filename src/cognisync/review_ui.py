@@ -3043,8 +3043,7 @@ def _refresh_review_ui_bundle(
     index_name: str,
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
 ) -> None:
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     write_review_ui_bundle(workspace, snapshot, output_file=bundle_dir / index_name, actor_id=actor_id)
 

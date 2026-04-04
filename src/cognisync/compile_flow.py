@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from cognisync.adapters import AdapterError, adapter_from_config
+from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.linter import lint_snapshot
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.renderers import render_compile_packet
 from cognisync.workspace import Workspace
-from cognisync.scanner import scan_workspace
 
 
 class CompileError(RuntimeError):
@@ -33,8 +33,7 @@ def run_compile_cycle(
     profile_name: Optional[str] = None,
     output_file: Optional[Path] = None,
 ) -> CompileRunResult:
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
 
     plan = build_compile_plan(snapshot)
@@ -62,8 +61,7 @@ def run_compile_cycle(
             resolved_output.write_text(result.stdout, encoding="utf-8")
         ran_profile = True
 
-    final_snapshot = scan_workspace(workspace)
-    workspace.write_index(final_snapshot)
+    final_snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, final_snapshot)
     issues = lint_snapshot(final_snapshot, workspace=workspace)
     run_manifest_path = write_run_manifest(
@@ -79,6 +77,17 @@ def run_compile_cycle(
             "task_count": len(plan.tasks),
             "status": "completed" if not issues else "completed_with_issues",
         },
+    )
+    append_workspace_log(
+        workspace,
+        operation="compile",
+        title="Refreshed compile plan",
+        details=[f"Planned {len(plan.tasks)} task(s) and found {len(issues)} lint issue(s) after compile."],
+        related_paths=[
+            workspace.relative_path(plan_path),
+            workspace.relative_path(packet_path),
+            workspace.relative_path(run_manifest_path),
+        ],
     )
     return CompileRunResult(
         plan_path=plan_path,

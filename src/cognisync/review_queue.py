@@ -9,6 +9,7 @@ from cognisync.graph_intelligence import (
     build_concept_candidates,
     build_graph_semantics,
 )
+from cognisync.knowledge_surfaces import is_navigation_surface_path
 from cognisync.review_state import canonicalize_review_label, normalize_review_label_variant, read_review_actions
 from cognisync.types import ArtifactRecord, IndexSnapshot
 from cognisync.workspace import Workspace
@@ -91,6 +92,8 @@ def _build_entity_merge_items(workspace: Workspace, snapshot: IndexSnapshot, act
     buckets: Dict[str, Dict[str, object]] = {}
     resolved = dict(actions.get("resolved_entity_merges", {}))
     for artifact in snapshot.artifacts:
+        if is_navigation_surface_path(artifact.path):
+            continue
         if artifact.kind not in TEXTUAL_REVIEW_KINDS or artifact.collection not in {"raw", "wiki", "outputs"}:
             continue
         text = _read_artifact_text(workspace, artifact)
@@ -181,7 +184,7 @@ def _build_backlink_suggestion_items(workspace: Workspace, snapshot: IndexSnapsh
     for artifact in snapshot.artifacts:
         if artifact.collection != "wiki" or artifact.kind != "markdown":
             continue
-        if artifact.path == "wiki/index.md":
+        if is_navigation_surface_path(artifact.path):
             continue
         if snapshot.backlinks.get(artifact.path):
             continue
@@ -190,6 +193,8 @@ def _build_backlink_suggestion_items(workspace: Workspace, snapshot: IndexSnapsh
         best_score = 0
         for other in snapshot.artifacts:
             if other.path == artifact.path:
+                continue
+            if is_navigation_surface_path(other.path):
                 continue
             if (other.path, artifact.path) in link_pairs or (artifact.path, other.path) in link_pairs:
                 continue
@@ -220,6 +225,8 @@ def _build_backlink_suggestion_items(workspace: Workspace, snapshot: IndexSnapsh
 
 
 def _artifact_signals(workspace: Workspace, artifact: ArtifactRecord) -> Set[str]:
+    if is_navigation_surface_path(artifact.path):
+        return set()
     signals = {tag.lower() for tag in artifact.tags}
     for label in [artifact.title, *artifact.headings]:
         canonical = canonicalize_review_label(label)

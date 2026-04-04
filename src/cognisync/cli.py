@@ -53,6 +53,7 @@ from cognisync.ingest import (
     ingest_url,
     ingest_urls,
 )
+from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.jobs import (
     JobError,
     claim_next_job,
@@ -110,22 +111,36 @@ def _ensure_snapshot(workspace: Workspace):
         snapshot = workspace.read_index()
         write_workspace_manifests(workspace, snapshot)
         return snapshot
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     return snapshot
 
 
 def _refresh_workspace_with_change_summary(workspace: Workspace, trigger: str, fallback_to_live_scan: bool = False):
     previous_state = capture_change_state(workspace, fallback_to_live_scan=fallback_to_live_scan)
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     return snapshot, write_change_summary(workspace, trigger, previous_state, snapshot)
 
 
 def _require_operator_actor(workspace: Workspace, actor_id: str, action_label: str) -> dict:
     return require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, action_label)
+
+
+def _log_workspace_activity(
+    workspace: Workspace,
+    operation: str,
+    title: str,
+    details: list[str] | None = None,
+    related_paths: list[str] | None = None,
+) -> None:
+    append_workspace_log(
+        workspace,
+        operation=operation,
+        title=title,
+        details=details or [],
+        related_paths=related_paths or [],
+    )
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -138,6 +153,13 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_scan(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     snapshot, change_summary = _refresh_workspace_with_change_summary(workspace, "scan")
+    _log_workspace_activity(
+        workspace,
+        operation="scan",
+        title="Refreshed workspace snapshot",
+        details=[f"Cataloged {len(snapshot.artifacts)} artifacts across raw, wiki, outputs, and prompts."],
+        related_paths=[workspace.relative_path(change_summary.path), workspace.relative_path(workspace.index_path)],
+    )
     print(f"Scanned {len(snapshot.artifacts)} artifacts into {workspace.index_path}")
     print(f"Wrote change summary to {change_summary.path}")
     return 0
@@ -183,6 +205,13 @@ def cmd_lint(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     snapshot = _ensure_snapshot(workspace)
     issues = lint_snapshot(snapshot, workspace=workspace)
+    _log_workspace_activity(
+        workspace,
+        operation="lint",
+        title="Checked workspace integrity",
+        details=[f"Found {len(issues)} issue(s)."],
+        related_paths=[workspace.relative_path(workspace.index_path)],
+    )
     for issue in issues:
         print(f"[{issue.severity}] {issue.kind} {issue.path}: {issue.message}")
     if issues:
@@ -1085,10 +1114,16 @@ def cmd_ingest_file(args: argparse.Namespace) -> int:
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title=f"Filed source {result.path.name}",
+        details=["Imported a local file into the raw corpus."],
+        related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+    )
     print(f"Ingested file into {result.path}")
     print(f"Wrote change summary to {change_summary.path}")
     return 0
@@ -1102,10 +1137,16 @@ def cmd_ingest_pdf(args: argparse.Namespace) -> int:
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title=f"Filed PDF {result.path.name}",
+        details=["Imported a PDF and refreshed the compiled workspace index."],
+        related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+    )
     print(f"Ingested pdf into {result.path}")
     print(f"Wrote change summary to {change_summary.path}")
     return 0
@@ -1119,10 +1160,16 @@ def cmd_ingest_url(args: argparse.Namespace) -> int:
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title=f"Captured URL source {result.path.name}",
+        details=[f"Imported {args.url} into the raw URL corpus."],
+        related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+    )
     print(f"Ingested url into {result.path}")
     print(f"Wrote change summary to {change_summary.path}")
     return 0
@@ -1136,10 +1183,16 @@ def cmd_ingest_repo(args: argparse.Namespace) -> int:
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title=f"Captured repository source {result.path.name}",
+        details=[f"Imported repository metadata from {args.source}."],
+        related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+    )
     print(f"Ingested repo manifest into {result.path}")
     print(f"Wrote change summary to {change_summary.path}")
     return 0
@@ -1153,10 +1206,16 @@ def cmd_ingest_urls(args: argparse.Namespace) -> int:
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title="Captured URL batch",
+        details=[f"Imported {len(results)} URL source(s) from a list."],
+        related_paths=[workspace.relative_path(change_summary.path)] + [workspace.relative_path(result.path) for result in results[:5]],
+    )
     print(f"Ingested {len(results)} URL source(s).")
     for result in results:
         print(f"- {result.path}")
@@ -1172,10 +1231,16 @@ def cmd_ingest_sitemap(args: argparse.Namespace) -> int:
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title="Captured sitemap batch",
+        details=[f"Imported {len(results)} URL source(s) from sitemap {args.source}."],
+        related_paths=[workspace.relative_path(change_summary.path)] + [workspace.relative_path(result.path) for result in results[:5]],
+    )
     print(f"Ingested {len(results)} URL source(s).")
     for result in results:
         print(f"- {result.path}")
@@ -1191,10 +1256,16 @@ def cmd_ingest_batch(args: argparse.Namespace) -> int:
     except IngestError as error:
         print(str(error), file=sys.stderr)
         return 2
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title="Executed batch ingest manifest",
+        details=[f"Imported {len(results)} source(s) from {args.manifest}."],
+        related_paths=[workspace.relative_path(change_summary.path)] + [workspace.relative_path(result.path) for result in results[:5]],
+    )
     print(f"Batch ingested {len(results)} source(s).")
     for result in results:
         print(f"- {result.kind}: {result.path}")

@@ -72,6 +72,11 @@ class CliTests(unittest.TestCase):
 
             report_files = list((root / "outputs" / "reports").glob("*.md"))
             self.assertTrue(report_files)
+            self.assertIn("[CLI Doc](sources/doc.md)", (root / "wiki" / "sources.md").read_text(encoding="utf-8"))
+            self.assertIn("workspace schema: `../AGENTS.md`", (root / "wiki" / "index.md").read_text(encoding="utf-8"))
+            log_text = (root / "log.md").read_text(encoding="utf-8")
+            self.assertIn("scan | Refreshed workspace snapshot", log_text)
+            self.assertIn("lint | Checked workspace integrity", log_text)
 
     def test_research_command_runs_search_packet_and_answer_filing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,6 +125,8 @@ class CliTests(unittest.TestCase):
             self.assertTrue(packet_path.exists())
             self.assertIn("Filed Answer", answer_path.read_text(encoding="utf-8"))
             self.assertIn("Wrote filed answer", stdout.getvalue())
+            log_text = (root / "log.md").read_text(encoding="utf-8")
+            self.assertIn("query | how do agent loops use memory", log_text)
 
     def test_review_command_prints_queue_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

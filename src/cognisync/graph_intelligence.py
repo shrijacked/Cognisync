@@ -4,6 +4,7 @@ from collections import defaultdict
 import re
 from typing import Dict, List, Sequence, Set, Tuple
 
+from cognisync.knowledge_surfaces import is_navigation_surface_path
 from cognisync.review_state import (
     canonicalize_review_label,
     normalize_review_label_variant,
@@ -89,6 +90,8 @@ def build_concept_candidates(snapshot: IndexSnapshot) -> List[Dict[str, object]]
     support: Dict[str, Dict[str, object]] = {}
     existing_paths = set(snapshot.artifact_paths())
     for artifact in snapshot.artifacts:
+        if is_navigation_surface_path(artifact.path):
+            continue
         if artifact.collection not in {"raw", "wiki"} or artifact.kind != "markdown":
             continue
         for label, evidence_kind in _candidate_labels_from_artifact(artifact):
@@ -141,7 +144,9 @@ def build_graph_semantics(workspace: Workspace, snapshot: IndexSnapshot) -> Dict
     textual_artifacts = [
         artifact
         for artifact in snapshot.artifacts
-        if artifact.kind in TEXTUAL_KINDS and artifact.collection in {"raw", "wiki", "outputs"}
+        if artifact.kind in TEXTUAL_KINDS
+        and artifact.collection in {"raw", "wiki", "outputs"}
+        and not is_navigation_surface_path(artifact.path)
     ]
 
     claim_support: Dict[Tuple[str, str], Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))

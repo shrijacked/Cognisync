@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.ingest import IngestError, IngestResult, ingest_repo, ingest_sitemap, ingest_url, ingest_urls
+from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.notifications import write_notifications_manifest
 from cognisync.scanner import scan_workspace
@@ -194,8 +195,7 @@ def sync_connector(
     except IngestError as error:
         raise ConnectorError(str(error)) from error
 
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
     run_manifest_path = write_run_manifest(
@@ -225,6 +225,17 @@ def sync_connector(
     connector["subscription"] = _advance_subscription(connector.get("subscription", {}), synced_at, scheduled=scheduled)
     registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
     _write_connector_registry(workspace, registry)
+    append_workspace_log(
+        workspace,
+        operation="ingest",
+        title=f"Synced connector {connector_id}",
+        details=[f"Pulled {len(results)} artifact(s) from the {str(connector.get('kind', 'connector'))} connector."],
+        related_paths=[
+            workspace.relative_path(change_summary.path),
+            workspace.relative_path(run_manifest_path),
+        ]
+        + [workspace.relative_path(result.path) for result in results[:5]],
+    )
 
     return ConnectorSyncResult(
         connector_id=connector_id,

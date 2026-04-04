@@ -26,6 +26,14 @@ class Workspace:
         return self.root / "outputs"
 
     @property
+    def schema_path(self) -> Path:
+        return self.root / "AGENTS.md"
+
+    @property
+    def log_path(self) -> Path:
+        return self.root / "log.md"
+
+    @property
     def prompts_dir(self) -> Path:
         return self.root / "prompts"
 
@@ -164,37 +172,19 @@ class Workspace:
         if force or not self.config_path.exists():
             save_config(self.config_path, default_config(name or self.root.name))
 
-        wiki_index = self.wiki_dir / "index.md"
-        if force or not wiki_index.exists():
-            wiki_index.write_text(
-                "# Knowledge Base Index\n\n"
-                "This workspace is managed by Cognisync.\n\n"
-                "## Sections\n\n"
-                "- [[sources]]\n"
-                "- [[concepts]]\n"
-                "- [[queries]]\n",
-                encoding="utf-8",
-            )
-
-        navigation_pages = {
-            self.wiki_dir / "sources.md": (
-                "# Sources\n\n"
-                "Use this page to index or curate compiled source summaries stored in `wiki/sources/`.\n"
-            ),
-            self.wiki_dir / "concepts.md": (
-                "# Concepts\n\n"
-                "Use this page to organize shared concepts synthesized from multiple sources.\n"
-            ),
-            self.wiki_dir / "queries.md": (
-                "# Queries\n\n"
-                "Use this page to catalogue question-driven investigations and reusable answers.\n"
-            ),
-        }
-        for path, content in navigation_pages.items():
-            if force or not path.exists():
-                path.write_text(content, encoding="utf-8")
-
         ensure_access_manifest(self)
+        from cognisync.knowledge_surfaces import append_workspace_log, ensure_workspace_log, write_workspace_schema
+
+        write_workspace_schema(self, force=force)
+        ensure_workspace_log(self, force=force)
+        self.refresh_index()
+        append_workspace_log(
+            self,
+            operation="init",
+            title=f"Initialized {self.root.name}",
+            details=["Workspace scaffolding and agent schema created."],
+            related_paths=[self.relative_path(self.schema_path), self.relative_path(self.log_path)],
+        )
 
     def load_config(self):
         return load_config(self.config_path)
@@ -209,6 +199,18 @@ class Workspace:
     def write_index(self, snapshot: IndexSnapshot) -> None:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         self.index_path.write_text(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+
+    def refresh_index(self) -> IndexSnapshot:
+        from cognisync.knowledge_surfaces import ensure_workspace_log, write_wiki_navigation_surfaces, write_workspace_schema
+        from cognisync.scanner import scan_workspace
+
+        write_workspace_schema(self)
+        ensure_workspace_log(self)
+        provisional_snapshot = scan_workspace(self)
+        write_wiki_navigation_surfaces(self, provisional_snapshot)
+        final_snapshot = scan_workspace(self)
+        self.write_index(final_snapshot)
+        return final_snapshot
 
     def read_index(self) -> IndexSnapshot:
         data = json.loads(self.index_path.read_text(encoding="utf-8"))

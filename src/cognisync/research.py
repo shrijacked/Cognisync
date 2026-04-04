@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Sequence
 
 from cognisync.adapters import AdapterError, adapter_from_config
 from cognisync.change_summaries import ChangeState, capture_change_state, write_change_summary
+from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.manifests import read_json_manifest, write_run_manifest, write_workspace_manifests
 from cognisync.renderers import render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
@@ -220,8 +221,7 @@ def run_research_cycle(
         raise ResearchError("A question is required unless you resume an existing research run.")
 
     previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
 
     engine = SearchEngine.from_workspace(workspace, snapshot)
@@ -324,6 +324,18 @@ def run_research_cycle(
             validation=initial_validation,
             resume_count=0,
             attempt_count=0,
+        )
+        append_workspace_log(
+            workspace,
+            operation="query",
+            title=question,
+            details=["Planned a research run without executing a model profile yet."],
+            related_paths=[
+                workspace.relative_path(plan_path),
+                workspace.relative_path(report_path),
+                workspace.relative_path(change_summary_path),
+                workspace.relative_path(run_manifest_path),
+            ],
         )
         return ResearchRunResult(
             plan_path=plan_path,
@@ -704,6 +716,18 @@ def _execute_research_run(
     if not validation["passed"]:
         raise ResearchError("Research verification failed: " + "; ".join(validation["errors"]))
 
+    append_workspace_log(
+        workspace,
+        operation="query",
+        title=question,
+        details=[f"Completed research in `{mode}` mode with status `{final_status}` and {len(sources)} cited source(s)."],
+        related_paths=[
+            workspace.relative_path(report_path),
+            workspace.relative_path(output_file),
+            workspace.relative_path(change_summary_path),
+            workspace.relative_path(run_manifest_path),
+        ],
+    )
     return ResearchRunResult(
         plan_path=plan_path,
         report_path=report_path,
@@ -786,8 +810,7 @@ def _write_research_run_state(
 
 
 def _write_research_change_summary(workspace: Workspace, previous_state: ChangeState) -> Path:
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
+    snapshot = workspace.refresh_index()
     write_workspace_manifests(workspace, snapshot)
     change_summary = write_change_summary(workspace, "research", previous_state, snapshot)
     return change_summary.path

@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+from cognisync.knowledge_surfaces import is_navigation_surface_path
 from cognisync.manifests import build_graph_manifest
-from cognisync.scanner import scan_workspace
 from cognisync.types import IndexSnapshot
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
@@ -96,19 +96,29 @@ def build_synthetic_contrastive_records(workspace: Workspace) -> List[Dict[str, 
 
 
 def _ensure_snapshot(workspace: Workspace) -> IndexSnapshot:
-    if workspace.index_path.exists():
-        return workspace.read_index()
-    snapshot = scan_workspace(workspace)
-    workspace.write_index(snapshot)
-    return snapshot
+    return workspace.refresh_index()
 
 
 def _assertion_nodes(graph_manifest: Dict[str, object]) -> List[Dict[str, object]]:
-    return [
+    nodes = [
         dict(node)
         for node in list(graph_manifest.get("nodes", []))
         if dict(node).get("kind") == "assertion"
     ]
+    filtered = [
+        node
+        for node in nodes
+        if not any(is_navigation_surface_path(str(path)) for path in list(node.get("support_paths", [])))
+    ]
+    filtered.sort(
+        key=lambda node: (
+            -int(node.get("support_count", 0)),
+            str(node.get("subject", "")),
+            str(node.get("verb", "")),
+            str(node.get("object", "")),
+        )
+    )
+    return filtered
 
 
 def _question_for_assertion(subject: str, verb: str, obj: str) -> str:

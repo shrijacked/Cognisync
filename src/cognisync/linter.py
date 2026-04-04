@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import List, Optional
 
+from cognisync.knowledge_surfaces import is_navigation_surface_path
 from cognisync.review_queue import build_review_queue, canonicalize_review_label
 from cognisync.types import IndexSnapshot, LintIssue
 from cognisync.workspace import Workspace
@@ -81,7 +82,7 @@ def lint_snapshot(snapshot: IndexSnapshot, workspace: Optional[Workspace] = None
     for artifact in snapshot.artifacts:
         if artifact.collection != "wiki" or artifact.kind != "markdown":
             continue
-        if artifact.path == "wiki/index.md":
+        if is_navigation_surface_path(artifact.path):
             continue
         if snapshot.backlinks.get(artifact.path):
             continue

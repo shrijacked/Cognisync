@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from cognisync.types import ArtifactRecord, IndexSnapshot, LinkReference
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
+from cognisync.knowledge_surfaces import is_navigation_surface_path
 
 
 MARKDOWN_EXTENSIONS = {".md", ".markdown"}
@@ -197,11 +198,11 @@ def _extract_links(
     stem_index: Dict[str, List[str]],
 ) -> List[LinkReference]:
     raw_links: List[Tuple[str, str]] = []
-    raw_links.extend((match.group(1).strip(), "link") for match in MARKDOWN_LINK_RE.finditer(body))
+    raw_links.extend((match.group(1).strip(), "markdown_link") for match in MARKDOWN_LINK_RE.finditer(body))
     raw_links.extend((match.group(1).strip(), "wikilink") for match in WIKI_LINK_RE.finditer(body))
     links: List[LinkReference] = []
-    for raw_target, _ in raw_links:
-        links.append(_resolve_link(raw_target, source_path, inventory, stem_index))
+    for raw_target, link_kind in raw_links:
+        links.append(_resolve_link(raw_target, source_path, inventory, stem_index, link_kind))
     return links
 
 
@@ -216,18 +217,19 @@ def _resolve_link(
     source_path: str,
     inventory: Dict[str, Path],
     stem_index: Dict[str, List[str]],
+    link_kind: str,
 ) -> LinkReference:
     target = raw_target.strip()
     if not target:
-        return LinkReference(raw_target=raw_target, resolved_path=None, external=False)
+        return LinkReference(raw_target=raw_target, resolved_path=None, external=False, kind=link_kind)
     if target.startswith(("http://", "https://", "mailto:", "data:")):
-        return LinkReference(raw_target=raw_target, resolved_path=None, external=True)
+        return LinkReference(raw_target=raw_target, resolved_path=None, external=True, kind=link_kind)
     if target.startswith("#"):
-        return LinkReference(raw_target=raw_target, resolved_path=source_path, external=False)
+        return LinkReference(raw_target=raw_target, resolved_path=source_path, external=False, kind=link_kind)
 
     clean_target = target.split("#", 1)[0].split("?", 1)[0].strip()
     if not clean_target:
-        return LinkReference(raw_target=raw_target, resolved_path=source_path, external=False)
+        return LinkReference(raw_target=raw_target, resolved_path=source_path, external=False, kind=link_kind)
 
     source_dir = posixpath.dirname(source_path)
 
@@ -255,10 +257,10 @@ def _resolve_link(
 
     for candidate in normalized_candidates:
         if candidate in inventory:
-            return LinkReference(raw_target=raw_target, resolved_path=candidate, external=False)
+            return LinkReference(raw_target=raw_target, resolved_path=candidate, external=False, kind=link_kind)
 
     fallback = normalized_candidates[0] if normalized_candidates else None
-    return LinkReference(raw_target=raw_target, resolved_path=fallback, external=False)
+    return LinkReference(raw_target=raw_target, resolved_path=fallback, external=False, kind=link_kind)
 
 
 def _build_backlinks(artifacts: Iterable[ArtifactRecord], existing_paths: set) -> Dict[str, List[str]]:
@@ -266,6 +268,12 @@ def _build_backlinks(artifacts: Iterable[ArtifactRecord], existing_paths: set) -
     for artifact in artifacts:
         for link in artifact.links:
             if link.external or not link.resolved_path:
+                continue
+            if (
+                is_navigation_surface_path(artifact.path)
+                and artifact.path not in {"wiki/sources.md", "wiki/concepts.md"}
+                and link.kind != "wikilink"
+            ):
                 continue
             if link.resolved_path not in existing_paths:
                 continue

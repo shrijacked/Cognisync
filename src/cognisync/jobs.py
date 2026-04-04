@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from cognisync.compile_flow import run_compile_cycle
 from cognisync.connectors import sync_all_connectors, sync_connector
+from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.linter import lint_snapshot
 from cognisync.maintenance import run_maintenance_cycle
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
@@ -508,8 +509,7 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "ran_profile": result.ran_profile,
         }
     if job_type == "lint":
-        snapshot = scan_workspace(workspace)
-        workspace.write_index(snapshot)
+        snapshot = workspace.refresh_index()
         write_workspace_manifests(workspace, snapshot)
         issues = lint_snapshot(snapshot, workspace=workspace)
         issue_counts_by_severity: Dict[str, int] = {}
@@ -524,6 +524,13 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
                 "issue_counts_by_severity": dict(sorted(issue_counts_by_severity.items())),
                 "status": "completed" if not issues else "completed_with_issues",
             },
+        )
+        append_workspace_log(
+            workspace,
+            operation="lint",
+            title="Executed queued lint job",
+            details=[f"Queued lint found {len(issues)} issue(s)."],
+            related_paths=[workspace.relative_path(run_manifest_path)],
         )
         return {
             "run_manifest_path": workspace.relative_path(run_manifest_path),
