@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from cognisync.compile_flow import run_compile_cycle
+from cognisync.connectors import sync_connector
 from cognisync.linter import lint_snapshot
 from cognisync.maintenance import run_maintenance_cycle
 from cognisync.manifests import write_run_manifest, write_workspace_manifests
@@ -78,6 +79,18 @@ def enqueue_compile_job(workspace: Workspace, profile_name: Optional[str] = None
         "compile",
         "compile-plan",
         {"profile_name": profile_name},
+    )
+
+
+def enqueue_connector_sync_job(workspace: Workspace, connector_id: str, force: bool = False) -> Path:
+    return _enqueue_job(
+        workspace,
+        "connector_sync",
+        connector_id,
+        {
+            "connector_id": connector_id,
+            "force": force,
+        },
     )
 
 
@@ -311,6 +324,21 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "resolved_merge_keys": list(result.resolved_merge_keys),
             "applied_backlink_targets": list(result.applied_backlink_targets),
             "filed_conflict_keys": list(result.filed_conflict_keys),
+        }
+    if job_type == "connector_sync":
+        result = sync_connector(
+            workspace,
+            connector_id=str(parameters.get("connector_id", "")),
+            force=bool(parameters.get("force", False)),
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+            "change_summary_path": workspace.relative_path(result.change_summary_path),
+            "connector_id": result.connector_id,
+            "connector_kind": result.connector_kind,
+            "synced_count": result.synced_count,
+            "registry_path": workspace.relative_path(result.registry_path),
+            "result_paths": [workspace.relative_path(path) for path in result.result_paths],
         }
     if job_type == "research":
         result = run_research_cycle(

@@ -73,6 +73,10 @@ class Workspace:
         return self.sync_state_dir / "history.json"
 
     @property
+    def connector_registry_path(self) -> Path:
+        return self.state_dir / "connectors.json"
+
+    @property
     def sources_manifest_path(self) -> Path:
         return self.state_dir / "sources.json"
 
