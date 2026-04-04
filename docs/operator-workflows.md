@@ -150,11 +150,11 @@ Supported paths in this release:
 
 `export finetune-bundle` writes a timestamped bundle under `outputs/reports/exports/` with:
 
-- `supervised.jsonl` examples sourced from persisted research runs plus synthetic QA records
+- `supervised.jsonl` examples sourced from persisted research runs, validated remediation corrections, and synthetic QA records
 - `retrieval.jsonl` contrastive retrieval examples sourced from assertion support paths
 - a bundle `manifest.json` with supervised and retrieval counts plus example-type tallies
 
-You can also ask the same bundle to emit provider-specific supervised records. For example, `--provider-format openai-chat` writes `supervised.openai-chat.jsonl` with `messages` arrays for direct chat-finetuning flows while keeping the generic files intact.
+You can also ask the same bundle to emit provider-specific supervised records. For example, `--provider-format openai-chat` writes `supervised.openai-chat.jsonl` with `messages` arrays for direct chat-finetuning flows while keeping the generic files intact, including any validated remediation corrections already present in the supervised bundle.
 
 `export feedback-bundle` writes a timestamped remediation bundle under `outputs/reports/exports/` with:
 

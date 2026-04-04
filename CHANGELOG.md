@@ -5,6 +5,7 @@
 - added `cognisync export jsonl` so research runs can be emitted as portable JSONL dataset artifacts
 - added `cognisync export training-bundle` so research runs can be packaged as label-bearing training datasets
 - added `cognisync export finetune-bundle` so research runs and synthetic graph-derived examples can be emitted together as supervised and retrieval datasets
+- taught `cognisync export finetune-bundle` to include validated remediation corrections in its supervised datasets and provider-ready exports
 - added `--provider-format openai-chat` to `cognisync export finetune-bundle` so the same bundle can emit OpenAI-ready chat records without a separate conversion step
 - added `cognisync export feedback-bundle` so low-quality research runs can be turned into remediation-ready records for correction loops
 - added `cognisync remediate research` so low-quality runs can be replayed through correction prompts and validated without overwriting the original artifacts

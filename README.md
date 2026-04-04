@@ -218,7 +218,7 @@ The operator loop now has a review layer too:
 - `cognisync review export` writes a machine-readable artifact with the open queue, dismissal ledger, and review action state for other agents or tools
 - `cognisync export jsonl` writes research-run records into `outputs/reports/exports/` as a portable JSONL dataset artifact
 - `cognisync export training-bundle` writes a finetuning-friendly dataset bundle with labels derived from validation and conflict checks
-- `cognisync export finetune-bundle` writes supervised and retrieval datasets together so research runs, synthetic QA, and contrastive pairs can feed downstream finetuning jobs from one bundle
+- `cognisync export finetune-bundle` writes supervised and retrieval datasets together so research runs, validated remediation corrections, synthetic QA, and contrastive pairs can feed downstream finetuning jobs from one bundle
 - `cognisync export finetune-bundle --provider-format openai-chat` also emits an OpenAI-style chat JSONL alongside the generic supervised dataset
 - `cognisync export feedback-bundle` turns low-quality research runs into remediation-ready records so eval output can feed a real correction loop
 - `cognisync remediate research --profile <profile>` replays weak research runs through remediation prompts and writes validated correction jobs under `outputs/reports/remediation-jobs/`
@@ -308,7 +308,7 @@ cognisync synth contrastive
 - `export jsonl` writes one JSONL row per research run with the question, run metadata, cited report text, prompt packet text, filed answer text, slide path, and validation state
 - exported JSONL rows now also include the research job profile, note paths, source-packet path, checkpoints path, and validation report path
 - `export training-bundle` writes `dataset.jsonl` plus `manifest.json` with validation-derived labels like citation failures, unsupported-claim failures, and conflict gates
-- `export finetune-bundle` writes `supervised.jsonl`, `retrieval.jsonl`, and `manifest.json` so downstream trainers get research-run SFT pairs, synthetic QA examples, and contrastive retrieval pairs in one timestamped export
+- `export finetune-bundle` writes `supervised.jsonl`, `retrieval.jsonl`, and `manifest.json` so downstream trainers get research-run SFT pairs, validated remediation-correction examples, synthetic QA examples, and contrastive retrieval pairs in one timestamped export
 - `export finetune-bundle --provider-format openai-chat` also writes `supervised.openai-chat.jsonl` with `messages` arrays for direct OpenAI chat-finetuning pipelines
 - `export feedback-bundle` writes `remediation.jsonl` plus `manifest.json` for runs that need improvement, including their weak dimensions, current answers, and remediation prompts
 - `remediate research --profile <profile>` consumes those weak runs, writes a remediation packet plus corrected answer and validation report under `outputs/reports/remediation-jobs/`, and keeps those job artifacts out of retrieval
