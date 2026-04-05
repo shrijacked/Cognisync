@@ -48,6 +48,7 @@ workspace/
 │   └── slides/
 ├── prompts/
 └── .cognisync/
+    ├── collaboration.json
     ├── config.json
     ├── graph.json
     ├── index.json
@@ -67,6 +68,7 @@ workspace/
 - Stable source and graph manifests under `.cognisync/`
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
+- Durable collaboration threads under `.cognisync/collaboration.json` so artifact review requests, comments, approvals, and change requests travel with the workspace
 - Regenerated wiki navigation catalogs at `wiki/index.md`, `wiki/sources.md`, `wiki/concepts.md`, and `wiki/queries.md`
 - Deterministic corpus change summaries after scan, ingest, maintenance, and research runs
 - Export bridges for JSONL research datasets, training bundles, and presentation bundles
@@ -118,6 +120,7 @@ Cognisync is strongest when you use it as a loop, not a bag of separate commands
 cognisync doctor --strict
 cognisync ingest batch sources.json
 cognisync review
+cognisync collab request-review outputs/reports/report.md --assign reviewer-1 --actor-id editor-1
 cognisync maintain
 cognisync compile --profile codex --strict
 cognisync research "what changed in this corpus?" --profile codex --slides
@@ -236,6 +239,7 @@ The operator loop now has a review layer too:
 - `cognisync review list-dismissed` shows the current dismissal ledger
 - `cognisync review clear-dismissed <review-id>` removes one dismissal record without reopening it through a separate queue action
 - `cognisync review export` writes a machine-readable artifact with the open queue, dismissal ledger, and review action state for other agents or tools
+- `cognisync collab list|request-review|comment|approve|request-changes|resolve` materializes artifact-level review state in `.cognisync/collaboration.json`, so human or agent review threads live beside the corpus instead of in chat logs
 - `cognisync export jsonl` writes research-run records into `outputs/reports/exports/` as a portable JSONL dataset artifact
 - `cognisync export training-bundle` writes a finetuning-friendly dataset bundle with labels derived from validation and conflict checks
 - `cognisync export finetune-bundle` writes supervised and retrieval datasets together so research runs, validated remediation corrections, synthetic QA, and contrastive pairs can feed downstream finetuning jobs from one bundle
@@ -246,9 +250,10 @@ The operator loop now has a review layer too:
 - `cognisync export training-loop-bundle --provider-format openai-chat` packages evaluation, feedback, corrections, and finetune artifacts into one portable training-loop bundle
 - `cognisync improve research --profile <profile> --provider-format openai-chat` runs the remediation loop and refreshes the bundled training artifact in one command
 - `cognisync notify list` materializes a filesystem-native notification inbox from jobs, runs, connectors, and review state so operators can see backlog, due subscriptions, and failure signals without scraping logs
+- `cognisync notify list` now also surfaces collaboration review backlog and outstanding requested-change threads from `.cognisync/collaboration.json`
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json`, and mutating roster changes now accept `--actor-id` so only operator principals can change workspace membership
-- `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, and the workspace roster
-- `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, and storage bytes
+- `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, the workspace roster, and collaboration activity
+- `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, storage bytes, and collaboration threads
 - `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, `jobs workers`, and `jobs list` provide a persisted local queue plus retry lineage, renewable worker leases, and a file-native worker roster for remote-style research, compile, lint, maintenance, and scheduled connector execution, and queue submission/retry now accepts `--actor-id` so only operator principals can schedule work
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, and now attribute every export/import event to an explicit workspace actor
 - `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and connector mutations now accept `--actor-id` so only operator principals can register, schedule, or run connector pulls
@@ -277,6 +282,7 @@ The operator loop now has a review layer too:
 - the same dashboard now reads `.cognisync/notifications.json` too, so backlog, validation-failure, and connector-attention signals show up as a durable inbox panel instead of living only in terminal output
 - the same dashboard now reads `.cognisync/access.json` too, so the workspace roster and role distribution are visible in the browser next to the rest of the operator state
 - the same dashboard now reads `.cognisync/audit.json` and `.cognisync/usage.json` too, so control-plane history and usage accounting show up alongside review, runs, jobs, sync, access, and notifications
+- the same dashboard now reads `.cognisync/collaboration.json` too, with live request-review, comment, approve, request-changes, and resolve actions when the UI is served locally
 
 Maintenance policy is now configurable too. Cognisync reads defaults from `.cognisync/config.json` and lets you override them per run:
 

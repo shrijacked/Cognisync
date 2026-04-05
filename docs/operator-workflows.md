@@ -10,6 +10,7 @@ It focuses on seven commands that make the framework feel like a product rather 
 - `cognisync doctor`
 - `cognisync ingest ...`
 - `cognisync review`
+- `cognisync collab ...`
 - `cognisync ui review`
 - `cognisync export ...`
 - `cognisync maintain`
@@ -24,15 +25,16 @@ flowchart TD
     B --> C["scan refreshes AGENTS.md, log.md, and wiki catalogs"]
     C --> D["review surfaces concept, merge, and conflict follow-ups"]
     D --> E["review actions accept concepts or resolve merges"]
-    E --> F["ui review renders a browser dashboard from the same manifests"]
-    F --> G["maintain can apply the same actions automatically"]
-    G --> H["change summaries capture corpus deltas"]
-    H --> I["compile builds a plan and prompt packet"]
-    I --> J["configured LLM profile executes compile work"]
-    J --> K["scan and lint run again on the updated workspace"]
-    K --> L["research turns the refreshed corpus into cited reports and filed answers"]
-    L --> M["export bridges package reports and slide decks for downstream systems"]
-    M --> N["run manifests, graph state, review queue, review actions, and change summaries persist the loop"]
+    E --> F["collab tracks artifact-level review requests and decisions"]
+    F --> G["ui review renders a browser dashboard from the same manifests"]
+    G --> H["maintain can apply the same actions automatically"]
+    H --> I["change summaries capture corpus deltas"]
+    I --> J["compile builds a plan and prompt packet"]
+    J --> K["configured LLM profile executes compile work"]
+    K --> L["scan and lint run again on the updated workspace"]
+    L --> M["research turns the refreshed corpus into cited reports and filed answers"]
+    M --> N["export bridges package reports and slide decks for downstream systems"]
+    N --> O["run manifests, graph state, review queue, collaboration state, and change summaries persist the loop"]
 ```
 
 ## Command Roles
@@ -133,7 +135,28 @@ The command:
 4. can optionally serve that directory locally with `--serve`
 5. can run the live server as an explicit workspace actor with `--actor-id`
 
-The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, run history from `.cognisync/runs/`, queued-job history from `.cognisync/jobs/`, worker ownership from `.cognisync/jobs/workers.json`, sync audit history from `.cognisync/sync/`, connector definitions from `.cognisync/connectors.json`, workspace access state from `.cognisync/access.json`, and operator notifications from `.cognisync/notifications.json`. It also writes static graph-node, run-detail, run-timeline, concept-graph, job-detail, sync-detail, connector-detail, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, queued work, connector registry, access roster, and sync handoffs without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, resolve merge candidates, run the next queued job, sync one registered connector, or sync the unsynced portion of the whole connector registry. Those live actions now run as an explicit workspace actor, with reviewer-or-operator access for review mutations and operator-only access for job and connector mutations. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+The dashboard is intentionally thin. It reads the same review queue and review-action state you already use through the CLI, then layers in graph-overview data from `.cognisync/graph.json`, source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, recent change summaries, run history from `.cognisync/runs/`, queued-job history from `.cognisync/jobs/`, worker ownership from `.cognisync/jobs/workers.json`, sync audit history from `.cognisync/sync/`, connector definitions from `.cognisync/connectors.json`, workspace access state from `.cognisync/access.json`, collaboration state from `.cognisync/collaboration.json`, and operator notifications from `.cognisync/notifications.json`. It also writes static graph-node, run-detail, run-timeline, concept-graph, job-detail, sync-detail, connector-detail, and artifact-preview pages plus lightweight browser-side filters, so operators can drill into the current graph, source mix, change ledger, queued work, connector registry, access roster, collaboration queue, and sync handoffs without leaving the file-native workflow. When served locally, the same surface can accept concepts, dismiss or reopen queue items, apply backlinks, file conflicts, resolve merge candidates, request artifact review, add collaboration comments, record approvals or requested changes, resolve collaboration threads, run the next queued job, sync one registered connector, or sync the unsynced portion of the whole connector registry. Those live actions now run as an explicit workspace actor, with editor-or-reviewer-or-operator access for collaboration requests and comments, reviewer-or-operator access for approvals and change requests, and operator-only access for job and connector mutations. The filesystem stays canonical and the UI remains a control layer rather than a second source of truth.
+
+### `collab`
+
+Use `collab` when you want artifact-level review to persist inside the same workspace instead of staying implicit in chat history.
+
+Supported paths in this release:
+
+- `cognisync collab list`
+- `cognisync collab request-review <artifact-path> --assign reviewer-1 --actor-id editor-1`
+- `cognisync collab comment <artifact-path> --message "..." --actor-id reviewer-1`
+- `cognisync collab approve <artifact-path> --summary "..." --actor-id reviewer-1`
+- `cognisync collab request-changes <artifact-path> --summary "..." --actor-id reviewer-1`
+- `cognisync collab resolve <artifact-path> --actor-id editor-1`
+
+The command set:
+
+1. materializes `.cognisync/collaboration.json`
+2. keeps artifact-path keyed review threads with assignees, comments, decisions, and resolution state
+3. requires a non-viewer workspace actor for review requests and comments
+4. requires a reviewer or operator actor for approvals and requested changes
+5. lets sync bundles, audit manifests, usage manifests, notifications, and the review UI consume the same collaboration state without a separate backing store
 
 ### `access`
 
@@ -166,7 +189,8 @@ The command:
 
 1. writes `.cognisync/notifications.json`
 2. derives notifications from queued and failed jobs, validation-failed runs, warning-bearing runs, unsynced connectors, and due connector subscriptions
-3. prints a human-readable inbox view for the same manifest
+3. also derives collaboration notifications for pending review threads and outstanding requested-change threads
+4. prints a human-readable inbox view for the same manifest
 
 This keeps backlog and failure signals file-native, so later automation or UI layers can read the same inbox instead of scraping terminal logs.
 
@@ -181,7 +205,7 @@ Supported path in this release:
 The command:
 
 1. writes `.cognisync/audit.json`
-2. derives events from access members, connector definitions, job manifests, run manifests, and sync events
+2. derives events from access members, collaboration threads, connector definitions, job manifests, run manifests, and sync events
 3. prints a human-readable audit summary for the same manifest
 
 This is not a separate database. It is a deterministic index over the same filesystem-native state the operator loop already uses.
@@ -197,7 +221,7 @@ Supported path in this release:
 The command:
 
 1. writes `.cognisync/usage.json`
-2. counts runs, jobs, connectors, sync volume, access roles, and storage bytes by area
+2. counts runs, jobs, connectors, sync volume, access roles, collaboration threads, and storage bytes by area
 3. makes the same summary available to later UI or automation layers without scraping terminal output
 
 This gives Cognisync a file-native usage and activity baseline before any hosted billing or quota layer exists.
