@@ -48,14 +48,20 @@ workspace/
 │   └── slides/
 ├── prompts/
 └── .cognisync/
+    ├── access.json
+    ├── audit.json
     ├── collaboration.json
     ├── config.json
+    ├── control-plane.json
     ├── graph.json
     ├── index.json
+    ├── notifications.json
     ├── review-actions.json
     ├── review-queue.json
     ├── runs/
+    ├── sync/
     ├── sources.json
+    ├── usage.json
     └── plans/
 ```
 
@@ -69,6 +75,7 @@ workspace/
 - Stable review queue manifests for graph follow-up work under `.cognisync/`
 - Durable review-action state so accepted concepts, merge decisions, and dismissals survive rescans
 - Durable collaboration threads under `.cognisync/collaboration.json` so artifact review requests, comments, approvals, and change requests travel with the workspace
+- Durable control-plane state under `.cognisync/control-plane.json` so invites, bearer tokens, and scheduler ticks stay file-native too
 - Regenerated wiki navigation catalogs at `wiki/index.md`, `wiki/sources.md`, `wiki/concepts.md`, and `wiki/queries.md`
 - Deterministic corpus change summaries after scan, ingest, maintenance, and research runs
 - Export bridges for JSONL research datasets, training bundles, and presentation bundles
@@ -252,9 +259,11 @@ The operator loop now has a review layer too:
 - `cognisync notify list` materializes a filesystem-native notification inbox from jobs, runs, connectors, and review state so operators can see backlog, due subscriptions, and failure signals without scraping logs
 - `cognisync notify list` now also surfaces collaboration review backlog and outstanding requested-change threads from `.cognisync/collaboration.json`
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json`, and mutating roster changes now accept `--actor-id` so only operator principals can change workspace membership
+- `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|scheduler-tick|serve` adds a hosted-alpha control plane on top of the same workspace, with durable invites, scoped bearer tokens, scheduler state, and a local HTTP surface for remote workers
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, the workspace roster, and collaboration activity
 - `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, storage bytes, and collaboration threads
 - `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, `jobs workers`, and `jobs list` provide a persisted local queue plus retry lineage, renewable worker leases, and a file-native worker roster for remote-style research, compile, lint, maintenance, and scheduled connector execution, and queue submission/retry now accepts `--actor-id` so only operator principals can schedule work
+- `cognisync worker remote --server-url ... --token ...` polls the hosted-alpha control plane and executes queued jobs against the same manifest-backed runtime, so another process can drain work without sharing a shell session
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, and now attribute every export/import event to an explicit workspace actor
 - `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and connector mutations now accept `--actor-id` so only operator principals can register, schedule, or run connector pulls
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
@@ -305,6 +314,22 @@ The saved config surface looks like this:
 `cognisync doctor` now reports the active maintenance policy too, and warns when the workspace is configured permissively enough that low-signal concept pages are more likely to slip through maintenance.
 - lint now surfaces raw sources with no headings or tags, duplicate concept pages, conflicting claims, and stale source summaries as graph-aware issues
 - compile planning now turns stale summaries into `refresh_source_summary` work items instead of leaving them as passive warnings
+
+The hosted-alpha control-plane layer is now available too:
+
+- `cognisync control-plane invite reviewer-2 reviewer --workspace .`
+- `cognisync control-plane accept-invite reviewer-2 --workspace .`
+- `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
+- `cognisync control-plane scheduler-tick --workspace . --enqueue-only`
+- `cognisync control-plane serve --workspace .`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token token.json)" --worker-id remote-a --max-jobs 5`
+
+That layer keeps the same filesystem-first contract:
+
+- invites, issued tokens, and scheduler state persist in `.cognisync/control-plane.json`
+- issued tokens stay scoped, so review-only actors can inspect status without being able to run jobs
+- scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work without adding a second queue system
+- sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace
 
 ```mermaid
 flowchart TD

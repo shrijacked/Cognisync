@@ -11,6 +11,8 @@ It focuses on seven commands that make the framework feel like a product rather 
 - `cognisync ingest ...`
 - `cognisync review`
 - `cognisync collab ...`
+- `cognisync control-plane ...`
+- `cognisync worker remote`
 - `cognisync ui review`
 - `cognisync export ...`
 - `cognisync maintain`
@@ -26,15 +28,17 @@ flowchart TD
     C --> D["review surfaces concept, merge, and conflict follow-ups"]
     D --> E["review actions accept concepts or resolve merges"]
     E --> F["collab tracks artifact-level review requests and decisions"]
-    F --> G["ui review renders a browser dashboard from the same manifests"]
-    G --> H["maintain can apply the same actions automatically"]
-    H --> I["change summaries capture corpus deltas"]
-    I --> J["compile builds a plan and prompt packet"]
-    J --> K["configured LLM profile executes compile work"]
-    K --> L["scan and lint run again on the updated workspace"]
-    L --> M["research turns the refreshed corpus into cited reports and filed answers"]
-    M --> N["export bridges package reports and slide decks for downstream systems"]
-    N --> O["run manifests, graph state, review queue, collaboration state, and change summaries persist the loop"]
+    F --> G["control-plane issues tokens and scheduler ticks"]
+    G --> H["worker remote drains queued jobs over HTTP"]
+    H --> I["ui review renders a browser dashboard from the same manifests"]
+    I --> J["maintain can apply the same actions automatically"]
+    J --> K["change summaries capture corpus deltas"]
+    K --> L["compile builds a plan and prompt packet"]
+    L --> M["configured LLM profile executes compile work"]
+    M --> N["scan and lint run again on the updated workspace"]
+    N --> O["research turns the refreshed corpus into cited reports and filed answers"]
+    O --> P["export bridges package reports and slide decks for downstream systems"]
+    P --> Q["run manifests, graph state, review queue, collaboration state, control-plane state, and change summaries persist the loop"]
 ```
 
 ## Command Roles
@@ -176,6 +180,51 @@ The command set:
 4. lets sync bundles carry the same roster to another machine through the copied `.cognisync` state
 
 This keeps the control-plane surface file-native too. The roster is simple on purpose: it is meant to be durable workspace state first, and a future hosted permission layer second.
+
+### `control-plane`
+
+Use `control-plane` when you want to expose the manifest-backed queue, scheduler, and access layer to another process without introducing a separate service database first.
+
+Supported paths in this release:
+
+- `cognisync control-plane status`
+- `cognisync control-plane invite reviewer-2 reviewer --workspace .`
+- `cognisync control-plane accept-invite reviewer-2 --workspace .`
+- `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
+- `cognisync control-plane list-tokens`
+- `cognisync control-plane revoke-token <token-id>`
+- `cognisync control-plane scheduler-tick --enqueue-only --actor-id local-operator`
+- `cognisync control-plane serve --host 127.0.0.1 --port 8766`
+
+The command family:
+
+1. materializes `.cognisync/control-plane.json`
+2. keeps workspace invites and accepted memberships file-native instead of hiding them in process memory
+3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes
+4. supports scheduler ticks that enqueue or execute scheduled connector sync work against the same queue and connector manifests the local CLI already uses
+5. serves a lightweight HTTP layer for status, queue inspection, scheduler ticks, lease-aware job execution, and lease renewal
+6. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
+7. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
+
+This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
+
+### `worker remote`
+
+Use `worker remote` when you want a second process or machine to execute queued work through the control-plane HTTP surface instead of sharing a terminal session.
+
+Supported path in this release:
+
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --max-jobs 5`
+
+The command:
+
+1. polls `/api/jobs/run-next` on the served control plane
+2. reuses the same manifest-backed runtimes as `jobs run-next`
+3. keeps worker identity explicit through `--worker-id`
+4. stops cleanly when no jobs are available or when `--max-jobs` is reached
+5. works with scheduler-enqueued connector jobs, so scheduled connector pulls can be drained by a remote worker instead of the local shell
+
+Together, `control-plane serve`, `control-plane scheduler-tick`, and `worker remote` give Cognisync a remote-ready operator loop without breaking the local-first contract.
 
 ### `notify`
 
@@ -406,7 +455,7 @@ Supported paths in this release:
 
 `sync import` also requires an operator actor from the target workspace roster, then restores those same paths into another workspace root so corpus files, job state, and execution manifests can move together.
 
-Every export and import also records a sync event under `.cognisync/sync/manifests/` and refreshes `.cognisync/sync/history.json`, so a later operator or UI can inspect how the workspace moved without parsing bundle directories manually. Those events now include the acting principal and, on import, the source bundle actor too.
+Every export and import also records a sync event under `.cognisync/sync/manifests/` and refreshes `.cognisync/sync/history.json`, so a later operator or UI can inspect how the workspace moved without parsing bundle directories manually. Those events now include the acting principal and, on import, the source bundle actor too. The declared `state_manifests` map now includes `.cognisync/control-plane.json` as well, so hosted-alpha tokens, invites, and scheduler state can travel with the same bundle.
 
 The scanner ignores `outputs/reports/sync-bundles/` so exported handoff artifacts never re-enter retrieval.
 

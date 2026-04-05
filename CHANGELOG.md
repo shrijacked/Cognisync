@@ -62,6 +62,9 @@
 - added research change-summary artifacts so planned, resumed, and completed research runs all leave a readable corpus delta behind
 - enriched change summaries with graph deltas and suggested follow-up questions
 - added stale-summary lint checks and `refresh_source_summary` compile tasks so outdated source summaries surface as actionable maintenance work
+- added `.cognisync/control-plane.json` plus `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|scheduler-tick|serve` so invites, scoped bearer tokens, scheduler ticks, and a lightweight HTTP server now sit on top of the same file-native workspace state
+- added `cognisync worker remote` so queued jobs can be drained through the hosted-alpha HTTP surface by a separate worker process without inventing a second runtime
+- taught sync bundle manifests to declare `.cognisync/control-plane.json` in `state_manifests`, so the hosted-alpha layer travels with exported workspaces
 
 ## v0.1.4 - 2026-04-03
 
