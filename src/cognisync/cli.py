@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
 
@@ -31,6 +32,17 @@ from cognisync.collaboration import (
 )
 from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import MaintenancePolicy, save_config
+from cognisync.control_plane import (
+    ControlPlaneError,
+    accept_control_plane_invite,
+    create_control_plane_invite,
+    create_control_plane_server,
+    issue_control_plane_token,
+    list_control_plane_tokens,
+    render_control_plane_status,
+    revoke_control_plane_token,
+    run_scheduler_tick,
+)
 from cognisync.connectors import (
     ConnectorError,
     add_connector,
@@ -98,6 +110,7 @@ from cognisync.observability import render_audit_history, render_usage_report, w
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.remediation import RemediationError, remediate_research_runs
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, RESEARCH_JOB_PROFILES, ResearchError, run_research_cycle
+from cognisync.remote_worker import RemoteWorkerError, run_remote_worker
 from cognisync.review_exports import write_review_export
 from cognisync.review_queue import build_review_queue, render_review_queue
 from cognisync.review_ui import create_review_ui_server, write_review_ui_bundle
@@ -600,6 +613,185 @@ def cmd_access_revoke(args: argparse.Namespace) -> int:
         return 2
     print(f"Revoked access for {member['principal_id']}")
     print(f"Access manifest: {workspace.access_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_status(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_control_plane_status(workspace))
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_invite(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        invite = create_control_plane_invite(
+            workspace,
+            principal_id=args.principal_id,
+            role=args.role,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Created invite {invite['invite_id']} for {invite['principal_id']} as {invite['role']}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_accept_invite(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        invite = accept_control_plane_invite(
+            workspace,
+            invite_ref=args.invite_ref,
+            actor_id=args.actor_id,
+        )
+    except ControlPlaneError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Accepted invite {invite['invite_id']} for {invite['principal_id']}")
+    print(f"Access manifest: {workspace.access_manifest_path}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_issue_token(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_file = None
+    if args.output_file:
+        output_file = Path(args.output_file).expanduser()
+        if not output_file.is_absolute():
+            output_file = workspace.root / output_file
+        output_file = output_file.resolve()
+    try:
+        token_metadata, token_value = issue_control_plane_token(
+            workspace,
+            principal_id=args.principal_id,
+            scopes=list(args.scope or []),
+            actor_id=args.actor_id,
+            description=args.description,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    payload = {
+        "token": token_value,
+        "token_id": token_metadata["token_id"],
+        "principal_id": token_metadata["principal_id"],
+        "role": token_metadata["role"],
+        "scopes": list(token_metadata.get("scopes", [])),
+        "manifest_path": workspace.relative_path(workspace.control_plane_manifest_path),
+    }
+    if output_file is not None:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"Wrote control-plane token payload to {output_file}")
+    else:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_list_tokens(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    tokens = list_control_plane_tokens(workspace)
+    if not tokens:
+        print("No control-plane tokens found.")
+        print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+        return 0
+    print(f"Control-plane tokens: {len(tokens)}")
+    print("")
+    for token in tokens:
+        scopes = ", ".join(str(item) for item in list(token.get("scopes", [])))
+        print(f"{token['token_id']} [{token['status']}] {token['principal_id']} ({token['role']})")
+        print(f"prefix: {token.get('token_prefix', '')}")
+        if scopes:
+            print(f"scopes: {scopes}")
+        description = str(token.get("description", "")).strip()
+        if description:
+            print(f"description: {description}")
+        print("")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_revoke_token(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        token = revoke_control_plane_token(
+            workspace,
+            token_id=args.token_id,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Revoked token {token['token_id']} for {token['principal_id']}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_scheduler_tick(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = run_scheduler_tick(
+            workspace,
+            actor_id=args.actor_id,
+            enqueue_only=args.enqueue_only,
+            force=args.force,
+            limit=args.limit,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Scheduler action: {result.action}")
+    print(f"Due connectors: {result.due_connector_count}")
+    if result.due_connector_ids:
+        print("Connector ids:")
+        for connector_id in result.due_connector_ids:
+            print(f"- {connector_id}")
+    if result.enqueued_job_ids:
+        print("Enqueued jobs:")
+        for job_id in result.enqueued_job_ids:
+            print(f"- {job_id}")
+    if result.executed_run_manifest_path is not None:
+        print(f"Executed run manifest: {result.executed_run_manifest_path}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_serve(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    server = create_control_plane_server(workspace=workspace, host=args.host, port=args.port)
+    host, port = server.server_address
+    print(f"Serving control plane at http://{host}:{port}/")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("Stopped control-plane server.")
+    finally:
+        server.server_close()
+    return 0
+
+
+def cmd_worker_remote(args: argparse.Namespace) -> int:
+    try:
+        result = run_remote_worker(
+            server_url=args.server_url,
+            token=args.token,
+            worker_id=args.worker_id,
+            max_jobs=args.max_jobs,
+            lease_seconds=args.lease_seconds,
+        )
+    except RemoteWorkerError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Processed jobs: {result.processed_count}")
+    print(f"Completed jobs: {result.completed_count}")
+    print(f"Stopped reason: {result.stopped_reason}")
     return 0
 
 
@@ -1612,6 +1804,86 @@ def build_parser() -> argparse.ArgumentParser:
     access_revoke_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     access_revoke_parser.set_defaults(func=cmd_access_revoke)
 
+    control_plane_parser = subparsers.add_parser(
+        "control-plane",
+        help="Manage hosted-alpha control-plane state, tokens, and scheduler actions",
+    )
+    control_plane_subparsers = control_plane_parser.add_subparsers(dest="control_plane_command", required=True)
+
+    control_plane_status_parser = control_plane_subparsers.add_parser(
+        "status",
+        help="Inspect the persisted control-plane manifest",
+    )
+    control_plane_status_parser.add_argument("--workspace", default=".")
+    control_plane_status_parser.set_defaults(func=cmd_control_plane_status)
+
+    control_plane_invite_parser = control_plane_subparsers.add_parser(
+        "invite",
+        help="Create a control-plane invite for a workspace principal",
+    )
+    control_plane_invite_parser.add_argument("principal_id")
+    control_plane_invite_parser.add_argument("role", choices=VALID_ACCESS_ROLES)
+    control_plane_invite_parser.add_argument("--workspace", default=".")
+    control_plane_invite_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_invite_parser.set_defaults(func=cmd_control_plane_invite)
+
+    control_plane_accept_invite_parser = control_plane_subparsers.add_parser(
+        "accept-invite",
+        help="Accept a pending control-plane invite by invite id or principal id",
+    )
+    control_plane_accept_invite_parser.add_argument("invite_ref")
+    control_plane_accept_invite_parser.add_argument("--workspace", default=".")
+    control_plane_accept_invite_parser.add_argument("--actor-id", default=None)
+    control_plane_accept_invite_parser.set_defaults(func=cmd_control_plane_accept_invite)
+
+    control_plane_issue_token_parser = control_plane_subparsers.add_parser(
+        "issue-token",
+        help="Issue a bearer token for control-plane access",
+    )
+    control_plane_issue_token_parser.add_argument("principal_id")
+    control_plane_issue_token_parser.add_argument("--workspace", default=".")
+    control_plane_issue_token_parser.add_argument("--scope", action="append", default=[])
+    control_plane_issue_token_parser.add_argument("--description", default="")
+    control_plane_issue_token_parser.add_argument("--output-file", default=None)
+    control_plane_issue_token_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_issue_token_parser.set_defaults(func=cmd_control_plane_issue_token)
+
+    control_plane_list_tokens_parser = control_plane_subparsers.add_parser(
+        "list-tokens",
+        help="List persisted control-plane tokens without exposing raw token values",
+    )
+    control_plane_list_tokens_parser.add_argument("--workspace", default=".")
+    control_plane_list_tokens_parser.set_defaults(func=cmd_control_plane_list_tokens)
+
+    control_plane_revoke_token_parser = control_plane_subparsers.add_parser(
+        "revoke-token",
+        help="Revoke a previously issued control-plane token",
+    )
+    control_plane_revoke_token_parser.add_argument("token_id")
+    control_plane_revoke_token_parser.add_argument("--workspace", default=".")
+    control_plane_revoke_token_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_revoke_token_parser.set_defaults(func=cmd_control_plane_revoke_token)
+
+    control_plane_scheduler_parser = control_plane_subparsers.add_parser(
+        "scheduler-tick",
+        help="Run a hosted-alpha scheduler tick over subscribed connectors",
+    )
+    control_plane_scheduler_parser.add_argument("--workspace", default=".")
+    control_plane_scheduler_parser.add_argument("--enqueue-only", action="store_true")
+    control_plane_scheduler_parser.add_argument("--force", action="store_true")
+    control_plane_scheduler_parser.add_argument("--limit", type=int, default=None)
+    control_plane_scheduler_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_scheduler_parser.set_defaults(func=cmd_control_plane_scheduler_tick)
+
+    control_plane_serve_parser = control_plane_subparsers.add_parser(
+        "serve",
+        help="Serve the local control-plane HTTP interface",
+    )
+    control_plane_serve_parser.add_argument("--workspace", default=".")
+    control_plane_serve_parser.add_argument("--host", default="127.0.0.1")
+    control_plane_serve_parser.add_argument("--port", type=int, default=8766)
+    control_plane_serve_parser.set_defaults(func=cmd_control_plane_serve)
+
     collab_parser = subparsers.add_parser("collab", help="Manage file-native artifact collaboration threads")
     collab_subparsers = collab_parser.add_subparsers(dest="collab_command", required=True)
 
@@ -1788,6 +2060,23 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_work_parser.add_argument("--worker-id", default="local-worker")
     jobs_work_parser.add_argument("--lease-seconds", type=int, default=300)
     jobs_work_parser.set_defaults(func=cmd_jobs_work)
+
+    worker_parser = subparsers.add_parser(
+        "worker",
+        help="Run remote or local worker entrypoints against the persisted queue model",
+    )
+    worker_subparsers = worker_parser.add_subparsers(dest="worker_command", required=True)
+
+    worker_remote_parser = worker_subparsers.add_parser(
+        "remote",
+        help="Poll a control-plane server and execute queued jobs remotely",
+    )
+    worker_remote_parser.add_argument("--server-url", required=True)
+    worker_remote_parser.add_argument("--token", required=True)
+    worker_remote_parser.add_argument("--worker-id", default="remote-worker")
+    worker_remote_parser.add_argument("--max-jobs", type=int, default=None)
+    worker_remote_parser.add_argument("--lease-seconds", type=int, default=300)
+    worker_remote_parser.set_defaults(func=cmd_worker_remote)
 
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_command", required=True)
