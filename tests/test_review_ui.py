@@ -520,6 +520,91 @@ class ReviewUiTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_review_ui_server_applies_collaboration_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Review UI Collaboration Test")
+
+            artifact_path = workspace.outputs_dir / "reports" / "artifact.md"
+            artifact_rel = "outputs/reports/artifact.md"
+            artifact_path.write_text("# Artifact\n\nReady for review.\n", encoding="utf-8")
+
+            self.assertEqual(main(["access", "grant", "editor-1", "editor", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "collab",
+                        "request-review",
+                        artifact_rel,
+                        "--workspace",
+                        str(root),
+                        "--actor-id",
+                        "editor-1",
+                        "--assign",
+                        "reviewer-1",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["ui", "review", "--workspace", str(root), "--actor-id", "reviewer-1"]), 0)
+
+            html = (workspace.review_ui_dir / "index.html").read_text(encoding="utf-8")
+            self.assertIn("Collaboration", html)
+            self.assertIn("action=\"/api/collab/comment\"", html)
+            self.assertIn("action=\"/api/collab/approve\"", html)
+            self.assertIn("action=\"/api/collab/request-changes\"", html)
+
+            server = create_review_ui_server(
+                workspace.review_ui_dir,
+                host="127.0.0.1",
+                port=0,
+                index_name="index.html",
+                workspace=workspace,
+                actor_id="reviewer-1",
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode({"artifact_path": artifact_rel, "message": "needs one more pass"})
+                connection.request(
+                    "POST",
+                    "/api/collab/comment",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode({"artifact_path": artifact_rel, "summary": "tighten the claims"})
+                connection.request(
+                    "POST",
+                    "/api/collab/request-changes",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                payload = json.loads((workspace.state_dir / "collaboration.json").read_text(encoding="utf-8"))
+                thread_payload = payload["threads"][0]
+                self.assertEqual(thread_payload["status"], "changes_requested")
+                self.assertEqual(thread_payload["comments"][-1]["message"], "needs one more pass")
+                self.assertEqual(thread_payload["decisions"][-1]["decision"], "changes_requested")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,16 @@ from cognisync.access import (
     load_access_manifest,
     require_access_role,
 )
+from cognisync.collaboration import (
+    COLLABORATION_ACTION_ROLES,
+    COLLABORATION_RESOLVE_ROLES,
+    CollaborationError,
+    add_comment,
+    load_collaboration_manifest,
+    record_decision,
+    request_review,
+    resolve_review,
+)
 from cognisync.maintenance import (
     MaintenanceError,
     accept_concept_candidate,
@@ -132,6 +142,7 @@ def render_review_ui_html(
     connectors = dict(payload.get("connectors", {}))
     connector_items = list(connectors.get("items", []))
     access = dict(payload.get("access", {}))
+    collaboration = dict(payload.get("collaboration", {}))
     audit = dict(payload.get("audit", {}))
     usage = dict(payload.get("usage", {}))
     notifications = dict(payload.get("notifications", {}))
@@ -151,6 +162,7 @@ def render_review_ui_html(
         ("Sync Events", str(sync.get("total_count", 0))),
         ("Connectors", str(connectors.get("total_count", 0))),
         ("Workspace Members", str(access.get("member_count", 0))),
+        ("Collaboration Threads", str(collaboration.get("thread_count", 0))),
         ("Audit Events", str(audit.get("total_count", 0))),
         ("Notifications", str(notifications.get("total_count", 0))),
         ("Known Conflicts", str(graph.get("conflict_count", 0))),
@@ -273,6 +285,10 @@ def render_review_ui_html(
             "        <article class=\"panel\">",
             "          <h2>Workspace Access</h2>",
             _render_access_summary(access),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Collaboration</h2>",
+            _render_collaboration_summary(collaboration),
             "        </article>",
             "        <article class=\"panel\">",
             "          <h2>Audit History</h2>",
@@ -418,6 +434,7 @@ def build_review_ui_state(
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
     access = _build_access_summary(workspace, actor_id=actor_id)
+    collaboration = _build_collaboration_summary(workspace)
     workers = _build_worker_summary(workspace)
     audit = _build_audit_history(workspace)
     usage = _build_usage_summary(workspace)
@@ -437,6 +454,7 @@ def build_review_ui_state(
             "connector_registry_path": workspace.relative_path(workspace.connector_registry_path),
             "notifications_manifest_path": workspace.relative_path(workspace.notifications_manifest_path),
             "access_manifest_path": workspace.relative_path(workspace.access_manifest_path),
+            "collaboration_manifest_path": workspace.relative_path(workspace.collaboration_manifest_path),
             "audit_manifest_path": workspace.relative_path(workspace.audit_manifest_path),
             "usage_manifest_path": workspace.relative_path(workspace.usage_manifest_path),
         },
@@ -450,6 +468,7 @@ def build_review_ui_state(
         "sync": sync,
         "connectors": connectors,
         "access": access,
+        "collaboration": collaboration,
         "audit": audit,
         "usage": usage,
         "notifications": notifications,
@@ -715,14 +734,17 @@ def _render_inline_form(
     hidden_fields: Sequence[tuple[str, str]],
     button_label: str,
     text_input: Optional[tuple[str, str, str]] = None,
+    text_inputs: Optional[Sequence[tuple[str, str, str]]] = None,
 ) -> str:
     lines = [f"<form method=\"post\" action=\"{escape(action)}\">"]
     for name, value in hidden_fields:
         lines.append(
             f"<input type=\"hidden\" name=\"{escape(name)}\" value=\"{escape(value)}\">"
         )
+    normalized_inputs = list(text_inputs or [])
     if text_input:
-        name, label, default = text_input
+        normalized_inputs.append(text_input)
+    for name, label, default in normalized_inputs:
         lines.append(
             f"<label class=\"muted\">{escape(label)}<br><input type=\"text\" name=\"{escape(name)}\" value=\"{escape(default)}\"></label>"
         )
@@ -1044,6 +1066,92 @@ def _render_access_summary(access: Dict[str, object]) -> str:
         )
     lines.extend(["            </tbody>", "          </table>"])
     return "\n".join(lines)
+
+
+def _render_collaboration_summary(collaboration: Dict[str, object]) -> str:
+    items = list(collaboration.get("items", []))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">threads <strong>{escape(str(collaboration.get('thread_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">comments <strong>{escape(str(collaboration.get('comment_count', 0)))}</strong></span>",
+        f"            <span class=\"pill danger\">decisions <strong>{escape(str(collaboration.get('decision_count', 0)))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{escape(str(collaboration.get('manifest_path', '')))}</code></p>",
+        _render_kind_table("Statuses", dict(collaboration.get("counts_by_status", {}))),
+        "          <h3>Request Review</h3>",
+        _render_inline_form(
+            "/api/collab/request-review",
+            [],
+            "Request review",
+            text_inputs=[
+                ("artifact_path", "artifact path", "outputs/reports/report.md"),
+                ("assign", "assign reviewer ids", "reviewer-1"),
+                ("note", "note", "check citations"),
+            ],
+        ),
+    ]
+    if not items:
+        lines.append("          <p class=\"empty\">No collaboration threads recorded.</p>")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "          <h3>Threads</h3>",
+            "          <table>",
+            "            <thead><tr><th>Artifact</th><th>Status</th><th>Assignees</th><th>Actions</th></tr></thead>",
+            "            <tbody>",
+        ]
+    )
+    for item in items[:8]:
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong>"
+                    + escape(str(item.get("artifact_title", item.get("artifact_path", ""))))
+                    + "</strong><br><span class=\"muted\"><code>"
+                    + escape(str(item.get("artifact_path", "")))
+                    + "</code></span></td>"
+                ),
+                f"                <td>{escape(str(item.get('status', '')))}</td>",
+                f"                <td>{escape(str(item.get('assignee_label', '-')))}</td>",
+                f"                <td>{_render_collaboration_actions(item)}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_collaboration_actions(item: Dict[str, object]) -> str:
+    artifact_path = str(item.get("artifact_path", "")).strip()
+    if not artifact_path:
+        return "<span class=\"muted\">No actions</span>"
+    forms = [
+        _render_inline_form(
+            "/api/collab/comment",
+            [("artifact_path", artifact_path)],
+            "Comment",
+            text_input=("message", "message", "looks good"),
+        ),
+        _render_inline_form(
+            "/api/collab/approve",
+            [("artifact_path", artifact_path)],
+            "Approve",
+            text_input=("summary", "summary", "approved after review"),
+        ),
+        _render_inline_form(
+            "/api/collab/request-changes",
+            [("artifact_path", artifact_path)],
+            "Request changes",
+            text_input=("summary", "summary", "tighten the claims"),
+        ),
+        _render_inline_form(
+            "/api/collab/resolve",
+            [("artifact_path", artifact_path)],
+            "Resolve",
+        ),
+    ]
+    return "<div class=\"stack\">" + "".join(forms) + "</div>"
 
 
 def _render_audit_summary(audit: Dict[str, object]) -> str:
@@ -1841,6 +1949,35 @@ def _build_access_summary(
         "counts_by_role": dict(counts_by_role),
         "members": items,
         "active_actor": _build_active_actor_summary(workspace, actor_id),
+    }
+
+
+def _build_collaboration_summary(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    payload = load_collaboration_manifest(workspace)
+    threads = [dict(item) for item in list(payload.get("threads", []))]
+    items = []
+    for thread in threads[:limit]:
+        assignees = [dict(item) for item in list(thread.get("assignees", []))]
+        items.append(
+            {
+                "artifact_path": str(thread.get("artifact_path", "")),
+                "artifact_title": str(thread.get("artifact_title", "")),
+                "status": str(thread.get("status", "")),
+                "assignee_label": ", ".join(str(item.get("principal_id", "")) for item in assignees if item.get("principal_id")) or "-",
+                "request_count": len(list(thread.get("requests", []))),
+                "comment_count": len(list(thread.get("comments", []))),
+                "decision_count": len(list(thread.get("decisions", []))),
+                "updated_at": str(thread.get("updated_at", "")),
+            }
+        )
+    summary = dict(payload.get("summary", {}))
+    return {
+        "manifest_path": workspace.relative_path(workspace.collaboration_manifest_path),
+        "thread_count": int(summary.get("thread_count", len(threads)) or 0),
+        "comment_count": int(summary.get("comment_count", 0) or 0),
+        "decision_count": int(summary.get("decision_count", 0) or 0),
+        "counts_by_status": dict(summary.get("counts_by_status", {})),
+        "items": items,
     }
 
 
@@ -3086,7 +3223,7 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(str(error).encode("utf-8"))
             return
-        except (MaintenanceError, JobError, ConnectorError) as error:
+        except (MaintenanceError, JobError, ConnectorError, CollaborationError) as error:
             self.send_response(400)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -3138,8 +3275,59 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
             require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "reopen review items")
             reopen_review_item(workspace, payload.get("review_id", ""))
             return
+        if path == "/api/collab/request-review":
+            require_access_role(workspace, self._actor_id, COLLABORATION_ACTION_ROLES, "request collaboration reviews")
+            request_review(
+                workspace,
+                artifact_path=payload.get("artifact_path", ""),
+                actor_id=self._actor_id,
+                assignee_ids=_split_actor_ids(payload.get("assign", "")),
+                note=payload.get("note", ""),
+            )
+            return
+        if path == "/api/collab/comment":
+            require_access_role(workspace, self._actor_id, COLLABORATION_ACTION_ROLES, "comment on collaboration threads")
+            add_comment(
+                workspace,
+                artifact_path=payload.get("artifact_path", ""),
+                actor_id=self._actor_id,
+                message=payload.get("message", ""),
+            )
+            return
+        if path == "/api/collab/approve":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "approve collaboration threads")
+            record_decision(
+                workspace,
+                artifact_path=payload.get("artifact_path", ""),
+                actor_id=self._actor_id,
+                decision="approved",
+                summary=payload.get("summary", ""),
+            )
+            return
+        if path == "/api/collab/request-changes":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "request changes on collaboration threads")
+            record_decision(
+                workspace,
+                artifact_path=payload.get("artifact_path", ""),
+                actor_id=self._actor_id,
+                decision="changes_requested",
+                summary=payload.get("summary", ""),
+            )
+            return
+        if path == "/api/collab/resolve":
+            require_access_role(workspace, self._actor_id, COLLABORATION_RESOLVE_ROLES, "resolve collaboration threads")
+            resolve_review(
+                workspace,
+                artifact_path=payload.get("artifact_path", ""),
+                actor_id=self._actor_id,
+            )
+            return
         raise MaintenanceError(f"Unknown review action endpoint: {path}")
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
+
+
+def _split_actor_ids(value: str) -> List[str]:
+    return [item.strip() for item in str(value).split(",") if item.strip()]

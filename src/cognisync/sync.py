@@ -313,6 +313,7 @@ def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:
     manifest_paths = {
         "access": workspace.access_manifest_path,
         "audit": workspace.audit_manifest_path,
+        "collaboration": workspace.collaboration_manifest_path,
         "connectors": workspace.connector_registry_path,
         "graph": workspace.graph_manifest_path,
         "jobs_queue": workspace.job_queue_manifest_path,

@@ -21,6 +21,14 @@ from cognisync.adapters import (
     install_builtin_adapter,
 )
 from cognisync.change_summaries import capture_change_state, write_change_summary
+from cognisync.collaboration import (
+    CollaborationError,
+    add_comment,
+    record_decision,
+    render_collaboration_threads,
+    request_review,
+    resolve_review,
+)
 from cognisync.compile_flow import CompileError, run_compile_cycle
 from cognisync.config import MaintenancePolicy, save_config
 from cognisync.connectors import (
@@ -592,6 +600,106 @@ def cmd_access_revoke(args: argparse.Namespace) -> int:
         return 2
     print(f"Revoked access for {member['principal_id']}")
     print(f"Access manifest: {workspace.access_manifest_path}")
+    return 0
+
+
+def cmd_collab_list(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_collaboration_threads(workspace))
+    print(f"Collaboration manifest: {workspace.collaboration_manifest_path}")
+    return 0
+
+
+def cmd_collab_request_review(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        thread = request_review(
+            workspace,
+            artifact_path=args.artifact_path,
+            actor_id=args.actor_id,
+            assignee_ids=list(args.assign or []),
+            note=args.note,
+        )
+    except (CollaborationError, AccessError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    write_notifications_manifest(workspace)
+    print(f"Requested review for {thread['artifact_path']}")
+    print(f"Thread status: {thread['status']}")
+    print(f"Collaboration manifest: {workspace.collaboration_manifest_path}")
+    return 0
+
+
+def cmd_collab_comment(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        comment = add_comment(
+            workspace,
+            artifact_path=args.artifact_path,
+            actor_id=args.actor_id,
+            message=args.message,
+        )
+    except (CollaborationError, AccessError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    write_notifications_manifest(workspace)
+    print(f"Added comment {comment['comment_id']} to {args.artifact_path}")
+    print(f"Collaboration manifest: {workspace.collaboration_manifest_path}")
+    return 0
+
+
+def cmd_collab_approve(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        decision = record_decision(
+            workspace,
+            artifact_path=args.artifact_path,
+            actor_id=args.actor_id,
+            decision="approved",
+            summary=args.summary,
+        )
+    except (CollaborationError, AccessError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    write_notifications_manifest(workspace)
+    print(f"Recorded approval {decision['decision_id']} for {args.artifact_path}")
+    print(f"Collaboration manifest: {workspace.collaboration_manifest_path}")
+    return 0
+
+
+def cmd_collab_request_changes(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        decision = record_decision(
+            workspace,
+            artifact_path=args.artifact_path,
+            actor_id=args.actor_id,
+            decision="changes_requested",
+            summary=args.summary,
+        )
+    except (CollaborationError, AccessError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    write_notifications_manifest(workspace)
+    print(f"Recorded change request {decision['decision_id']} for {args.artifact_path}")
+    print(f"Collaboration manifest: {workspace.collaboration_manifest_path}")
+    return 0
+
+
+def cmd_collab_resolve(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        thread = resolve_review(
+            workspace,
+            artifact_path=args.artifact_path,
+            actor_id=args.actor_id,
+        )
+    except (CollaborationError, AccessError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    write_notifications_manifest(workspace)
+    print(f"Resolved collaboration thread for {thread['artifact_path']}")
+    print(f"Collaboration manifest: {workspace.collaboration_manifest_path}")
     return 0
 
 
@@ -1503,6 +1611,51 @@ def build_parser() -> argparse.ArgumentParser:
     access_revoke_parser.add_argument("--workspace", default=".")
     access_revoke_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     access_revoke_parser.set_defaults(func=cmd_access_revoke)
+
+    collab_parser = subparsers.add_parser("collab", help="Manage file-native artifact collaboration threads")
+    collab_subparsers = collab_parser.add_subparsers(dest="collab_command", required=True)
+
+    collab_list_parser = collab_subparsers.add_parser("list", help="List persisted artifact review threads")
+    collab_list_parser.add_argument("--workspace", default=".")
+    collab_list_parser.set_defaults(func=cmd_collab_list)
+
+    collab_request_parser = collab_subparsers.add_parser("request-review", help="Request review for an artifact path")
+    collab_request_parser.add_argument("artifact_path")
+    collab_request_parser.add_argument("--workspace", default=".")
+    collab_request_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    collab_request_parser.add_argument("--assign", action="append", default=[])
+    collab_request_parser.add_argument("--note", default="")
+    collab_request_parser.set_defaults(func=cmd_collab_request_review)
+
+    collab_comment_parser = collab_subparsers.add_parser("comment", help="Add a review comment to an artifact thread")
+    collab_comment_parser.add_argument("artifact_path")
+    collab_comment_parser.add_argument("--workspace", default=".")
+    collab_comment_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    collab_comment_parser.add_argument("--message", required=True)
+    collab_comment_parser.set_defaults(func=cmd_collab_comment)
+
+    collab_approve_parser = collab_subparsers.add_parser("approve", help="Approve an artifact review thread")
+    collab_approve_parser.add_argument("artifact_path")
+    collab_approve_parser.add_argument("--workspace", default=".")
+    collab_approve_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    collab_approve_parser.add_argument("--summary", default="")
+    collab_approve_parser.set_defaults(func=cmd_collab_approve)
+
+    collab_changes_parser = collab_subparsers.add_parser(
+        "request-changes",
+        help="Request changes on an artifact review thread",
+    )
+    collab_changes_parser.add_argument("artifact_path")
+    collab_changes_parser.add_argument("--workspace", default=".")
+    collab_changes_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    collab_changes_parser.add_argument("--summary", default="")
+    collab_changes_parser.set_defaults(func=cmd_collab_request_changes)
+
+    collab_resolve_parser = collab_subparsers.add_parser("resolve", help="Resolve an artifact collaboration thread")
+    collab_resolve_parser.add_argument("artifact_path")
+    collab_resolve_parser.add_argument("--workspace", default=".")
+    collab_resolve_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    collab_resolve_parser.set_defaults(func=cmd_collab_resolve)
 
     jobs_parser = subparsers.add_parser("jobs", help="Manage persisted local job queues for remote-style execution")
     jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command", required=True)

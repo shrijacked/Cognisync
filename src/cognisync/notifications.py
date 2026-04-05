@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 from typing import Dict, List
 
+from cognisync.collaboration import load_collaboration_manifest
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -61,6 +62,35 @@ def build_notification_manifest(workspace: Workspace) -> Dict[str, object]:
                 "detail": "Open review work is waiting in the durable review queue.",
                 "path": workspace.relative_path(workspace.review_queue_manifest_path),
                 "related_paths": [str(item.get("path", "")) for item in open_items[:8] if item.get("path")],
+            }
+        )
+
+    collaboration_payload = load_collaboration_manifest(workspace)
+    collaboration_threads = list(collaboration_payload.get("threads", []))
+    pending_reviews = [item for item in collaboration_threads if str(item.get("status", "")) == "pending_review"]
+    if pending_reviews:
+        notifications.append(
+            {
+                "id": "collaboration-pending-review",
+                "kind": "collaboration_pending_review",
+                "severity": "warn",
+                "title": f"Collaboration has {len(pending_reviews)} artifact(s) waiting for review",
+                "detail": "Persisted artifact review threads are waiting for comments or approval.",
+                "path": workspace.relative_path(workspace.collaboration_manifest_path),
+                "related_paths": [str(item.get("artifact_path", "")) for item in pending_reviews[:8]],
+            }
+        )
+    change_requests = [item for item in collaboration_threads if str(item.get("status", "")) == "changes_requested"]
+    if change_requests:
+        notifications.append(
+            {
+                "id": "collaboration-changes-requested",
+                "kind": "collaboration_changes_requested",
+                "severity": "high",
+                "title": f"Collaboration has {len(change_requests)} artifact(s) with requested changes",
+                "detail": "A reviewer requested changes on persisted artifact threads and they still need follow-up.",
+                "path": workspace.relative_path(workspace.collaboration_manifest_path),
+                "related_paths": [str(item.get("artifact_path", "")) for item in change_requests[:8]],
             }
         )
 

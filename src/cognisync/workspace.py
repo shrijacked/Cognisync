@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from cognisync.access import ensure_access_manifest
+from cognisync.collaboration import ensure_collaboration_manifest
 from cognisync.config import default_config, load_config, save_config
 from cognisync.types import IndexSnapshot
 
@@ -98,6 +99,10 @@ class Workspace:
         return self.state_dir / "access.json"
 
     @property
+    def collaboration_manifest_path(self) -> Path:
+        return self.state_dir / "collaboration.json"
+
+    @property
     def audit_manifest_path(self) -> Path:
         return self.state_dir / "audit.json"
 
@@ -173,6 +178,7 @@ class Workspace:
             save_config(self.config_path, default_config(name or self.root.name))
 
         ensure_access_manifest(self)
+        ensure_collaboration_manifest(self)
         from cognisync.knowledge_surfaces import append_workspace_log, ensure_workspace_log, write_workspace_schema
 
         write_workspace_schema(self, force=force)

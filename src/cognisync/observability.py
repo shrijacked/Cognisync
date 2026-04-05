@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from cognisync.access import load_access_manifest
+from cognisync.collaboration import load_collaboration_manifest
 from cognisync.connectors import list_connectors
 from cognisync.jobs import list_jobs
 from cognisync.manifests import read_json_manifest
@@ -66,6 +67,68 @@ def build_audit_manifest(workspace: Workspace, limit: int = 200) -> Dict[str, ob
                 "path": workspace.relative_path(workspace.access_manifest_path),
             }
         )
+
+    collaboration_payload = load_collaboration_manifest(workspace)
+    for thread in list(collaboration_payload.get("threads", [])):
+        artifact_path = str(thread.get("artifact_path", ""))
+        artifact_label = str(thread.get("artifact_title", artifact_path))
+        for request in list(thread.get("requests", [])):
+            actor = dict(request.get("requested_by", {}))
+            events.append(
+                {
+                    "event_kind": "collaboration",
+                    "category": "request_review",
+                    "label": artifact_label,
+                    "status": str(thread.get("status", "")),
+                    "generated_at": str(request.get("requested_at", "")),
+                    "path": workspace.relative_path(workspace.collaboration_manifest_path),
+                    "actor_id": str(actor.get("principal_id", "")),
+                    "artifact_path": artifact_path,
+                }
+            )
+        for comment in list(thread.get("comments", [])):
+            actor = dict(comment.get("actor", {}))
+            events.append(
+                {
+                    "event_kind": "collaboration",
+                    "category": "comment",
+                    "label": artifact_label,
+                    "status": str(thread.get("status", "")),
+                    "generated_at": str(comment.get("created_at", "")),
+                    "path": workspace.relative_path(workspace.collaboration_manifest_path),
+                    "actor_id": str(actor.get("principal_id", "")),
+                    "artifact_path": artifact_path,
+                }
+            )
+        for decision in list(thread.get("decisions", [])):
+            actor = dict(decision.get("actor", {}))
+            events.append(
+                {
+                    "event_kind": "collaboration",
+                    "category": str(decision.get("decision", "")),
+                    "label": artifact_label,
+                    "status": str(thread.get("status", "")),
+                    "generated_at": str(decision.get("created_at", "")),
+                    "path": workspace.relative_path(workspace.collaboration_manifest_path),
+                    "actor_id": str(actor.get("principal_id", "")),
+                    "artifact_path": artifact_path,
+                }
+            )
+        resolved_at = str(thread.get("resolved_at", "")).strip()
+        resolved_by = dict(thread.get("resolved_by", {}))
+        if resolved_at:
+            events.append(
+                {
+                    "event_kind": "collaboration",
+                    "category": "resolved",
+                    "label": artifact_label,
+                    "status": str(thread.get("status", "")),
+                    "generated_at": resolved_at,
+                    "path": workspace.relative_path(workspace.collaboration_manifest_path),
+                    "actor_id": str(resolved_by.get("principal_id", "")),
+                    "artifact_path": artifact_path,
+                }
+            )
 
     for connector in list_connectors(workspace):
         events.append(
@@ -167,22 +230,27 @@ def render_usage_report(workspace: Workspace) -> str:
         f"- Jobs: `{summary.get('job_count', 0)}`",
         f"- Sync events: `{summary.get('sync_event_count', 0)}`",
         f"- Connectors: `{summary.get('connector_count', 0)}`",
+        f"- Collaboration threads: `{summary.get('collaboration_thread_count', 0)}`",
         f"- Storage bytes: `{summary.get('storage_total_bytes', 0)}`",
         f"- Run kinds: `{json.dumps(summary.get('run_counts_by_kind', {}), sort_keys=True)}`",
         f"- Job types: `{json.dumps(summary.get('job_counts_by_type', {}), sort_keys=True)}`",
         f"- Connector kinds: `{json.dumps(summary.get('connector_counts_by_kind', {}), sort_keys=True)}`",
+        f"- Collaboration statuses: `{json.dumps(summary.get('collaboration_counts_by_status', {}), sort_keys=True)}`",
     ]
     return "\n".join(lines)
 
 
 def build_usage_manifest(workspace: Workspace) -> Dict[str, object]:
     access_payload = load_access_manifest(workspace)
+    collaboration_payload = load_collaboration_manifest(workspace)
     connectors = list_connectors(workspace)
     jobs = list_jobs(workspace)
     sync_events = list_sync_events(workspace)
     runs = [read_json_manifest(path) for path in sorted(workspace.runs_dir.glob("*.json"))]
+    collaboration_threads = [dict(item) for item in list(collaboration_payload.get("threads", []))]
 
     access_counts_by_role = _count_values(str(member.get("role", "viewer")) for member in list(access_payload.get("members", [])))
+    collaboration_counts_by_status = _count_values(str(item.get("status", "unknown")) for item in collaboration_threads)
     connector_counts_by_kind = _count_values(str(item.get("kind", "unknown")) for item in connectors)
     job_counts_by_type = _count_values(str(item.get("job_type", "unknown")) for item in jobs)
     job_counts_by_status = _count_values(str(item.get("status", "unknown")) for item in jobs)
@@ -193,6 +261,11 @@ def build_usage_manifest(workspace: Workspace) -> Dict[str, object]:
     summary = {
         "access_member_count": len(list(access_payload.get("members", []))),
         "access_counts_by_role": access_counts_by_role,
+        "collaboration_thread_count": len(collaboration_threads),
+        "collaboration_comment_count": sum(len(list(item.get("comments", []))) for item in collaboration_threads),
+        "collaboration_decision_count": sum(len(list(item.get("decisions", []))) for item in collaboration_threads),
+        "collaboration_request_count": sum(len(list(item.get("requests", []))) for item in collaboration_threads),
+        "collaboration_counts_by_status": collaboration_counts_by_status,
         "connector_count": len(connectors),
         "connector_counts_by_kind": connector_counts_by_kind,
         "connector_result_count": sum(int(item.get("last_result_count", 0) or 0) for item in connectors),
