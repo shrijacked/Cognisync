@@ -65,6 +65,10 @@
 - added `.cognisync/control-plane.json` plus `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|scheduler-tick|serve` so invites, scoped bearer tokens, scheduler ticks, and a lightweight HTTP server now sit on top of the same file-native workspace state
 - added `cognisync worker remote` so queued jobs can be drained through the hosted-alpha HTTP surface by a separate worker process without inventing a second runtime
 - taught sync bundle manifests to declare `.cognisync/control-plane.json` in `state_manifests`, so the hosted-alpha layer travels with exported workspaces
+- added `.cognisync/shared-workspace.json` plus `cognisync share ...` so published control-plane URLs, accepted peers, and peer handoff bundles persist as first-class workspace state
+- added `cognisync share issue-peer-bundle` so an accepted remote peer can receive a scoped control-plane token bundle without manual token assembly
+- added `cognisync control-plane workers` plus `/api/workers` so remote worker state is inspectable through the same hosted-alpha surface
+- taught `cognisync worker remote` to poll through short idle windows, so scheduled or future jobs can be picked up without relaunching the worker on every empty queue
 
 ## v0.1.4 - 2026-04-03
 

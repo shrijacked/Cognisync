@@ -181,6 +181,27 @@ The command set:
 
 This keeps the control-plane surface file-native too. The roster is simple on purpose: it is meant to be durable workspace state first, and a future hosted permission layer second.
 
+### `share`
+
+Use `share` when you want to bind a published control-plane URL, track accepted remote peers, and issue a handoff bundle that another machine can actually use.
+
+Supported paths in this release:
+
+- `cognisync share status`
+- `cognisync share bind-control-plane https://control.example.test/api --workspace .`
+- `cognisync share invite-peer remote-ops operator --workspace . --base-url https://remote.example.test/cognisync --capability jobs.remote`
+- `cognisync share accept-peer remote-ops --workspace .`
+- `cognisync share list-peers`
+- `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
+
+The command family:
+
+1. materializes `.cognisync/shared-workspace.json`
+2. keeps accepted peer state, peer capabilities, and the published control-plane URL file-native instead of hiding them in shell history
+3. records the last issued peer bundle timestamp and token id on each accepted peer so remote handoffs are inspectable later
+4. issues peer bundles only for accepted peers and only after a control-plane URL is bound, so remote workers receive a coherent package
+5. reuses the same scoped token issuance path as `control-plane issue-token`, so peer bundles inherit the role-aware control-plane contract instead of inventing a second auth model
+
 ### `control-plane`
 
 Use `control-plane` when you want to expose the manifest-backed queue, scheduler, and access layer to another process without introducing a separate service database first.
@@ -193,6 +214,7 @@ Supported paths in this release:
 - `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
 - `cognisync control-plane list-tokens`
 - `cognisync control-plane revoke-token <token-id>`
+- `cognisync control-plane workers`
 - `cognisync control-plane scheduler-tick --enqueue-only --actor-id local-operator`
 - `cognisync control-plane serve --host 127.0.0.1 --port 8766`
 
@@ -202,7 +224,7 @@ The command family:
 2. keeps workspace invites and accepted memberships file-native instead of hiding them in process memory
 3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes
 4. supports scheduler ticks that enqueue or execute scheduled connector sync work against the same queue and connector manifests the local CLI already uses
-5. serves a lightweight HTTP layer for status, queue inspection, scheduler ticks, lease-aware job execution, and lease renewal
+5. serves a lightweight HTTP layer for status, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
 6. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
 7. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
 
@@ -215,13 +237,14 @@ Use `worker remote` when you want a second process or machine to execute queued 
 Supported path in this release:
 
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --max-jobs 5`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --poll-interval-seconds 2 --max-idle-polls 30`
 
 The command:
 
 1. polls `/api/jobs/run-next` on the served control plane
 2. reuses the same manifest-backed runtimes as `jobs run-next`
 3. keeps worker identity explicit through `--worker-id`
-4. stops cleanly when no jobs are available or when `--max-jobs` is reached
+4. can keep polling through short idle windows, so a remote worker can stay warm for scheduled jobs instead of exiting on the first empty queue
 5. works with scheduler-enqueued connector jobs, so scheduled connector pulls can be drained by a remote worker instead of the local shell
 
 Together, `control-plane serve`, `control-plane scheduler-tick`, and `worker remote` give Cognisync a remote-ready operator loop without breaking the local-first contract.
