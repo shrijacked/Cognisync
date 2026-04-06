@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import io
 import json
 from pathlib import Path
 import shutil
 from typing import Dict, List, Optional
+import zipfile
 
 from cognisync.access import (
     DEFAULT_LOCAL_OPERATOR_ID,
@@ -42,6 +44,43 @@ class SyncImportResult:
     file_count: int
     event_manifest_path: Path
     history_manifest_path: Path
+
+
+def encode_sync_bundle_archive(bundle_dir: Path) -> bytes:
+    bundle_root = Path(bundle_dir).expanduser().resolve()
+    manifest_path = bundle_root / "manifest.json"
+    if not manifest_path.exists():
+        raise SyncError(f"Could not find sync manifest at {manifest_path}.")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(bundle_root.rglob("*")):
+            if not path.is_file():
+                continue
+            archive.write(path, path.relative_to(bundle_root).as_posix())
+    return buffer.getvalue()
+
+
+def import_sync_bundle_archive(
+    workspace: Workspace,
+    archive_bytes: bytes,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+    from_peer: Optional[str] = None,
+) -> SyncImportResult:
+    bundle_root = workspace.sync_bundles_dir / f"remote-import-{utc_timestamp().replace(':', '').replace('-', '')}"
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes), mode="r") as archive:
+            archive.extractall(bundle_root)
+    except zipfile.BadZipFile as error:
+        shutil.rmtree(bundle_root, ignore_errors=True)
+        raise SyncError("The provided sync archive is not a valid zip bundle.") from error
+
+    manifest_path = bundle_root / "manifest.json"
+    if not manifest_path.exists():
+        shutil.rmtree(bundle_root, ignore_errors=True)
+        raise SyncError("The provided sync archive did not contain a manifest.json file.")
+    return import_sync_bundle(workspace, bundle_root, actor_id=actor_id, from_peer=from_peer)
 
 
 def list_sync_events(workspace: Workspace) -> List[Dict[str, object]]:

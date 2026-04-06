@@ -85,6 +85,7 @@
 - added hosted-alpha peer invite, accept, and bundle-issuance endpoints, so remote workspace handoffs can be prepared over HTTP too
 - added hosted-alpha job enqueue endpoints, so operator tokens can submit new research, maintenance, connector, and peer-sync work into the manifest-backed queue remotely
 - expanded hosted-alpha job enqueue endpoints to cover queued URL, repo, and sitemap ingest work, so remote operators can grow the raw corpus through the same leased worker loop
+- added hosted-alpha artifact previews plus inline sync export/import endpoints, so remote operators can inspect files and exchange trusted workspace bundles over HTTP without shell access
 - expanded hosted-alpha connector endpoints to cover add, subscribe, and unsubscribe, so connector registry management is no longer local-shell only
 
 ## v0.1.4 - 2026-04-03

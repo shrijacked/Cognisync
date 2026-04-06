@@ -350,11 +350,13 @@ That layer keeps the same filesystem-first contract:
 - the same served control plane now accepts collaboration actions over HTTP, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through the same token-backed surface
 - the same served control plane now exposes `GET /api/review` plus remote review actions like `/api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed`, so the filesystem-backed review queue is remotely readable and actionable without bypassing workspace roles
 - the same served control plane now also exposes `GET /api/runs`, `GET /api/sync`, and `GET /api/change-summaries`, so remote operators can inspect run history, sync events, and corpus deltas without shelling into the workspace host
+- the same served control plane now exposes `GET /api/artifacts/preview?path=...`, so remote operators can inspect text artifacts and manifests directly over the hosted surface
 - the same served control plane now also exposes remote auth-admin endpoints like `POST /api/access/grant`, `/api/access/revoke`, `/api/invites/create`, `/api/invites/accept`, `/api/tokens/issue`, and `/api/tokens/revoke`, so roster and token management no longer require direct shell access either
 - the same served control plane now also accepts shared-workspace policy updates plus peer sync subscription changes over HTTP, so trust policy and scheduled peer exports can be managed remotely without hand-editing manifests
 - the same served control plane now also accepts peer invites, peer acceptance, and peer bundle issuance over HTTP, so remote operator handoffs can be prepared through the hosted-alpha surface too
 - connector registry state is now readable at `/api/connectors`, and operator tokens can add connectors, manage subscriptions, or trigger `/api/connectors/sync` and `/api/connectors/sync-all` remotely through the same hosted-alpha surface
 - job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, ingest, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`
+- sync bundles can now move directly over HTTP too: `POST /api/sync/export` can emit an inline archive payload and `POST /api/sync/import` can restore that archive into another served workspace with the same peer-trust checks as the local CLI
 - sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace
 
 ```mermaid

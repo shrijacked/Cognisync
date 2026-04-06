@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import json
+import mimetypes
 from pathlib import Path
 import secrets
 from typing import Dict, List, Optional, TYPE_CHECKING
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from cognisync.access import (
     AccessError,
@@ -84,7 +87,7 @@ from cognisync.sharing import (
     subscribe_shared_peer_sync,
     unsubscribe_shared_peer_sync,
 )
-from cognisync.sync import list_sync_events
+from cognisync.sync import encode_sync_bundle_archive, export_sync_bundle, import_sync_bundle_archive, list_sync_events
 from cognisync.utils import slugify, utc_timestamp
 
 if TYPE_CHECKING:
@@ -761,6 +764,45 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _resolve_workspace_relative_path(workspace: "Workspace", relative_path: str) -> Path:
+    normalized = relative_path.strip()
+    if not normalized:
+        raise ControlPlaneError("A workspace-relative path is required.")
+    candidate = (workspace.root / normalized).resolve()
+    try:
+        candidate.relative_to(workspace.root)
+    except ValueError as error:
+        raise ControlPlaneError("Artifact paths must stay within the workspace root.") from error
+    return candidate
+
+
+def _artifact_preview_payload(workspace: "Workspace", relative_path: str) -> Dict[str, object]:
+    artifact_path = _resolve_workspace_relative_path(workspace, relative_path)
+    if not artifact_path.exists() or not artifact_path.is_file():
+        raise ControlPlaneError(f"Could not find artifact at {relative_path}.")
+
+    mime_type = mimetypes.guess_type(artifact_path.name)[0] or "application/octet-stream"
+    size_bytes = artifact_path.stat().st_size
+    artifact: Dict[str, object] = {
+        "path": workspace.relative_path(artifact_path),
+        "size_bytes": size_bytes,
+        "mime_type": mime_type,
+        "kind": "binary",
+    }
+
+    raw = artifact_path.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        artifact["sha256"] = hashlib.sha256(raw).hexdigest()
+        return artifact
+
+    artifact["kind"] = "text"
+    artifact["line_count"] = len(text.splitlines()) or (1 if text else 0)
+    artifact["excerpt"] = text[:4000]
+    return artifact
+
+
 class _ControlPlaneHandler(BaseHTTPRequestHandler):
     def __init__(self, *args, workspace: "Workspace", **kwargs) -> None:
         self._workspace = workspace
@@ -768,6 +810,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
         try:
             actor = self._authenticate(["control.read"])
         except ControlPlaneError as error:
@@ -945,6 +988,16 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/change-summaries":
             self._send_json(200, {"actor": _serialize_actor(actor), **_change_summary_payload(self._workspace)})
+            return
+
+        if parsed.path == "/api/artifacts/preview":
+            requested_path = str(query.get("path", [""])[0] or "")
+            try:
+                artifact_payload = _artifact_preview_payload(self._workspace, requested_path)
+            except ControlPlaneError as error:
+                self._send_error(400, str(error))
+                return
+            self._send_json(200, {"actor": _serialize_actor(actor), "artifact": artifact_payload})
             return
 
         if parsed.path == "/api/workers":
@@ -1142,6 +1195,50 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     requested_by=actor,
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/sync/export":
+                actor = self._authenticate(["jobs.run"])
+                result = export_sync_bundle(
+                    self._workspace,
+                    actor_id=str(actor.get("principal_id", "")),
+                    peer_ref=str(payload.get("peer_ref", "")) or None,
+                )
+                response_payload: Dict[str, object] = {
+                    "actor": _serialize_actor(actor),
+                    "bundle": json.loads(result.manifest_path.read_text(encoding="utf-8")),
+                    "sync_event": json.loads(result.event_manifest_path.read_text(encoding="utf-8")),
+                    "history_path": self._workspace.relative_path(result.history_manifest_path),
+                }
+                if bool(payload.get("inline_archive", False)):
+                    response_payload["archive_base64"] = base64.b64encode(
+                        encode_sync_bundle_archive(result.directory)
+                    ).decode("ascii")
+                self._send_json(200, response_payload)
+                return
+            if parsed.path == "/api/sync/import":
+                actor = self._authenticate(["jobs.run"])
+                archive_base64 = str(payload.get("archive_base64", "")).strip()
+                if not archive_base64:
+                    raise ControlPlaneError("A base64-encoded sync archive is required.")
+                try:
+                    archive_bytes = base64.b64decode(archive_base64.encode("ascii"), validate=True)
+                except (ValueError, binascii.Error) as error:
+                    raise ControlPlaneError("The provided sync archive is not valid base64.") from error
+                result = import_sync_bundle_archive(
+                    self._workspace,
+                    archive_bytes=archive_bytes,
+                    actor_id=str(actor.get("principal_id", "")),
+                    from_peer=str(payload.get("from_peer", "")) or None,
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "bundle_manifest": json.loads(result.manifest_path.read_text(encoding="utf-8")),
+                        "sync_event": json.loads(result.event_manifest_path.read_text(encoding="utf-8")),
+                        "history_path": self._workspace.relative_path(result.history_manifest_path),
+                    },
+                )
                 return
             if parsed.path == "/api/review/accept-concept":
                 actor = self._authenticate(["review.run"])

@@ -241,6 +241,7 @@ The served API now covers a real remote review surface too:
 - `GET /api/share`, `GET /api/access`, `GET /api/collab`, `GET /api/notifications`, `GET /api/audit`, and `GET /api/usage` expose the same file-native state the local CLI renders
 - `GET /api/review` exposes the live open queue, dismissal ledger, and persisted review-action state over the same token-backed surface
 - `GET /api/runs`, `GET /api/sync`, and `GET /api/change-summaries` expose run history, sync history, and corpus-delta history over the same file-native control-plane surface
+- `GET /api/artifacts/preview?path=...` exposes text artifact previews and manifest inspection over the same hosted layer
 - `POST /api/access/grant`, `revoke`, `GET /api/invites`, `POST /api/invites/create`, `accept`, `GET /api/tokens`, and `POST /api/tokens/issue`, `revoke` let operator tokens manage the remote auth layer itself instead of falling back to the local shell
 - `POST /api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed` let reviewer or operator tokens mutate the review loop remotely while still resolving back through `.cognisync/access.json`
 - `POST /api/collab/request-review`, `comment`, `approve`, `request-changes`, and `resolve` let editors and reviewers mutate artifact-review state over HTTP while still enforcing the workspace role model
@@ -248,6 +249,7 @@ The served API now covers a real remote review surface too:
 - `POST /api/share/invite-peer`, `accept-peer`, and `issue-peer-bundle` let operator tokens prepare remote peer handoffs over HTTP too
 - `GET /api/connectors` plus `POST /api/connectors/add`, `subscribe`, `unsubscribe`, `sync`, and `sync-all` let the hosted-alpha layer inspect and execute connector work without falling back to a local shell
 - `POST /api/jobs/enqueue/research|compile|lint|maintain|ingest-url|ingest-repo|ingest-sitemap|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
+- `POST /api/sync/export` and `POST /api/sync/import` let operator tokens exchange inline sync archives over HTTP while still honoring accepted-peer trust policy on import
 
 ### `worker remote`
 

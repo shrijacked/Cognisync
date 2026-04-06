@@ -1347,6 +1347,200 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_can_preview_artifacts_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Artifact Preview Workspace")
+            artifact_path = root / "outputs" / "reports" / "artifact.md"
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text("# Artifact\n\nPreview me remotely.\n", encoding="utf-8")
+
+            token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(token_path),
+                    ]
+                ),
+                0,
+            )
+            token = json.loads(token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "GET",
+                    "/api/artifacts/preview?path=outputs/reports/artifact.md",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["artifact"]["path"], "outputs/reports/artifact.md")
+                self.assertEqual(payload["artifact"]["kind"], "text")
+                self.assertIn("Preview me remotely.", payload["artifact"]["excerpt"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_can_export_and_import_sync_bundles_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = Path(tmp) / "source"
+            target_root = Path(tmp) / "target"
+            source = Workspace(source_root)
+            target = Workspace(target_root)
+            source.initialize(name="Hosted Sync Source")
+            target.initialize(name="Hosted Sync Target")
+            (source_root / "raw").mkdir(parents=True, exist_ok=True)
+            (source_root / "raw" / "notes.md").write_text("# Notes\n\nPortable over HTTP.\n", encoding="utf-8")
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.source.test/api",
+                        "--workspace",
+                        str(source_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "invite-peer", "remote-ops", "operator", "--workspace", str(source_root)]), 0)
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(source_root)]), 0)
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.target.test/api",
+                        "--workspace",
+                        str(target_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "invite-peer", "remote-ops", "operator", "--workspace", str(target_root)]), 0)
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(target_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "set-policy",
+                        "--workspace",
+                        str(target_root),
+                        "--allow-sync-imports",
+                    ]
+                ),
+                0,
+            )
+
+            source_token_path = Path(tmp) / "source-token.json"
+            target_token_path = Path(tmp) / "target-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(source_root),
+                        "--output-file",
+                        str(source_token_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(target_root),
+                        "--output-file",
+                        str(target_token_path),
+                    ]
+                ),
+                0,
+            )
+            source_token = json.loads(source_token_path.read_text(encoding="utf-8"))["token"]
+            target_token = json.loads(target_token_path.read_text(encoding="utf-8"))["token"]
+
+            source_server = create_control_plane_server(workspace=source, host="127.0.0.1", port=0)
+            target_server = create_control_plane_server(workspace=target, host="127.0.0.1", port=0)
+            source_thread = threading.Thread(target=source_server.serve_forever, daemon=True)
+            target_thread = threading.Thread(target=target_server.serve_forever, daemon=True)
+            source_thread.start()
+            target_thread.start()
+            try:
+                source_host, source_port = source_server.server_address
+                target_host, target_port = target_server.server_address
+
+                connection = HTTPConnection(source_host, source_port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/sync/export",
+                    body=json.dumps({"peer_ref": "remote-ops", "inline_archive": True}),
+                    headers={
+                        "Authorization": f"Bearer {source_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                export_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(export_payload["bundle"]["shared_peer"]["peer_id"], "remote-ops")
+                self.assertTrue(export_payload["archive_base64"])
+                connection.close()
+
+                connection = HTTPConnection(target_host, target_port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/sync/import",
+                    body=json.dumps(
+                        {
+                            "archive_base64": export_payload["archive_base64"],
+                            "from_peer": "remote-ops",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {target_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                import_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertGreater(import_payload["sync_event"]["file_count"], 0)
+                connection.close()
+
+                self.assertTrue((target_root / "raw" / "notes.md").exists())
+                self.assertIn("Portable over HTTP.", (target_root / "raw" / "notes.md").read_text(encoding="utf-8"))
+            finally:
+                source_server.shutdown()
+                target_server.shutdown()
+                source_server.server_close()
+                target_server.server_close()
+                source_thread.join(timeout=5)
+                target_thread.join(timeout=5)
+
     def test_control_plane_can_enqueue_peer_scoped_sync_exports_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
