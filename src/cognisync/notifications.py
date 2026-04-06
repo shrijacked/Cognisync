@@ -207,7 +207,16 @@ def build_notification_manifest(workspace: Workspace) -> Dict[str, object]:
 def _read_json(path) -> Dict[str, object]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
 
 
 def _connector_is_due(connector: Dict[str, object]) -> bool:

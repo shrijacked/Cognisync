@@ -1,7 +1,9 @@
 import json
+import io
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stderr
 from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import quote
@@ -14,6 +16,70 @@ from cognisync.workspace import Workspace
 
 
 class SharingAndSchedulerTests(unittest.TestCase):
+    def test_share_policy_can_disable_remote_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Policy Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "set-policy",
+                        "--workspace",
+                        str(root),
+                        "--deny-remote-workers",
+                        "--deny-sync-imports",
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "share",
+                        "issue-peer-bundle",
+                        "remote-ops",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(Path(tmp) / "remote-ops.json"),
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("Remote worker bundles are disabled", stderr.getvalue())
+
+            payload = json.loads((root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+            self.assertFalse(payload["trust_policy"]["allow_remote_workers"])
+            self.assertFalse(payload["trust_policy"]["allow_sync_imports_from_peers"])
+
     def test_share_manifest_tracks_bound_control_plane_and_peer_acceptance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

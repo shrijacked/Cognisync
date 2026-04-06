@@ -70,6 +70,10 @@ def sharing_summary(workspace: "Workspace") -> Dict[str, object]:
         "pending_peer_count": sum(1 for peer in peers if str(peer.get("status", "")) == "pending"),
         "peer_ids": [str(peer.get("peer_id", "")) for peer in peers if str(peer.get("status", "")) == "accepted"],
         "issued_bundle_count": sum(1 for peer in peers if str(peer.get("last_token_id", "")).strip()),
+        "scheduled_sync_peer_count": sum(
+            1 for peer in peers if bool(dict(peer.get("sync_subscription", {})).get("enabled", False))
+        ),
+        "due_sync_peer_count": len(list_due_shared_peer_syncs(workspace)),
         "allow_remote_workers": bool(trust_policy.get("allow_remote_workers", True)),
         "allow_sync_imports_from_peers": bool(trust_policy.get("allow_sync_imports_from_peers", True)),
     }
@@ -176,6 +180,9 @@ def issue_shared_peer_bundle(
     control_plane_url = str(payload.get("published_control_plane_url", "")).strip()
     if not control_plane_url:
         raise SharingError("Bind a shared control-plane URL before issuing peer bundles.")
+    trust_policy = dict(payload.get("trust_policy", {}))
+    if not bool(trust_policy.get("allow_remote_workers", True)):
+        raise SharingError("Remote worker bundles are disabled by the shared-workspace trust policy.")
     normalized_ref = peer_ref.strip()
     if not normalized_ref:
         raise SharingError("A peer id is required.")
@@ -220,6 +227,147 @@ def issue_shared_peer_bundle(
     if output_file:
         bundle["output_file"] = output_file
     return bundle
+
+
+def set_shared_trust_policy(
+    workspace: "Workspace",
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+    allow_remote_workers: Optional[bool] = None,
+    allow_sync_imports_from_peers: Optional[bool] = None,
+    default_peer_role: Optional[str] = None,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "update shared-workspace trust policy")
+    payload = ensure_shared_workspace_manifest(workspace)
+    trust_policy = dict(payload.get("trust_policy", {}))
+    if allow_remote_workers is not None:
+        trust_policy["allow_remote_workers"] = bool(allow_remote_workers)
+    if allow_sync_imports_from_peers is not None:
+        trust_policy["allow_sync_imports_from_peers"] = bool(allow_sync_imports_from_peers)
+    if default_peer_role is not None:
+        normalized_role = default_peer_role.strip().lower()
+        if normalized_role not in VALID_ACCESS_ROLES:
+            raise SharingError(
+                f"Unsupported default peer role '{default_peer_role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
+            )
+        trust_policy["default_peer_role"] = normalized_role
+    payload["trust_policy"] = trust_policy
+    payload["updated_at"] = utc_timestamp()
+    _write_shared_workspace_manifest(workspace, payload)
+    return payload
+
+
+def subscribe_shared_peer_sync(
+    workspace: "Workspace",
+    peer_ref: str,
+    every_hours: int,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "subscribe shared-peer sync exports")
+    if every_hours < 1:
+        raise SharingError("Shared-peer sync subscription hours must be at least 1.")
+    payload = ensure_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    peer = _find_peer_in_list(peers, peer_ref)
+    if str(peer.get("status", "")) != "accepted":
+        raise SharingError(f"Peer '{peer_ref}' must be accepted before sync scheduling is enabled.")
+    peer["sync_subscription"] = _normalize_sync_subscription(
+        {
+            "enabled": True,
+            "interval_hours": int(every_hours),
+            "next_sync_at": _next_interval_timestamp(hours=every_hours),
+            "last_sync_at": str(dict(peer.get("sync_subscription", {})).get("last_sync_at", "")),
+            "last_scheduler_tick_at": str(dict(peer.get("sync_subscription", {})).get("last_scheduler_tick_at", "")),
+            "last_tick_status": str(dict(peer.get("sync_subscription", {})).get("last_tick_status", "")),
+        }
+    )
+    peer["updated_at"] = utc_timestamp()
+    payload["peers"] = _sorted_peers(peers)
+    payload["updated_at"] = peer["updated_at"]
+    _write_shared_workspace_manifest(workspace, payload)
+    return peer
+
+
+def unsubscribe_shared_peer_sync(
+    workspace: "Workspace",
+    peer_ref: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "unsubscribe shared-peer sync exports")
+    payload = ensure_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    peer = _find_peer_in_list(peers, peer_ref)
+    subscription = _normalize_sync_subscription(dict(peer.get("sync_subscription", {})))
+    subscription["enabled"] = False
+    subscription["next_sync_at"] = ""
+    peer["sync_subscription"] = subscription
+    peer["updated_at"] = utc_timestamp()
+    payload["peers"] = _sorted_peers(peers)
+    payload["updated_at"] = peer["updated_at"]
+    _write_shared_workspace_manifest(workspace, payload)
+    return peer
+
+
+def list_due_shared_peer_syncs(workspace: "Workspace") -> List[Dict[str, object]]:
+    payload = ensure_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    return [peer for peer in peers if shared_peer_sync_is_due(peer)]
+
+
+def shared_peer_sync_is_due(peer: Dict[str, object]) -> bool:
+    if str(peer.get("status", "")) != "accepted":
+        return False
+    subscription = _normalize_sync_subscription(dict(peer.get("sync_subscription", {})))
+    if not bool(subscription.get("enabled", False)):
+        return False
+    next_sync_at = str(subscription.get("next_sync_at", "")).strip()
+    if not next_sync_at:
+        return False
+    try:
+        from datetime import datetime, timezone
+
+        return datetime.fromisoformat(next_sync_at) <= datetime.now(timezone.utc)
+    except ValueError:
+        return False
+
+
+def mark_shared_peer_sync_exported(workspace: "Workspace", peer_ref: str) -> Dict[str, object]:
+    payload = ensure_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    peer = _find_peer_in_list(peers, peer_ref)
+    subscription = _normalize_sync_subscription(dict(peer.get("sync_subscription", {})))
+    if not bool(subscription.get("enabled", False)):
+        return peer
+    interval_hours = int(subscription.get("interval_hours", 0) or 0)
+    now = utc_timestamp()
+    subscription["last_sync_at"] = now
+    subscription["next_sync_at"] = _next_interval_timestamp(hours=interval_hours) if interval_hours > 0 else ""
+    subscription["last_tick_status"] = "exported"
+    peer["sync_subscription"] = subscription
+    peer["updated_at"] = now
+    payload["peers"] = _sorted_peers(peers)
+    payload["updated_at"] = now
+    _write_shared_workspace_manifest(workspace, payload)
+    return peer
+
+
+def record_shared_peer_scheduler_tick(workspace: "Workspace", due_peer_ids: List[str]) -> None:
+    payload = ensure_shared_workspace_manifest(workspace)
+    due_set = {peer_id for peer_id in due_peer_ids if peer_id}
+    tick_at = utc_timestamp()
+    changed = False
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    for peer in peers:
+        subscription = _normalize_sync_subscription(dict(peer.get("sync_subscription", {})))
+        if not bool(subscription.get("enabled", False)):
+            continue
+        subscription["last_scheduler_tick_at"] = tick_at
+        subscription["last_tick_status"] = "due" if str(peer.get("peer_id", "")) in due_set else "waiting"
+        peer["sync_subscription"] = subscription
+        changed = True
+    if changed:
+        payload["peers"] = _sorted_peers(peers)
+        payload["updated_at"] = tick_at
+        _write_shared_workspace_manifest(workspace, payload)
 
 
 def default_shared_workspace_manifest(workspace: "Workspace") -> Dict[str, object]:
@@ -286,11 +434,48 @@ def _sorted_peers(peers: List[Dict[str, object]]) -> List[Dict[str, object]]:
                 "last_bundle_issued_at": str(peer.get("last_bundle_issued_at", "")),
                 "last_token_id": str(peer.get("last_token_id", "")),
                 "last_bundle_scopes": [str(item) for item in list(peer.get("last_bundle_scopes", []))],
+                "sync_subscription": _normalize_sync_subscription(dict(peer.get("sync_subscription", {}))),
                 "updated_at": str(peer.get("updated_at", "")) or utc_timestamp(),
             }
         )
     normalized.sort(key=lambda item: (item["status"] != "accepted", item["peer_id"]))
     return normalized
+
+
+def _find_peer(payload: Dict[str, object], peer_ref: str) -> Dict[str, object]:
+    normalized_ref = peer_ref.strip()
+    if not normalized_ref:
+        raise SharingError("A peer id is required.")
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    return _find_peer_in_list(peers, normalized_ref)
+
+
+def _find_peer_in_list(peers: List[Dict[str, object]], peer_ref: str) -> Dict[str, object]:
+    normalized_ref = peer_ref.strip()
+    peer = next((item for item in peers if str(item.get("peer_id", "")) == normalized_ref), None)
+    if peer is None:
+        raise SharingError(f"Could not find shared peer '{normalized_ref}'.")
+    return peer
+
+
+def _normalize_sync_subscription(payload: Dict[str, object]) -> Dict[str, object]:
+    interval_hours = payload.get("interval_hours")
+    if interval_hours is not None:
+        interval_hours = int(interval_hours)
+    return {
+        "enabled": bool(payload.get("enabled", False)),
+        "interval_hours": interval_hours,
+        "next_sync_at": str(payload.get("next_sync_at", "")),
+        "last_sync_at": str(payload.get("last_sync_at", "")),
+        "last_scheduler_tick_at": str(payload.get("last_scheduler_tick_at", "")),
+        "last_tick_status": str(payload.get("last_tick_status", "")),
+    }
+
+
+def _next_interval_timestamp(hours: int) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) + timedelta(hours=max(1, int(hours)))).replace(microsecond=0).isoformat()
 
 
 def _write_shared_workspace_manifest(workspace: "Workspace", payload: Dict[str, object]) -> None:

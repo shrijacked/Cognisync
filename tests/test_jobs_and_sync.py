@@ -742,6 +742,136 @@ class JobsAndSyncTests(unittest.TestCase):
             self.assertEqual(import_exit, 2)
             self.assertIn("does not have permission", stderr.getvalue())
 
+    def test_sync_export_and_import_can_be_scoped_to_an_accepted_peer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = Path(tmp) / "source"
+            target_root = Path(tmp) / "target"
+            self.assertEqual(main(["init", str(source_root), "--name", "Source Workspace"]), 0)
+            self.assertEqual(main(["init", str(target_root), "--name", "Target Workspace"]), 0)
+
+            (source_root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["scan", "--workspace", str(source_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.source.test/api",
+                        "--workspace",
+                        str(source_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(source_root),
+                        "--base-url",
+                        "https://remote.example.test/cognisync",
+                        "--capability",
+                        "sync.import",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(source_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(target_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(target_root)]), 0)
+
+            bundle_dir = source_root / "outputs" / "reports" / "sync-bundles" / "remote-peer-bundle"
+            self.assertEqual(
+                main(
+                    [
+                        "sync",
+                        "export",
+                        "--workspace",
+                        str(source_root),
+                        "--actor-id",
+                        "local-operator",
+                        "--for-peer",
+                        "remote-ops",
+                        "--output-dir",
+                        str(bundle_dir),
+                    ]
+                ),
+                0,
+            )
+
+            exported_manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(exported_manifest["shared_peer"]["peer_id"], "remote-ops")
+            self.assertEqual(exported_manifest["shared_peer"]["status"], "accepted")
+
+            self.assertEqual(
+                main(
+                    [
+                        "sync",
+                        "import",
+                        str(bundle_dir),
+                        "--workspace",
+                        str(target_root),
+                        "--actor-id",
+                        "local-operator",
+                        "--from-peer",
+                        "remote-ops",
+                    ]
+                ),
+                0,
+            )
+
+            target_history = json.loads((target_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
+            self.assertEqual(target_history["events"][0]["source_peer_id"], "remote-ops")
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "set-policy",
+                        "--workspace",
+                        str(target_root),
+                        "--deny-sync-imports",
+                    ]
+                ),
+                0,
+            )
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                import_exit = main(
+                    [
+                        "sync",
+                        "import",
+                        str(bundle_dir),
+                        "--workspace",
+                        str(target_root),
+                        "--actor-id",
+                        "local-operator",
+                        "--from-peer",
+                        "remote-ops",
+                    ]
+                )
+            self.assertEqual(import_exit, 2)
+            self.assertIn("Sync imports from shared peers are disabled", stderr.getvalue())
+
     def test_jobs_worker_drains_compile_lint_and_maintain_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

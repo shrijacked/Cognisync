@@ -15,6 +15,7 @@ from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.notifications import write_notifications_manifest
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, run_research_cycle
 from cognisync.scanner import scan_workspace
+from cognisync.sync import export_sync_bundle
 from cognisync.training_loop import improve_research_loop
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
@@ -152,6 +153,24 @@ def enqueue_connector_sync_all_job(
             "force": force,
             "limit": limit,
             "scheduled_only": scheduled_only,
+        },
+        requested_by=requested_by,
+    )
+
+
+def enqueue_sync_export_job(
+    workspace: Workspace,
+    peer_ref: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
+    return _enqueue_job(
+        workspace,
+        "sync_export",
+        peer_ref or "workspace-sync-export",
+        {
+            "peer_ref": peer_ref,
+            "output_dir": output_dir,
         },
         requested_by=requested_by,
     )
@@ -595,6 +614,24 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "connector_change_summary_paths": [
                 workspace.relative_path(item.change_summary_path) for item in result.connector_results
             ],
+        }
+    if job_type == "sync_export":
+        requested_by = dict(job.get("requested_by", {})) if isinstance(job.get("requested_by", {}), dict) else None
+        actor_id = str((requested_by or {}).get("principal_id", "")).strip() or "local-operator"
+        output_dir = _optional_string(parameters.get("output_dir"))
+        result = export_sync_bundle(
+            workspace,
+            output_dir=Path(output_dir).expanduser().resolve() if output_dir else None,
+            actor_id=actor_id,
+            peer_ref=_optional_string(parameters.get("peer_ref")),
+        )
+        return {
+            "directory": workspace.relative_path(result.directory),
+            "manifest_path": workspace.relative_path(result.manifest_path),
+            "event_manifest_path": workspace.relative_path(result.event_manifest_path),
+            "history_manifest_path": workspace.relative_path(result.history_manifest_path),
+            "file_count": result.file_count,
+            "peer_ref": _optional_string(parameters.get("peer_ref")),
         }
     if job_type == "research":
         result = run_research_cycle(

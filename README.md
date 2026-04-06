@@ -261,15 +261,15 @@ The operator loop now has a review layer too:
 - `cognisync notify list` materializes a filesystem-native notification inbox from jobs, runs, connectors, and review state so operators can see backlog, due subscriptions, and failure signals without scraping logs
 - `cognisync notify list` now also surfaces collaboration review backlog and outstanding requested-change threads from `.cognisync/collaboration.json`
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json`, and mutating roster changes now accept `--actor-id` so only operator principals can change workspace membership
-- `cognisync share status|bind-control-plane|invite-peer|accept-peer|list-peers|issue-peer-bundle` materializes a file-native shared-workspace manifest in `.cognisync/shared-workspace.json`, so accepted peers, published control-plane URLs, and remote operator bundles can be handed off without inventing a second state store
-- `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|scheduler-tick|serve` adds a hosted-alpha control plane on top of the same workspace, with durable invites, scoped bearer tokens, scheduler state, and a local HTTP surface for remote workers
+- `cognisync share status|bind-control-plane|invite-peer|accept-peer|list-peers|issue-peer-bundle|set-policy|subscribe-sync|unsubscribe-sync` materializes a file-native shared-workspace manifest in `.cognisync/shared-workspace.json`, so accepted peers, published control-plane URLs, trust policy, and scheduled peer exports can be handed off without inventing a second state store
+- `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|scheduler-status|scheduler-tick|serve` adds a hosted-alpha control plane on top of the same workspace, with durable invites, scoped bearer tokens, scheduler state, due peer-sync visibility, and a local HTTP surface for remote workers
 - `cognisync control-plane workers` surfaces the derived worker registry through the hosted-alpha layer too, so active and idle remote operators are inspectable without scraping queue manifests
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, the workspace roster, and collaboration activity
 - `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, storage bytes, and collaboration threads
 - `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, `jobs workers`, and `jobs list` provide a persisted local queue plus retry lineage, renewable worker leases, and a file-native worker roster for remote-style research, compile, lint, maintenance, and scheduled connector execution, and queue submission/retry now accepts `--actor-id` so only operator principals can schedule work
 - `cognisync worker remote --server-url ... --token ...` polls the hosted-alpha control plane and executes queued jobs against the same manifest-backed runtime, so another process can drain work without sharing a shell session
 - `cognisync worker remote --poll-interval-seconds 2 --max-idle-polls 30` lets a remote worker stay attached to the control plane long enough to catch future jobs instead of exiting immediately when the queue is briefly empty
-- `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, and now attribute every export/import event to an explicit workspace actor
+- `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, attribute every export/import event to an explicit workspace actor, and can scope bundle exchange to an accepted shared peer with `--for-peer` and `--from-peer`
 - `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and connector mutations now accept `--actor-id` so only operator principals can register, schedule, or run connector pulls
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
 - `cognisync eval research` scores persisted research runs and now writes dimensioned quality metrics for grounding, citation integrity, retrieval coverage, structure, artifact completeness, and contradiction handling
@@ -325,10 +325,13 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync share bind-control-plane https://control.example.test/api --workspace .`
 - `cognisync share invite-peer remote-ops operator --workspace . --base-url https://remote.example.test/cognisync --capability jobs.remote`
 - `cognisync share accept-peer remote-ops --workspace .`
+- `cognisync share set-policy --workspace . --allow-remote-workers --allow-sync-imports`
+- `cognisync share subscribe-sync remote-ops --workspace . --every-hours 1`
 - `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
 - `cognisync control-plane invite reviewer-2 reviewer --workspace .`
 - `cognisync control-plane accept-invite reviewer-2 --workspace .`
 - `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
+- `cognisync control-plane scheduler-status --workspace .`
 - `cognisync control-plane workers --workspace .`
 - `cognisync control-plane scheduler-tick --workspace . --enqueue-only`
 - `cognisync control-plane serve --workspace .`
@@ -336,12 +339,13 @@ The hosted-alpha control-plane layer is now available too:
 
 That layer keeps the same filesystem-first contract:
 
-- accepted remote peers, published control-plane URLs, and the last issued peer bundle metadata persist in `.cognisync/shared-workspace.json`
-- invites, issued tokens, and scheduler state persist in `.cognisync/control-plane.json`
+- accepted remote peers, published control-plane URLs, trust policy, scheduled peer sync subscriptions, and the last issued peer bundle metadata persist in `.cognisync/shared-workspace.json`
+- invites, issued tokens, scheduler history, and the last due connector and peer-sync ids persist in `.cognisync/control-plane.json`
 - issued tokens stay scoped, so review-only actors can inspect status without being able to run jobs
 - peer bundles carry the control-plane URL, token, scopes, and role for a specific accepted remote principal, so another machine can attach cleanly without manual token surgery
-- scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work without adding a second queue system
-- remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`
+- shared-workspace trust policy can disable remote worker bundles or sync imports from peers without editing manifests by hand
+- scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, and scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, without adding a second queue system
+- remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including scheduled peer-sync export work
 - sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace
 
 ```mermaid
@@ -427,8 +431,10 @@ cognisync jobs workers
 cognisync jobs list
 
 cognisync sync export --actor-id local-operator
+cognisync sync export --actor-id local-operator --for-peer remote-ops
 cognisync sync history
 cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /tmp/other-workspace --actor-id local-operator
+cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /tmp/other-workspace --actor-id local-operator --from-peer remote-ops
 ```
 
 - `jobs enqueue research` persists a queued research manifest under `.cognisync/jobs/manifests/`
@@ -444,8 +450,11 @@ cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /
 - `jobs workers` renders `.cognisync/jobs/workers.json`, a derived worker registry that shows the last-seen time, active lease, and idle/completed state for every worker that has touched the queue
 - `jobs enqueue ...` and `jobs retry` now accept `--actor-id`, so operators can submit queue work under an explicit principal while workers still claim and execute jobs through `--worker-id`
 - queued job manifests now persist `requested_by`, so scheduled work keeps the submitting principal in `.cognisync/jobs/manifests/`
+- `jobs enqueue sync-export remote-ops` lets the queue carry peer-scoped workspace handoffs through the same leased worker model as research and connector work
 - `sync export` writes a portable workspace bundle under `outputs/reports/sync-bundles/` with `raw/`, `wiki/`, `prompts/`, `.cognisync/`, and the important report job directories
 - `sync export` and `sync import` now accept `--actor-id`, require an operator workspace member, and persist that actor in both the bundle manifest and sync event history
+- `sync export --for-peer <peer-id>` marks a bundle as intended for an accepted shared peer and records that peer in the bundle manifest
+- `sync import --from-peer <peer-id>` validates that peer-scoped bundle against the target workspace trust policy and accepted peer roster before restoring it
 - `sync import` restores that bundle into another workspace root so queued state, manifests, and corpus files travel together
 - `sync history` reads `.cognisync/sync/history.json`, which now records export/import events, acting principals, and bundle lineage
 - connector registry entries and connector run manifests now persist the mutating or syncing actor, so `.cognisync/connectors.json` and `.cognisync/runs/` agree on who touched a connector

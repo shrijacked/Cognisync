@@ -86,6 +86,7 @@ from cognisync.jobs import (
     enqueue_lint_job,
     enqueue_maintain_job,
     enqueue_research_job,
+    enqueue_sync_export_job,
     heartbeat_job,
     retry_job,
     render_jobs_list,
@@ -125,8 +126,12 @@ from cognisync.sharing import (
     bind_shared_control_plane_url,
     invite_shared_peer,
     issue_shared_peer_bundle,
+    list_due_shared_peer_syncs,
     list_shared_peers,
     render_shared_workspace_status,
+    set_shared_trust_policy,
+    subscribe_shared_peer_sync,
+    unsubscribe_shared_peer_sync,
 )
 from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
 from cognisync.sync import SyncError, export_sync_bundle, import_sync_bundle, render_sync_history
@@ -363,6 +368,24 @@ def cmd_jobs_enqueue_connector_sync_all(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_jobs_enqueue_sync_export(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_sync_export_job(
+            workspace,
+            peer_ref=args.peer_ref,
+            output_dir=args.output_dir,
+            requested_by=actor,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Queued sync-export job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
 def cmd_jobs_enqueue_lint(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
@@ -523,6 +546,7 @@ def cmd_sync_export(args: argparse.Namespace) -> int:
             workspace,
             output_dir=output_dir,
             actor_id=args.actor_id,
+            peer_ref=args.for_peer,
         )
     except (SyncError, AccessError) as error:
         print(str(error), file=sys.stderr)
@@ -546,6 +570,7 @@ def cmd_sync_import(args: argparse.Namespace) -> int:
             workspace,
             bundle_dir=bundle_dir,
             actor_id=args.actor_id,
+            from_peer=args.from_peer,
         )
     except (SyncError, AccessError) as error:
         print(str(error), file=sys.stderr)
@@ -733,6 +758,75 @@ def cmd_share_issue_peer_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_share_set_policy(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    allow_remote_workers = None
+    if args.allow_remote_workers:
+        allow_remote_workers = True
+    elif args.deny_remote_workers:
+        allow_remote_workers = False
+    allow_sync_imports = None
+    if args.allow_sync_imports:
+        allow_sync_imports = True
+    elif args.deny_sync_imports:
+        allow_sync_imports = False
+    try:
+        payload = set_shared_trust_policy(
+            workspace,
+            actor_id=args.actor_id,
+            allow_remote_workers=allow_remote_workers,
+            allow_sync_imports_from_peers=allow_sync_imports,
+            default_peer_role=args.default_peer_role,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    trust_policy = dict(payload.get("trust_policy", {}))
+    print("Updated shared-workspace trust policy.")
+    print(f"allow_remote_workers: {trust_policy.get('allow_remote_workers', True)}")
+    print(f"allow_sync_imports_from_peers: {trust_policy.get('allow_sync_imports_from_peers', True)}")
+    print(f"default_peer_role: {trust_policy.get('default_peer_role', 'viewer')}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_subscribe_sync(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        peer = subscribe_shared_peer_sync(
+            workspace,
+            peer_ref=args.peer_ref,
+            every_hours=args.every_hours,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    subscription = dict(peer.get("sync_subscription", {}))
+    print(
+        f"Subscribed peer {peer['peer_id']} for sync export every "
+        f"{subscription.get('interval_hours', '?')} hour(s)."
+    )
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_unsubscribe_sync(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        peer = unsubscribe_shared_peer_sync(
+            workspace,
+            peer_ref=args.peer_ref,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Disabled sync export scheduling for peer {peer['peer_id']}.")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
 def cmd_control_plane_status(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     print(render_control_plane_status(workspace))
@@ -856,25 +950,39 @@ def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
     payload = json.loads(workspace.control_plane_manifest_path.read_text(encoding="utf-8")) if workspace.control_plane_manifest_path.exists() else {}
     scheduler = dict(payload.get("scheduler", {}))
     due_connectors = [connector["connector_id"] for connector in list_due_connectors(workspace)]
+    due_peer_syncs = [peer["peer_id"] for peer in list_due_shared_peer_syncs(workspace)]
     print("# Scheduler Status")
     print("")
     print(f"- Due connectors: `{len(due_connectors)}`")
+    print(f"- Due peer sync exports: `{len(due_peer_syncs)}`")
     print(f"- Last tick at: `{scheduler.get('last_tick_at', '')}`")
     print(f"- Last action: `{scheduler.get('last_action', '')}`")
     if due_connectors:
         print("")
-        print("## Due")
+        print("## Due Connectors")
         print("")
         for connector_id in due_connectors:
             print(f"- `{connector_id}`")
+    if due_peer_syncs:
+        print("")
+        print("## Due Peer Sync Exports")
+        print("")
+        for peer_id in due_peer_syncs:
+            print(f"- `{peer_id}`")
     history = list(scheduler.get("history", []))
     if history:
         print("")
         print("## History")
         print("")
         for entry in history[:10]:
-            due_label = ",".join(str(item) for item in list(entry.get("due_connector_ids", []))) or "none"
-            print(f"- `{entry.get('tick_at', '')}` `{entry.get('action', '')}` due:{due_label}")
+            due_connectors_label = ",".join(str(item) for item in list(entry.get("due_connector_ids", []))) or "none"
+            due_peers_label = ",".join(str(item) for item in list(entry.get("due_peer_sync_ids", []))) or "none"
+            print(
+                f"- `{entry.get('tick_at', '')}` "
+                f"`{entry.get('action', '')}` "
+                f"connectors:{due_connectors_label} "
+                f"peers:{due_peers_label}"
+            )
     print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
     return 0
 
@@ -2031,6 +2139,38 @@ def build_parser() -> argparse.ArgumentParser:
     share_issue_bundle_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     share_issue_bundle_parser.set_defaults(func=cmd_share_issue_peer_bundle)
 
+    share_set_policy_parser = share_subparsers.add_parser(
+        "set-policy",
+        help="Update shared-workspace trust policy controls",
+    )
+    share_set_policy_parser.add_argument("--workspace", default=".")
+    share_set_policy_parser.add_argument("--allow-remote-workers", action="store_true")
+    share_set_policy_parser.add_argument("--deny-remote-workers", action="store_true")
+    share_set_policy_parser.add_argument("--allow-sync-imports", action="store_true")
+    share_set_policy_parser.add_argument("--deny-sync-imports", action="store_true")
+    share_set_policy_parser.add_argument("--default-peer-role", default=None, choices=VALID_ACCESS_ROLES)
+    share_set_policy_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_set_policy_parser.set_defaults(func=cmd_share_set_policy)
+
+    share_subscribe_sync_parser = share_subparsers.add_parser(
+        "subscribe-sync",
+        help="Subscribe an accepted peer to scheduled workspace sync exports",
+    )
+    share_subscribe_sync_parser.add_argument("peer_ref")
+    share_subscribe_sync_parser.add_argument("--workspace", default=".")
+    share_subscribe_sync_parser.add_argument("--every-hours", type=int, required=True)
+    share_subscribe_sync_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_subscribe_sync_parser.set_defaults(func=cmd_share_subscribe_sync)
+
+    share_unsubscribe_sync_parser = share_subparsers.add_parser(
+        "unsubscribe-sync",
+        help="Disable scheduled workspace sync exports for a peer",
+    )
+    share_unsubscribe_sync_parser.add_argument("peer_ref")
+    share_unsubscribe_sync_parser.add_argument("--workspace", default=".")
+    share_unsubscribe_sync_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_unsubscribe_sync_parser.set_defaults(func=cmd_share_unsubscribe_sync)
+
     control_plane_parser = subparsers.add_parser(
         "control-plane",
         help="Manage hosted-alpha control-plane state, tokens, and scheduler actions",
@@ -2228,6 +2368,16 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_connector_sync_all_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_connector_sync_all_parser.set_defaults(func=cmd_jobs_enqueue_connector_sync_all)
 
+    jobs_enqueue_sync_export_parser = jobs_enqueue_subparsers.add_parser(
+        "sync-export",
+        help="Queue a workspace sync export for later worker execution",
+    )
+    jobs_enqueue_sync_export_parser.add_argument("peer_ref", nargs="?", default=None)
+    jobs_enqueue_sync_export_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_sync_export_parser.add_argument("--output-dir", default=None)
+    jobs_enqueue_sync_export_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    jobs_enqueue_sync_export_parser.set_defaults(func=cmd_jobs_enqueue_sync_export)
+
     jobs_enqueue_lint_parser = jobs_enqueue_subparsers.add_parser(
         "lint",
         help="Queue a lint pass for later worker execution",
@@ -2331,12 +2481,14 @@ def build_parser() -> argparse.ArgumentParser:
     sync_export_parser = sync_subparsers.add_parser("export", help="Write a portable workspace sync bundle")
     sync_export_parser.add_argument("--workspace", default=".")
     sync_export_parser.add_argument("--output-dir", default=None)
+    sync_export_parser.add_argument("--for-peer", default=None)
     sync_export_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     sync_export_parser.set_defaults(func=cmd_sync_export)
 
     sync_import_parser = sync_subparsers.add_parser("import", help="Import a portable workspace sync bundle")
     sync_import_parser.add_argument("bundle")
     sync_import_parser.add_argument("--workspace", default=".")
+    sync_import_parser.add_argument("--from-peer", default=None)
     sync_import_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     sync_import_parser.set_defaults(func=cmd_sync_import)
 

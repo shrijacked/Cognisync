@@ -13,6 +13,12 @@ from cognisync.access import (
     ensure_access_manifest,
     require_access_role,
 )
+from cognisync.sharing import (
+    SharingError,
+    list_shared_peers,
+    load_shared_workspace_manifest,
+    mark_shared_peer_sync_exported,
+)
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -82,6 +88,7 @@ def export_sync_bundle(
     workspace: Workspace,
     output_dir: Optional[Path] = None,
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+    peer_ref: Optional[str] = None,
 ) -> SyncBundleResult:
     ensure_access_manifest(workspace)
     actor = require_access_role(
@@ -116,6 +123,7 @@ def export_sync_bundle(
             copied_paths.append(relative_path.as_posix())
             file_count += copied
 
+    shared_peer_payload = _shared_peer_payload(workspace, peer_ref)
     manifest_payload = {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
@@ -126,8 +134,12 @@ def export_sync_bundle(
         "file_count": file_count,
         "state_manifests": _state_manifest_paths(workspace),
     }
+    if shared_peer_payload is not None:
+        manifest_payload["shared_peer"] = shared_peer_payload
     manifest_path = destination / "manifest.json"
     manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    if shared_peer_payload is not None:
+        mark_shared_peer_sync_exported(workspace, str(shared_peer_payload.get("peer_id", "")))
     event_manifest_path = _record_sync_event(
         workspace,
         operation="export",
@@ -151,6 +163,7 @@ def import_sync_bundle(
     workspace: Workspace,
     bundle_dir: Path,
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+    from_peer: Optional[str] = None,
 ) -> SyncImportResult:
     bundle_root = Path(bundle_dir).expanduser().resolve()
     manifest_path = bundle_root / "manifest.json"
@@ -164,6 +177,7 @@ def import_sync_bundle(
         OPERATOR_ACTION_ROLES,
         "import workspace sync bundles",
     )
+    _validate_peer_sync_import(workspace, manifest, from_peer)
     workspace.initialize(name=workspace.root.name, force=False)
 
     file_count = 0
@@ -252,6 +266,7 @@ def _record_sync_event(
             "generated_at": str(source_manifest.get("generated_at", "")),
             "bundle_type": str(source_manifest.get("bundle_type", "")),
             "actor": dict(source_manifest.get("actor", {})),
+            "shared_peer": dict(source_manifest.get("shared_peer", {})),
         }
     workspace.sync_manifests_dir.mkdir(parents=True, exist_ok=True)
     path = workspace.sync_manifests_dir / f"{sync_id}.json"
@@ -280,6 +295,7 @@ def _write_sync_history_manifest(workspace: Workspace) -> Path:
                 "actor_id": str(dict(event.get("actor", {})).get("principal_id", "")),
                 "actor_role": str(dict(event.get("actor", {})).get("role", "")),
                 "source_actor_id": str(dict(dict(event.get("source_bundle", {})).get("actor", {})).get("principal_id", "")),
+                "source_peer_id": str(dict(event.get("source_bundle", {})).get("shared_peer", {}).get("peer_id", "")),
                 "file_count": int(event.get("file_count", 0) or 0),
                 "bundle_dir_relative": str(event.get("bundle_dir_relative", "")),
                 "event_manifest_path": workspace.relative_path(workspace.sync_manifests_dir / f"{event.get('sync_id', '')}.json"),
@@ -331,3 +347,44 @@ def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:
         for name, path in sorted(manifest_paths.items())
         if path.exists()
     }
+
+
+def _shared_peer_payload(workspace: Workspace, peer_ref: Optional[str]) -> Optional[Dict[str, object]]:
+    if not peer_ref:
+        return None
+    normalized_ref = peer_ref.strip()
+    if not normalized_ref:
+        return None
+    peers = list_shared_peers(workspace, status="accepted")
+    peer = next((item for item in peers if str(item.get("peer_id", "")) == normalized_ref), None)
+    if peer is None:
+        raise SyncError(f"Accepted shared peer '{normalized_ref}' is required for peer-scoped sync export.")
+    return {
+        "peer_id": str(peer.get("peer_id", "")),
+        "display_name": str(peer.get("display_name", "")),
+        "role": str(peer.get("role", "")),
+        "status": str(peer.get("status", "")),
+        "base_url": str(peer.get("base_url", "")),
+        "capabilities": [str(item) for item in list(peer.get("capabilities", []))],
+    }
+
+
+def _validate_peer_sync_import(workspace: Workspace, manifest: Dict[str, object], from_peer: Optional[str]) -> None:
+    shared_peer = dict(manifest.get("shared_peer", {}))
+    requested_peer = (from_peer or "").strip()
+    manifest_peer_id = str(shared_peer.get("peer_id", "")).strip()
+    if not requested_peer and not manifest_peer_id:
+        return
+
+    policy = dict(load_shared_workspace_manifest(workspace).get("trust_policy", {}))
+    if not bool(policy.get("allow_sync_imports_from_peers", True)):
+        raise SyncError("Sync imports from shared peers are disabled by the shared-workspace trust policy.")
+
+    effective_peer_id = requested_peer or manifest_peer_id
+    peers = list_shared_peers(workspace, status="accepted")
+    if not any(str(item.get("peer_id", "")) == effective_peer_id for item in peers):
+        raise SyncError(f"Accepted shared peer '{effective_peer_id}' is required for this sync import.")
+    if requested_peer and manifest_peer_id and manifest_peer_id != requested_peer:
+        raise SyncError(
+            f"Bundle peer mismatch: manifest targets '{manifest_peer_id}' but import was requested for '{requested_peer}'."
+        )

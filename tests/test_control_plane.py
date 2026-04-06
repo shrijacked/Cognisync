@@ -355,6 +355,147 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_scheduler_can_enqueue_due_peer_sync_exports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Scheduled Peer Sync Workspace")
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                        "--capability",
+                        "sync.import",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "subscribe-sync",
+                        "remote-ops",
+                        "--workspace",
+                        str(root),
+                        "--every-hours",
+                        "1",
+                    ]
+                ),
+                0,
+            )
+
+            sharing_path = root / ".cognisync" / "shared-workspace.json"
+            sharing_payload = json.loads(sharing_path.read_text(encoding="utf-8"))
+            sharing_payload["peers"][0]["sync_subscription"]["next_sync_at"] = "2000-01-01T00:00:00+00:00"
+            sharing_path.write_text(json.dumps(sharing_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "scheduler.run",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/scheduler", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertIn("remote-ops", payload["due_peer_sync_ids"])
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/scheduler/tick",
+                    body=json.dumps({"enqueue_only": True}),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                tick_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(tick_payload["action"], "enqueued")
+                self.assertIn("remote-ops", tick_payload["due_peer_sync_ids"])
+                connection.close()
+
+                self.assertEqual(
+                    main(
+                        [
+                            "worker",
+                            "remote",
+                            "--server-url",
+                            f"http://{host}:{port}",
+                            "--token",
+                            token_value,
+                            "--worker-id",
+                            "remote-syncer",
+                            "--max-jobs",
+                            "1",
+                        ]
+                    ),
+                    0,
+                )
+
+                bundle_dirs = sorted((root / "outputs" / "reports" / "sync-bundles").glob("sync-bundle-*"))
+                self.assertTrue(bundle_dirs)
+                manifest_payload = json.loads((bundle_dirs[-1] / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest_payload["shared_peer"]["peer_id"], "remote-ops")
+
+                control_payload = json.loads((root / ".cognisync" / "control-plane.json").read_text(encoding="utf-8"))
+                self.assertIn("remote-ops", control_payload["scheduler"]["last_due_peer_sync_ids"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -192,6 +192,9 @@ Supported paths in this release:
 - `cognisync share invite-peer remote-ops operator --workspace . --base-url https://remote.example.test/cognisync --capability jobs.remote`
 - `cognisync share accept-peer remote-ops --workspace .`
 - `cognisync share list-peers`
+- `cognisync share set-policy --workspace . --allow-remote-workers --allow-sync-imports`
+- `cognisync share subscribe-sync remote-ops --workspace . --every-hours 1`
+- `cognisync share unsubscribe-sync remote-ops --workspace .`
 - `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
 
 The command family:
@@ -199,8 +202,10 @@ The command family:
 1. materializes `.cognisync/shared-workspace.json`
 2. keeps accepted peer state, peer capabilities, and the published control-plane URL file-native instead of hiding them in shell history
 3. records the last issued peer bundle timestamp and token id on each accepted peer so remote handoffs are inspectable later
-4. issues peer bundles only for accepted peers and only after a control-plane URL is bound, so remote workers receive a coherent package
-5. reuses the same scoped token issuance path as `control-plane issue-token`, so peer bundles inherit the role-aware control-plane contract instead of inventing a second auth model
+4. persists a shared-workspace trust policy so remote worker bundles and peer-originated sync imports can be enabled or disabled without editing JSON by hand
+5. can subscribe accepted peers to scheduled sync exports on an hourly interval, keeping that schedule beside the rest of the shared-workspace state
+6. issues peer bundles only for accepted peers and only after a control-plane URL is bound, so remote workers receive a coherent package
+7. reuses the same scoped token issuance path as `control-plane issue-token`, so peer bundles inherit the role-aware control-plane contract instead of inventing a second auth model
 
 ### `control-plane`
 
@@ -214,6 +219,7 @@ Supported paths in this release:
 - `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
 - `cognisync control-plane list-tokens`
 - `cognisync control-plane revoke-token <token-id>`
+- `cognisync control-plane scheduler-status`
 - `cognisync control-plane workers`
 - `cognisync control-plane scheduler-tick --enqueue-only --actor-id local-operator`
 - `cognisync control-plane serve --host 127.0.0.1 --port 8766`
@@ -223,7 +229,7 @@ The command family:
 1. materializes `.cognisync/control-plane.json`
 2. keeps workspace invites and accepted memberships file-native instead of hiding them in process memory
 3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes
-4. supports scheduler ticks that enqueue or execute scheduled connector sync work against the same queue and connector manifests the local CLI already uses
+4. supports scheduler ticks that enqueue or execute scheduled connector sync work and due peer-scoped sync-export jobs against the same queue and connector manifests the local CLI already uses
 5. serves a lightweight HTTP layer for status, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
 6. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
 7. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
@@ -245,7 +251,7 @@ The command:
 2. reuses the same manifest-backed runtimes as `jobs run-next`
 3. keeps worker identity explicit through `--worker-id`
 4. can keep polling through short idle windows, so a remote worker can stay warm for scheduled jobs instead of exiting on the first empty queue
-5. works with scheduler-enqueued connector jobs, so scheduled connector pulls can be drained by a remote worker instead of the local shell
+5. works with scheduler-enqueued connector jobs and peer-scoped sync-export jobs, so scheduled connector pulls and shared-workspace handoffs can be drained by a remote worker instead of the local shell
 
 Together, `control-plane serve`, `control-plane scheduler-tick`, and `worker remote` give Cognisync a remote-ready operator loop without breaking the local-first contract.
 
@@ -419,6 +425,7 @@ Supported paths in this release:
 - `cognisync jobs enqueue connector-sync <connector-id> --actor-id local-operator`
 - `cognisync jobs enqueue connector-sync-all --actor-id local-operator`
 - `cognisync jobs enqueue connector-sync-all --scheduled-only --actor-id local-operator`
+- `cognisync jobs enqueue sync-export remote-ops --actor-id local-operator`
 - `cognisync jobs claim-next --worker-id worker-a`
 - `cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900`
 - `cognisync jobs run-next --worker-id worker-a`
@@ -434,7 +441,7 @@ The command family:
 3. requires an operator actor for queue submission and retry mutations, so scheduler-facing actions obey the same workspace role model as sync and the review UI
 4. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
 5. can renew that lease with `jobs heartbeat`, so long-running workers do not need to drop and reclaim ownership just to stay alive
-6. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, and `connector sync-all` runtimes when a worker executes queued jobs
+6. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, `connector sync-all`, and peer-scoped `sync export` runtimes when a worker executes queued jobs
 7. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
 8. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
 9. records result paths back into the job manifest instead of dropping that state into terminal-only output
@@ -445,7 +452,7 @@ The command family:
 
 ```mermaid
 flowchart LR
-    A["jobs enqueue research, compile, lint, maintain, connector-sync, connector-sync-all, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
+    A["jobs enqueue research, compile, lint, maintain, connector-sync, connector-sync-all, sync-export, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
     B --> C["jobs claim-next records worker lease"]
     C --> D["jobs heartbeat can renew the active worker lease"]
     D --> E["jobs run-next or jobs work resumes owned claims or claims fresh work"]
@@ -463,7 +470,9 @@ Supported paths in this release:
 
 - `cognisync sync history`
 - `cognisync sync export --actor-id <principal-id>`
+- `cognisync sync export --for-peer <peer-id> --actor-id <principal-id>`
 - `cognisync sync import <bundle-dir> --workspace /path/to/workspace --actor-id <principal-id>`
+- `cognisync sync import <bundle-dir> --workspace /path/to/workspace --actor-id <principal-id> --from-peer <peer-id>`
 
 `sync export` writes a portable bundle under `outputs/reports/sync-bundles/`, requires an operator actor from `.cognisync/access.json`, and currently includes:
 
@@ -476,7 +485,9 @@ Supported paths in this release:
 - `outputs/reports/research-jobs/`
 - `outputs/reports/remediation-jobs/`
 
-`sync import` also requires an operator actor from the target workspace roster, then restores those same paths into another workspace root so corpus files, job state, and execution manifests can move together.
+`sync export --for-peer` writes accepted peer metadata into the bundle manifest so a later import can be checked against shared-workspace state.
+
+`sync import` also requires an operator actor from the target workspace roster. When `--from-peer` is provided, the target workspace additionally checks the shared-workspace trust policy and accepted-peer roster before restoring those same paths into another workspace root.
 
 Every export and import also records a sync event under `.cognisync/sync/manifests/` and refreshes `.cognisync/sync/history.json`, so a later operator or UI can inspect how the workspace moved without parsing bundle directories manually. Those events now include the acting principal and, on import, the source bundle actor too. The declared `state_manifests` map now includes `.cognisync/control-plane.json` as well, so hosted-alpha tokens, invites, and scheduler state can travel with the same bundle.
 

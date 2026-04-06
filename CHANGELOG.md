@@ -67,8 +67,12 @@
 - taught sync bundle manifests to declare `.cognisync/control-plane.json` in `state_manifests`, so the hosted-alpha layer travels with exported workspaces
 - added `.cognisync/shared-workspace.json` plus `cognisync share ...` so published control-plane URLs, accepted peers, and peer handoff bundles persist as first-class workspace state
 - added `cognisync share issue-peer-bundle` so an accepted remote peer can receive a scoped control-plane token bundle without manual token assembly
+- added `cognisync share set-policy|subscribe-sync|unsubscribe-sync` so shared-workspace trust policy and scheduled peer sync exports are durable operator controls instead of manual manifest edits
 - added `cognisync control-plane workers` plus `/api/workers` so remote worker state is inspectable through the same hosted-alpha surface
 - taught `cognisync worker remote` to poll through short idle windows, so scheduled or future jobs can be picked up without relaunching the worker on every empty queue
+- added `cognisync control-plane scheduler-status` plus due peer-sync ids in `/api/scheduler` and `/api/scheduler/tick`, so scheduled peer exports are inspectable over both CLI and HTTP
+- added peer-scoped `sync export --for-peer`, `sync import --from-peer`, and queued `jobs enqueue sync-export`, so shared-workspace handoffs can move through the same manifest-backed worker system as the rest of the control plane
+- hardened notification manifest reads against transient concurrent queue writes, so remote polling workers and local enqueues can overlap without breaking the operator inbox
 
 ## v0.1.4 - 2026-04-03
 
