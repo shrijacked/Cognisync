@@ -6,9 +6,11 @@ from typing import Dict, List
 
 from cognisync.access import load_access_manifest
 from cognisync.collaboration import load_collaboration_manifest
+from cognisync.control_plane import load_control_plane_manifest
 from cognisync.connectors import list_connectors
 from cognisync.jobs import list_jobs
 from cognisync.manifests import read_json_manifest
+from cognisync.sharing import load_shared_workspace_manifest
 from cognisync.sync import list_sync_events
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
@@ -130,6 +132,43 @@ def build_audit_manifest(workspace: Workspace, limit: int = 200) -> Dict[str, ob
                 }
             )
 
+    sharing_payload = load_shared_workspace_manifest(workspace)
+    for peer in list(sharing_payload.get("peers", [])):
+        events.append(
+            {
+                "event_kind": "sharing",
+                "category": str(peer.get("role", "")),
+                "label": str(peer.get("peer_id", "")),
+                "status": str(peer.get("status", "")),
+                "generated_at": str(peer.get("updated_at", peer.get("shared_at", ""))),
+                "path": workspace.relative_path(workspace.shared_workspace_manifest_path),
+            }
+        )
+
+    control_plane_payload = load_control_plane_manifest(workspace)
+    for invite in list(control_plane_payload.get("invites", [])):
+        events.append(
+            {
+                "event_kind": "control_plane",
+                "category": "invite",
+                "label": str(invite.get("principal_id", "")),
+                "status": str(invite.get("status", "")),
+                "generated_at": str(invite.get("accepted_at", invite.get("created_at", ""))),
+                "path": workspace.relative_path(workspace.control_plane_manifest_path),
+            }
+        )
+    for token in list(control_plane_payload.get("tokens", [])):
+        events.append(
+            {
+                "event_kind": "control_plane",
+                "category": "token",
+                "label": str(token.get("principal_id", "")),
+                "status": str(token.get("status", "")),
+                "generated_at": str(token.get("created_at", "")),
+                "path": workspace.relative_path(workspace.control_plane_manifest_path),
+            }
+        )
+
     for connector in list_connectors(workspace):
         events.append(
             {
@@ -243,6 +282,8 @@ def render_usage_report(workspace: Workspace) -> str:
 def build_usage_manifest(workspace: Workspace) -> Dict[str, object]:
     access_payload = load_access_manifest(workspace)
     collaboration_payload = load_collaboration_manifest(workspace)
+    sharing_payload = load_shared_workspace_manifest(workspace)
+    control_plane_payload = load_control_plane_manifest(workspace)
     connectors = list_connectors(workspace)
     jobs = list_jobs(workspace)
     sync_events = list_sync_events(workspace)
@@ -260,6 +301,14 @@ def build_usage_manifest(workspace: Workspace) -> Dict[str, object]:
 
     summary = {
         "access_member_count": len(list(access_payload.get("members", []))),
+        "shared_peer_count": len(list(sharing_payload.get("peers", []))),
+        "accepted_shared_peer_count": sum(
+            1 for peer in list(sharing_payload.get("peers", [])) if str(peer.get("status", "")) == "accepted"
+        ),
+        "control_plane_token_count": len(list(control_plane_payload.get("tokens", []))),
+        "active_control_plane_token_count": sum(
+            1 for token in list(control_plane_payload.get("tokens", [])) if str(token.get("status", "")) == "active"
+        ),
         "access_counts_by_role": access_counts_by_role,
         "collaboration_thread_count": len(collaboration_threads),
         "collaboration_comment_count": sum(len(list(item.get("comments", []))) for item in collaboration_threads),

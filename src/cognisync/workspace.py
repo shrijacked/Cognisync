@@ -107,6 +107,10 @@ class Workspace:
         return self.state_dir / "control-plane.json"
 
     @property
+    def shared_workspace_manifest_path(self) -> Path:
+        return self.state_dir / "shared-workspace.json"
+
+    @property
     def audit_manifest_path(self) -> Path:
         return self.state_dir / "audit.json"
 
@@ -184,7 +188,9 @@ class Workspace:
         ensure_access_manifest(self)
         ensure_collaboration_manifest(self)
         from cognisync.control_plane import ensure_control_plane_manifest
+        from cognisync.sharing import ensure_shared_workspace_manifest
         ensure_control_plane_manifest(self)
+        ensure_shared_workspace_manifest(self)
         from cognisync.knowledge_surfaces import append_workspace_log, ensure_workspace_log, write_workspace_schema
 
         write_workspace_schema(self, force=force)

@@ -62,6 +62,36 @@ class ReviewUiTests(unittest.TestCase):
                 ),
                 0,
             )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                        "--base-url",
+                        "https://remote.example.test",
+                        "--capability",
+                        "jobs.run",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
             connector_url = "data:text/html;charset=utf-8,<html><head><title>Connector Page</title></head><body><p>Connector body.</p></body></html>"
             self.assertEqual(
                 main(
@@ -76,6 +106,22 @@ class ReviewUiTests(unittest.TestCase):
                         "connector-page",
                         "--actor-id",
                         "operator-2",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--scope",
+                        "control.read",
+                        "--output-file",
+                        str(workspace.export_artifacts_dir / "ui-token.json"),
                     ]
                 ),
                 0,
@@ -131,6 +177,8 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Sync History", html)
             self.assertIn("Connectors", html)
             self.assertIn("Workspace Access", html)
+            self.assertIn("Shared Workspace", html)
+            self.assertIn("Control Plane", html)
             self.assertIn("Notifications", html)
             self.assertIn("Audit History", html)
             self.assertIn("Usage Summary", html)
@@ -153,6 +201,8 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn(".cognisync/usage.json", html)
             self.assertIn(".cognisync/notifications.json", html)
             self.assertIn(".cognisync/access.json", html)
+            self.assertIn(".cognisync/shared-workspace.json", html)
+            self.assertIn(".cognisync/control-plane.json", html)
             self.assertIn("how do agent loops use memory", html)
             self.assertEqual(state["schema_version"], 1)
             self.assertGreaterEqual(state["graph"]["node_count"], 1)
@@ -169,6 +219,8 @@ class ReviewUiTests(unittest.TestCase):
             self.assertGreaterEqual(state["usage"]["summary"]["job_count"], 1)
             self.assertGreaterEqual(state["notifications"]["total_count"], 1)
             self.assertGreaterEqual(state["access"]["member_count"], 1)
+            self.assertEqual(state["sharing"]["accepted_peer_count"], 1)
+            self.assertEqual(state["control_plane"]["summary"]["active_token_count"], 1)
             self.assertGreaterEqual(len(state["graph"]["nodes"]), 1)
             self.assertTrue(any(item["detail_href"] for item in state["graph"]["nodes"]))
             self.assertTrue(any(item["run_kind"] == "research" for item in state["runs"]["items"]))

@@ -40,12 +40,14 @@ from cognisync.control_plane import (
     issue_control_plane_token,
     list_control_plane_tokens,
     render_control_plane_status,
+    render_control_plane_workers,
     revoke_control_plane_token,
     run_scheduler_tick,
 )
 from cognisync.connectors import (
     ConnectorError,
     add_connector,
+    list_due_connectors,
     render_connector_list,
     subscribe_connector,
     sync_all_connectors,
@@ -117,6 +119,15 @@ from cognisync.review_ui import create_review_ui_server, write_review_ui_bundle
 from cognisync.renderers import render_compile_packet, render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
+from cognisync.sharing import (
+    SharingError,
+    accept_shared_peer,
+    bind_shared_control_plane_url,
+    invite_shared_peer,
+    issue_shared_peer_bundle,
+    list_shared_peers,
+    render_shared_workspace_status,
+)
 from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
 from cognisync.sync import SyncError, export_sync_bundle, import_sync_bundle, render_sync_history
 from cognisync.training_loop import export_training_loop_bundle, improve_research_loop
@@ -616,6 +627,112 @@ def cmd_access_revoke(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_share_status(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_shared_workspace_status(workspace))
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_bind_control_plane(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        payload = bind_shared_control_plane_url(
+            workspace,
+            url=args.url,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Bound shared control-plane URL to {payload['published_control_plane_url']}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_invite_peer(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        peer = invite_shared_peer(
+            workspace,
+            peer_id=args.peer_id,
+            role=args.role,
+            actor_id=args.actor_id,
+            base_url=args.base_url,
+            capabilities=list(args.capability or []),
+            display_name=args.name,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Invited peer {peer['peer_id']} as {peer['role']}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_accept_peer(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        peer = accept_shared_peer(
+            workspace,
+            peer_ref=args.peer_ref,
+            actor_id=args.actor_id,
+        )
+    except SharingError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Accepted peer {peer['peer_id']} as {peer['role']}")
+    print(f"Access manifest: {workspace.access_manifest_path}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_list_peers(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    peers = list_shared_peers(workspace, status=args.status)
+    if not peers:
+        print("No shared-workspace peers found.")
+        print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+        return 0
+    print(f"Shared-workspace peers: {len(peers)}")
+    print("")
+    for peer in peers:
+        capabilities = ", ".join(str(item) for item in list(peer.get("capabilities", [])))
+        print(f"{peer['peer_id']} [{peer['status']}] {peer['role']}")
+        if peer.get("base_url"):
+            print(f"base_url: {peer['base_url']}")
+        if capabilities:
+            print(f"capabilities: {capabilities}")
+        print("")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_issue_peer_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_file = Path(args.output_file).expanduser()
+    if not output_file.is_absolute():
+        output_file = workspace.root / output_file
+    output_file = output_file.resolve()
+    try:
+        bundle = issue_shared_peer_bundle(
+            workspace,
+            peer_ref=args.peer_ref,
+            output_file=output_file.as_posix(),
+            actor_id=args.actor_id,
+            scopes=list(args.scope or []),
+        )
+    except (AccessError, SharingError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(json.dumps(bundle, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"Wrote peer bundle to {output_file}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
 def cmd_control_plane_status(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     print(render_control_plane_status(workspace))
@@ -734,6 +851,42 @@ def cmd_control_plane_revoke_token(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    payload = json.loads(workspace.control_plane_manifest_path.read_text(encoding="utf-8")) if workspace.control_plane_manifest_path.exists() else {}
+    scheduler = dict(payload.get("scheduler", {}))
+    due_connectors = [connector["connector_id"] for connector in list_due_connectors(workspace)]
+    print("# Scheduler Status")
+    print("")
+    print(f"- Due connectors: `{len(due_connectors)}`")
+    print(f"- Last tick at: `{scheduler.get('last_tick_at', '')}`")
+    print(f"- Last action: `{scheduler.get('last_action', '')}`")
+    if due_connectors:
+        print("")
+        print("## Due")
+        print("")
+        for connector_id in due_connectors:
+            print(f"- `{connector_id}`")
+    history = list(scheduler.get("history", []))
+    if history:
+        print("")
+        print("## History")
+        print("")
+        for entry in history[:10]:
+            due_label = ",".join(str(item) for item in list(entry.get("due_connector_ids", []))) or "none"
+            print(f"- `{entry.get('tick_at', '')}` `{entry.get('action', '')}` due:{due_label}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_workers(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    print(render_control_plane_workers(workspace))
+    print(f"Worker registry: {workspace.workers_registry_path}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
 def cmd_control_plane_scheduler_tick(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
@@ -785,6 +938,8 @@ def cmd_worker_remote(args: argparse.Namespace) -> int:
             worker_id=args.worker_id,
             max_jobs=args.max_jobs,
             lease_seconds=args.lease_seconds,
+            poll_interval_seconds=args.poll_interval_seconds,
+            max_idle_polls=args.max_idle_polls,
         )
     except RemoteWorkerError as error:
         print(str(error), file=sys.stderr)
@@ -971,15 +1126,27 @@ def cmd_connector_subscribe(args: argparse.Namespace) -> int:
             workspace,
             connector_id=args.connector_id,
             every_hours=args.every_hours,
+            weekdays=list(args.weekday or []),
+            hour=args.hour,
+            minute=args.minute,
             actor=actor,
         )
     except (ConnectorError, AccessError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    print(
-        f"Subscribed connector {connector['connector_id']} "
-        f"for every {connector['subscription']['interval_hours']} hour(s)."
-    )
+    subscription = connector["subscription"]
+    if subscription["schedule_type"] == "weekly":
+        weekday_label = ",".join(subscription["weekdays"])
+        print(
+            f"Subscribed connector {connector['connector_id']} "
+            f"for weekly schedule {weekday_label} at "
+            f"{int(subscription['hour'] or 0):02d}:{int(subscription['minute'] or 0):02d}."
+        )
+    else:
+        print(
+            f"Subscribed connector {connector['connector_id']} "
+            f"for every {connector['subscription']['interval_hours']} hour(s)."
+        )
     print(f"Connector registry: {workspace.connector_registry_path}")
     return 0
 
@@ -1804,6 +1971,66 @@ def build_parser() -> argparse.ArgumentParser:
     access_revoke_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     access_revoke_parser.set_defaults(func=cmd_access_revoke)
 
+    share_parser = subparsers.add_parser(
+        "share",
+        help="Manage shared-workspace peer state and published control-plane bindings",
+    )
+    share_subparsers = share_parser.add_subparsers(dest="share_command", required=True)
+
+    share_status_parser = share_subparsers.add_parser("status", help="Inspect the shared-workspace manifest")
+    share_status_parser.add_argument("--workspace", default=".")
+    share_status_parser.set_defaults(func=cmd_share_status)
+
+    share_bind_parser = share_subparsers.add_parser(
+        "bind-control-plane",
+        help="Publish the control-plane URL for this workspace",
+    )
+    share_bind_parser.add_argument("url")
+    share_bind_parser.add_argument("--workspace", default=".")
+    share_bind_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_bind_parser.set_defaults(func=cmd_share_bind_control_plane)
+
+    share_invite_parser = share_subparsers.add_parser(
+        "invite-peer",
+        help="Invite a remote peer into the shared workspace",
+    )
+    share_invite_parser.add_argument("peer_id")
+    share_invite_parser.add_argument("role", choices=VALID_ACCESS_ROLES)
+    share_invite_parser.add_argument("--workspace", default=".")
+    share_invite_parser.add_argument("--name", default=None)
+    share_invite_parser.add_argument("--base-url", default=None)
+    share_invite_parser.add_argument("--capability", action="append", default=[])
+    share_invite_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_invite_parser.set_defaults(func=cmd_share_invite_peer)
+
+    share_accept_parser = share_subparsers.add_parser(
+        "accept-peer",
+        help="Accept a pending shared-workspace peer by peer id",
+    )
+    share_accept_parser.add_argument("peer_ref")
+    share_accept_parser.add_argument("--workspace", default=".")
+    share_accept_parser.add_argument("--actor-id", default=None)
+    share_accept_parser.set_defaults(func=cmd_share_accept_peer)
+
+    share_list_parser = share_subparsers.add_parser(
+        "list-peers",
+        help="List persisted shared-workspace peers",
+    )
+    share_list_parser.add_argument("--workspace", default=".")
+    share_list_parser.add_argument("--status", default=None, choices=["accepted", "pending"])
+    share_list_parser.set_defaults(func=cmd_share_list_peers)
+
+    share_issue_bundle_parser = share_subparsers.add_parser(
+        "issue-peer-bundle",
+        help="Issue a remote peer bundle with a control-plane token",
+    )
+    share_issue_bundle_parser.add_argument("peer_ref")
+    share_issue_bundle_parser.add_argument("--workspace", default=".")
+    share_issue_bundle_parser.add_argument("--output-file", required=True)
+    share_issue_bundle_parser.add_argument("--scope", action="append", default=[])
+    share_issue_bundle_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_issue_bundle_parser.set_defaults(func=cmd_share_issue_peer_bundle)
+
     control_plane_parser = subparsers.add_parser(
         "control-plane",
         help="Manage hosted-alpha control-plane state, tokens, and scheduler actions",
@@ -1816,6 +2043,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     control_plane_status_parser.add_argument("--workspace", default=".")
     control_plane_status_parser.set_defaults(func=cmd_control_plane_status)
+
+    control_plane_scheduler_status_parser = control_plane_subparsers.add_parser(
+        "scheduler-status",
+        help="Inspect due connectors and scheduler history",
+    )
+    control_plane_scheduler_status_parser.add_argument("--workspace", default=".")
+    control_plane_scheduler_status_parser.set_defaults(func=cmd_control_plane_scheduler_status)
+
+    control_plane_workers_parser = control_plane_subparsers.add_parser(
+        "workers",
+        help="Inspect the current remote worker registry",
+    )
+    control_plane_workers_parser.add_argument("--workspace", default=".")
+    control_plane_workers_parser.set_defaults(func=cmd_control_plane_workers)
 
     control_plane_invite_parser = control_plane_subparsers.add_parser(
         "invite",
@@ -2076,6 +2317,8 @@ def build_parser() -> argparse.ArgumentParser:
     worker_remote_parser.add_argument("--worker-id", default="remote-worker")
     worker_remote_parser.add_argument("--max-jobs", type=int, default=None)
     worker_remote_parser.add_argument("--lease-seconds", type=int, default=300)
+    worker_remote_parser.add_argument("--poll-interval-seconds", type=float, default=0.0)
+    worker_remote_parser.add_argument("--max-idle-polls", type=int, default=0)
     worker_remote_parser.set_defaults(func=cmd_worker_remote)
 
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
@@ -2136,7 +2379,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connector_subscribe_parser.add_argument("connector_id")
     connector_subscribe_parser.add_argument("--workspace", default=".")
-    connector_subscribe_parser.add_argument("--every-hours", type=int, required=True)
+    connector_subscribe_parser.add_argument("--every-hours", type=int, default=None)
+    connector_subscribe_parser.add_argument(
+        "--weekday",
+        action="append",
+        default=[],
+        choices=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+    )
+    connector_subscribe_parser.add_argument("--hour", type=int, default=None)
+    connector_subscribe_parser.add_argument("--minute", type=int, default=0)
     connector_subscribe_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     connector_subscribe_parser.set_defaults(func=cmd_connector_subscribe)
 

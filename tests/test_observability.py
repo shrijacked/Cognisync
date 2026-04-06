@@ -35,6 +35,52 @@ class ObservabilityTests(unittest.TestCase):
                 ),
                 0,
             )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                        "--base-url",
+                        "https://remote.example.test",
+                        "--capability",
+                        "control.read",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--scope",
+                        "control.read",
+                        "--output-file",
+                        str(root / "outputs" / "reports" / "exports" / "token.json"),
+                    ]
+                ),
+                0,
+            )
             self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
             self.assertEqual(
                 main(
@@ -77,12 +123,17 @@ class ObservabilityTests(unittest.TestCase):
             event_kinds = {item["event_kind"] for item in audit_payload["events"]}
             self.assertIn("job", event_kinds)
             self.assertIn("sync", event_kinds)
+            self.assertIn("sharing", event_kinds)
+            self.assertIn("control_plane", event_kinds)
 
             summary = usage_payload["summary"]
             self.assertGreaterEqual(summary["access_member_count"], 2)
             self.assertGreaterEqual(summary["connector_count"], 1)
             self.assertGreaterEqual(summary["job_count"], 1)
             self.assertGreaterEqual(summary["sync_event_count"], 1)
+            self.assertGreaterEqual(summary["shared_peer_count"], 1)
+            self.assertGreaterEqual(summary["accepted_shared_peer_count"], 1)
+            self.assertGreaterEqual(summary["active_control_plane_token_count"], 1)
             self.assertIn("reviewer", summary["access_counts_by_role"])
 
 

@@ -17,6 +17,7 @@ from cognisync.workspace import Workspace
 
 
 SUPPORTED_CONNECTOR_KINDS = {"repo", "sitemap", "url", "urls"}
+WEEKDAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
 class ConnectorError(RuntimeError):
@@ -47,11 +48,25 @@ class ConnectorBatchSyncResult:
 def subscribe_connector(
     workspace: Workspace,
     connector_id: str,
-    every_hours: int,
+    every_hours: Optional[int] = None,
+    weekdays: Optional[List[str]] = None,
+    hour: Optional[int] = None,
+    minute: int = 0,
     actor: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
-    if every_hours < 1:
+    normalized_weekdays = _normalize_weekdays(weekdays or [])
+    if every_hours is not None and every_hours < 1:
         raise ConnectorError("Connector subscription intervals must be at least 1 hour.")
+    if every_hours is None and not normalized_weekdays:
+        raise ConnectorError("Pass either --every-hours or at least one --weekday when subscribing a connector.")
+    if every_hours is not None and normalized_weekdays:
+        raise ConnectorError("Choose either an interval subscription or a weekly schedule, not both.")
+    if normalized_weekdays and hour is None:
+        raise ConnectorError("A weekly connector subscription requires --hour.")
+    if minute < 0 or minute > 59:
+        raise ConnectorError("Connector subscription minutes must be between 0 and 59.")
+    if hour is not None and (hour < 0 or hour > 23):
+        raise ConnectorError("Connector subscription hours must be between 0 and 23.")
 
     registry = _load_connector_registry(workspace)
     connectors = list(registry.get("connectors", []))
@@ -60,13 +75,37 @@ def subscribe_connector(
         raise ConnectorError(f"Could not find connector '{connector_id}'.")
 
     subscribed_at = utc_timestamp()
-    connector["subscription"] = {
-        "enabled": True,
-        "interval_hours": every_hours,
-        "subscribed_at": subscribed_at,
-        "next_sync_at": subscribed_at,
-        "last_scheduled_sync_at": str(dict(connector.get("subscription", {})).get("last_scheduled_sync_at", "")) or None,
-    }
+    existing_subscription = _normalize_subscription(connector.get("subscription", {}))
+    if every_hours is not None:
+        connector["subscription"] = {
+            "enabled": True,
+            "schedule_type": "interval",
+            "interval_hours": every_hours,
+            "weekdays": [],
+            "hour": None,
+            "minute": None,
+            "subscribed_at": subscribed_at,
+            "next_sync_at": subscribed_at,
+            "last_scheduled_sync_at": existing_subscription.get("last_scheduled_sync_at"),
+            "last_scheduler_tick_at": existing_subscription.get("last_scheduler_tick_at"),
+            "last_due_at": existing_subscription.get("last_due_at"),
+            "last_tick_status": existing_subscription.get("last_tick_status"),
+        }
+    else:
+        connector["subscription"] = {
+            "enabled": True,
+            "schedule_type": "weekly",
+            "interval_hours": None,
+            "weekdays": normalized_weekdays,
+            "hour": int(hour) if hour is not None else None,
+            "minute": int(minute),
+            "subscribed_at": subscribed_at,
+            "next_sync_at": _next_weekly_timestamp(normalized_weekdays, int(hour or 0), int(minute), subscribed_at),
+            "last_scheduled_sync_at": existing_subscription.get("last_scheduled_sync_at"),
+            "last_scheduler_tick_at": existing_subscription.get("last_scheduler_tick_at"),
+            "last_due_at": existing_subscription.get("last_due_at"),
+            "last_tick_status": existing_subscription.get("last_tick_status"),
+        }
     connector["updated_at"] = subscribed_at
     connector["updated_by"] = _serialize_actor(actor)
     registry["connectors"] = sorted(connectors, key=lambda item: str(item.get("connector_id", "")))
@@ -88,7 +127,11 @@ def unsubscribe_connector(
 
     subscription = _normalize_subscription(connector.get("subscription", {}))
     subscription["enabled"] = False
+    subscription["schedule_type"] = "interval"
     subscription["interval_hours"] = None
+    subscription["weekdays"] = []
+    subscription["hour"] = None
+    subscription["minute"] = None
     subscription["next_sync_at"] = None
     connector["subscription"] = subscription
     connector["updated_at"] = utc_timestamp()
@@ -168,12 +211,25 @@ def render_connector_list(workspace: Workspace) -> str:
         )
         subscription = _normalize_subscription(connector.get("subscription", {}))
         if bool(subscription.get("enabled")):
-            lines.append(
-                "  "
-                f"schedule: every {subscription.get('interval_hours', '?')}h"
-                f" next {subscription.get('next_sync_at') or 'unscheduled'}"
-            )
+            if str(subscription.get("schedule_type", "interval")) == "weekly":
+                weekday_label = ",".join(str(item) for item in list(subscription.get("weekdays", []))) or "?"
+                lines.append(
+                    "  "
+                    f"schedule: weekly {weekday_label} "
+                    f"at {int(subscription.get('hour', 0) or 0):02d}:{int(subscription.get('minute', 0) or 0):02d}"
+                    f" next {subscription.get('next_sync_at') or 'unscheduled'}"
+                )
+            else:
+                lines.append(
+                    "  "
+                    f"schedule: every {subscription.get('interval_hours', '?')}h"
+                    f" next {subscription.get('next_sync_at') or 'unscheduled'}"
+                )
     return "\n".join(lines)
+
+
+def list_due_connectors(workspace: Workspace) -> List[Dict[str, object]]:
+    return [connector for connector in list_connectors(workspace) if connector_subscription_is_due(connector)]
 
 
 def sync_connector(
@@ -260,7 +316,7 @@ def sync_all_connectors(
         raise ConnectorError("No connector definitions found.")
 
     if scheduled_only:
-        pending_connectors = [connector for connector in connectors if _connector_subscription_is_due(connector)]
+        pending_connectors = [connector for connector in connectors if connector_subscription_is_due(connector)]
     else:
         pending_connectors = connectors if force else [connector for connector in connectors if not connector.get("last_synced_at")]
     selected_connectors = pending_connectors[:limit] if limit is not None else pending_connectors
@@ -387,16 +443,36 @@ def _normalize_connector_record(connector: Dict[str, object]) -> Dict[str, objec
 def _normalize_subscription(subscription: object) -> Dict[str, object]:
     payload = dict(subscription) if isinstance(subscription, dict) else {}
     interval_hours = payload.get("interval_hours")
+    hour = payload.get("hour")
+    minute = payload.get("minute")
     try:
         normalized_interval = int(interval_hours) if interval_hours is not None else None
     except (TypeError, ValueError):
         normalized_interval = None
+    try:
+        normalized_hour = int(hour) if hour is not None else None
+    except (TypeError, ValueError):
+        normalized_hour = None
+    try:
+        normalized_minute = int(minute) if minute is not None else None
+    except (TypeError, ValueError):
+        normalized_minute = None
+    schedule_type = str(payload.get("schedule_type", "interval")).strip().lower() or "interval"
+    if schedule_type not in {"interval", "weekly"}:
+        schedule_type = "interval"
     return {
         "enabled": bool(payload.get("enabled", False)),
+        "schedule_type": schedule_type,
         "interval_hours": normalized_interval,
+        "weekdays": _normalize_weekdays(list(payload.get("weekdays", []))),
+        "hour": normalized_hour,
+        "minute": normalized_minute,
         "subscribed_at": str(payload.get("subscribed_at", "")) or None,
         "next_sync_at": str(payload.get("next_sync_at", "")) or None,
         "last_scheduled_sync_at": str(payload.get("last_scheduled_sync_at", "")) or None,
+        "last_scheduler_tick_at": str(payload.get("last_scheduler_tick_at", "")) or None,
+        "last_due_at": str(payload.get("last_due_at", "")) or None,
+        "last_tick_status": str(payload.get("last_tick_status", "")) or None,
     }
 
 
@@ -404,16 +480,22 @@ def _advance_subscription(subscription: object, synced_at: str, scheduled: bool)
     payload = _normalize_subscription(subscription)
     if not bool(payload.get("enabled")):
         return payload
+    if scheduled:
+        payload["last_scheduled_sync_at"] = synced_at
+    if str(payload.get("schedule_type", "interval")) == "weekly":
+        weekdays = _normalize_weekdays(list(payload.get("weekdays", [])))
+        hour = int(payload.get("hour", 0) or 0)
+        minute = int(payload.get("minute", 0) or 0)
+        payload["next_sync_at"] = _next_weekly_timestamp(weekdays, hour, minute, synced_at)
+        return payload
     interval_hours = payload.get("interval_hours")
     if interval_hours is None:
         return payload
-    if scheduled:
-        payload["last_scheduled_sync_at"] = synced_at
     payload["next_sync_at"] = _future_timestamp(hours=int(interval_hours))
     return payload
 
 
-def _connector_subscription_is_due(connector: Dict[str, object]) -> bool:
+def connector_subscription_is_due(connector: Dict[str, object]) -> bool:
     subscription = _normalize_subscription(connector.get("subscription", {}))
     if not bool(subscription.get("enabled")):
         return False
@@ -424,6 +506,43 @@ def _connector_subscription_is_due(connector: Dict[str, object]) -> bool:
         return datetime.fromisoformat(next_sync_at) <= datetime.now(timezone.utc)
     except ValueError:
         return True
+
+
+def _normalize_weekdays(weekdays: List[str]) -> List[str]:
+    normalized = []
+    for weekday in weekdays:
+        value = str(weekday).strip().lower()
+        if not value:
+            continue
+        if value not in WEEKDAY_ORDER:
+            raise ConnectorError(
+                f"Unsupported weekday '{weekday}'. Expected one of: {', '.join(WEEKDAY_ORDER)}."
+            )
+        if value not in normalized:
+            normalized.append(value)
+    normalized.sort(key=WEEKDAY_ORDER.index)
+    return normalized
+
+
+def _next_weekly_timestamp(weekdays: List[str], hour: int, minute: int, reference_timestamp: str) -> str:
+    reference = datetime.fromisoformat(reference_timestamp)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    reference = reference.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    weekday_indexes = sorted({WEEKDAY_ORDER.index(day) for day in _normalize_weekdays(weekdays)})
+    if not weekday_indexes:
+        return reference.isoformat()
+    for offset in range(8):
+        candidate_date = reference + timedelta(days=offset)
+        if candidate_date.weekday() not in weekday_indexes:
+            continue
+        candidate = candidate_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate > reference:
+            return candidate.isoformat()
+    fallback = (reference + timedelta(days=7)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    while fallback.weekday() not in weekday_indexes:
+        fallback += timedelta(days=1)
+    return fallback.isoformat()
 
 
 def _future_timestamp(*, hours: int) -> str:

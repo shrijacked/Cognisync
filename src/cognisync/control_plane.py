@@ -11,8 +11,9 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import urlparse
 
 from cognisync.access import DEFAULT_LOCAL_OPERATOR_ID, OPERATOR_ACTION_ROLES, grant_access_member, require_access_role
-from cognisync.connectors import list_connectors, sync_all_connectors
-from cognisync.jobs import JobError, claim_next_job, enqueue_connector_sync_all_job, heartbeat_job, run_next_job
+from cognisync.connectors import connector_subscription_is_due, list_connectors, list_due_connectors, sync_all_connectors
+from cognisync.jobs import JobError, claim_next_job, enqueue_connector_sync_all_job, heartbeat_job, read_worker_registry, run_next_job
+from cognisync.sharing import ensure_shared_workspace_manifest, sharing_summary
 from cognisync.utils import slugify, utc_timestamp
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ def load_control_plane_manifest(workspace: "Workspace") -> Dict[str, object]:
 
 def render_control_plane_status(workspace: "Workspace") -> str:
     payload = ensure_control_plane_manifest(workspace)
+    sharing = sharing_summary(workspace)
     summary = dict(payload.get("summary", {}))
     scheduler = dict(payload.get("scheduler", {}))
     lines = [
@@ -65,8 +67,35 @@ def render_control_plane_status(workspace: "Workspace") -> str:
         f"- Active tokens: `{summary.get('active_token_count', 0)}`",
         f"- Pending invites: `{summary.get('pending_invite_count', 0)}`",
         f"- Accepted invites: `{summary.get('accepted_invite_count', 0)}`",
+        f"- Published control plane URL: `{sharing.get('published_control_plane_url', '') or 'unbound'}`",
+        f"- Accepted peers: `{sharing.get('accepted_peer_count', 0)}`",
         f"- Last scheduler action: `{scheduler.get('last_action', 'never')}`",
     ]
+    return "\n".join(lines)
+
+
+def render_control_plane_workers(workspace: "Workspace") -> str:
+    payload = read_worker_registry(workspace)
+    workers = list(payload.get("workers", []))
+    lines = [
+        "# Control Plane Workers",
+        "",
+        f"- Worker count: `{len(workers)}`",
+        f"- Status counts: `{json.dumps(dict(payload.get('counts_by_status', {})), sort_keys=True)}`",
+    ]
+    if not workers:
+        lines.extend(["", "No workers have registered with the queue yet."])
+        return "\n".join(lines)
+    lines.extend(["", "## Workers", ""])
+    for worker in workers:
+        current_job_id = str(worker.get("current_job_id", "") or "")
+        current_suffix = f" job:{current_job_id}" if current_job_id else ""
+        lines.append(
+            "- "
+            f"`{worker.get('worker_id', '')}` "
+            f"`{worker.get('status', '')}` "
+            f"last-seen:{worker.get('last_seen_at', '')}{current_suffix}"
+        )
     return "\n".join(lines)
 
 
@@ -243,10 +272,7 @@ def run_scheduler_tick(
     limit: Optional[int] = None,
 ) -> SchedulerTickResult:
     actor = require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "run the control-plane scheduler")
-    due_connectors = [
-        item for item in list_connectors(workspace)
-        if _connector_is_due(dict(item))
-    ]
+    due_connectors = [dict(item) for item in list_due_connectors(workspace)]
     if limit is not None:
         due_connectors = due_connectors[: max(0, int(limit))]
     due_connector_ids = [str(item.get("connector_id", "")) for item in due_connectors]
@@ -274,13 +300,26 @@ def run_scheduler_tick(
             )
             executed_run_manifest_path = result.run_manifest_path
             action = "executed"
+    _record_scheduler_observations(workspace, due_connector_ids)
     payload = ensure_control_plane_manifest(workspace)
+    history = [dict(item) for item in list(dict(payload.get("scheduler", {})).get("history", []))]
+    history.insert(
+        0,
+        {
+            "tick_at": utc_timestamp(),
+            "action": action,
+            "due_connector_ids": due_connector_ids,
+            "enqueued_job_ids": enqueued_job_ids,
+            "executed_run_manifest_path": workspace.relative_path(executed_run_manifest_path) if executed_run_manifest_path else "",
+        },
+    )
     payload["scheduler"] = {
         "last_tick_at": utc_timestamp(),
         "last_action": action,
         "last_due_connector_ids": due_connector_ids,
         "last_enqueued_job_ids": enqueued_job_ids,
         "last_executed_run_manifest_path": workspace.relative_path(executed_run_manifest_path) if executed_run_manifest_path else "",
+        "history": history[:50],
     }
     _write_control_plane_manifest(workspace, payload)
     return SchedulerTickResult(
@@ -316,6 +355,7 @@ def default_control_plane_manifest() -> Dict[str, object]:
             "last_due_connector_ids": [],
             "last_enqueued_job_ids": [],
             "last_executed_run_manifest_path": "",
+            "history": [],
         },
         "summary": _build_summary([], []),
     }
@@ -338,6 +378,17 @@ def _normalize_control_plane_manifest(payload: Dict[str, object]) -> Dict[str, o
             "last_due_connector_ids": [str(item) for item in list(scheduler.get("last_due_connector_ids", []))],
             "last_enqueued_job_ids": [str(item) for item in list(scheduler.get("last_enqueued_job_ids", []))],
             "last_executed_run_manifest_path": str(scheduler.get("last_executed_run_manifest_path", "")),
+            "history": [
+                {
+                    "tick_at": str(dict(item).get("tick_at", "")),
+                    "action": str(dict(item).get("action", "")),
+                    "due_connector_ids": [str(connector_id) for connector_id in list(dict(item).get("due_connector_ids", []))],
+                    "enqueued_job_ids": [str(job_id) for job_id in list(dict(item).get("enqueued_job_ids", []))],
+                    "executed_run_manifest_path": str(dict(item).get("executed_run_manifest_path", "")),
+                }
+                for item in list(scheduler.get("history", []))
+                if isinstance(item, dict)
+            ],
         },
         "summary": _build_summary(invites, tokens),
     }
@@ -364,6 +415,46 @@ def _write_control_plane_manifest(workspace: "Workspace", payload: Dict[str, obj
     )
 
 
+def _scheduler_status_payload(workspace: "Workspace") -> Dict[str, object]:
+    payload = ensure_control_plane_manifest(workspace)
+    scheduler = dict(payload.get("scheduler", {}))
+    due_connector_ids = [str(item.get("connector_id", "")) for item in list_due_connectors(workspace)]
+    return {
+        "due_connector_count": len(due_connector_ids),
+        "due_connector_ids": due_connector_ids,
+        "last_tick_at": str(scheduler.get("last_tick_at", "")),
+        "last_action": str(scheduler.get("last_action", "")),
+        "last_enqueued_job_ids": [str(item) for item in list(scheduler.get("last_enqueued_job_ids", []))],
+        "history": [dict(item) for item in list(scheduler.get("history", []))],
+    }
+
+
+def _record_scheduler_observations(workspace: "Workspace", due_connector_ids: List[str]) -> None:
+    if not workspace.connector_registry_path.exists():
+        return
+    payload = json.loads(workspace.connector_registry_path.read_text(encoding="utf-8"))
+    tick_at = utc_timestamp()
+    normalized_due_ids = {connector_id for connector_id in due_connector_ids if connector_id}
+    changed = False
+    for connector in list(payload.get("connectors", [])):
+        subscription = dict(connector.get("subscription", {}))
+        if not bool(subscription.get("enabled", False)):
+            continue
+        subscription["last_scheduler_tick_at"] = tick_at
+        if str(connector.get("connector_id", "")) in normalized_due_ids:
+            subscription["last_due_at"] = tick_at
+            subscription["last_tick_status"] = "due"
+        else:
+            subscription["last_tick_status"] = "waiting"
+        connector["subscription"] = subscription
+        changed = True
+    if changed:
+        workspace.connector_registry_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+
 def _serialize_actor(actor: Dict[str, object]) -> Dict[str, str]:
     return {
         "principal_id": str(actor.get("principal_id", "")),
@@ -385,21 +476,6 @@ def _sorted_tokens(tokens: List[Dict[str, object]]) -> List[Dict[str, object]]:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def _connector_is_due(connector: Dict[str, object]) -> bool:
-    subscription = dict(connector.get("subscription", {}))
-    if not bool(subscription.get("enabled", False)):
-        return False
-    next_sync_at = str(subscription.get("next_sync_at", "") or "").strip()
-    if not next_sync_at:
-        return True
-    try:
-        from datetime import datetime, timezone
-
-        return datetime.fromisoformat(next_sync_at) <= datetime.now(timezone.utc)
-    except ValueError:
-        return True
 
 
 class _ControlPlaneHandler(BaseHTTPRequestHandler):
@@ -430,11 +506,35 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/workspace":
+            payload = ensure_control_plane_manifest(self._workspace)
+            ensure_shared_workspace_manifest(self._workspace)
+            self._send_json(
+                200,
+                {
+                    "workspace": {
+                        "root": self._workspace.root.as_posix(),
+                        "workspace_id": payload.get("workspace_id", ""),
+                    },
+                    "sharing": sharing_summary(self._workspace),
+                    "actor": _serialize_actor(actor),
+                },
+            )
+            return
+
+        if parsed.path == "/api/scheduler":
+            self._send_json(200, _scheduler_status_payload(self._workspace))
+            return
+
         if parsed.path == "/api/jobs":
             queue_payload = {}
             if self._workspace.job_queue_manifest_path.exists():
                 queue_payload = json.loads(self._workspace.job_queue_manifest_path.read_text(encoding="utf-8"))
             self._send_json(200, queue_payload or {"jobs": [], "queued_count": 0, "job_count": 0})
+            return
+
+        if parsed.path == "/api/workers":
+            self._send_json(200, read_worker_registry(self._workspace))
             return
 
         self._send_error(404, f"Unknown control-plane endpoint: {parsed.path}")

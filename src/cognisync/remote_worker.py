@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import time
 from typing import Optional
 from urllib import error, request
 
@@ -23,6 +24,8 @@ def run_remote_worker(
     worker_id: str,
     max_jobs: Optional[int] = None,
     lease_seconds: int = 300,
+    poll_interval_seconds: float = 0.0,
+    max_idle_polls: int = 0,
 ) -> RemoteWorkerResult:
     normalized_server = server_url.rstrip("/")
     normalized_token = token.strip()
@@ -37,6 +40,7 @@ def run_remote_worker(
     processed_count = 0
     completed_count = 0
     stopped_reason = "idle"
+    idle_polls = 0
 
     while True:
         if max_jobs is not None and processed_count >= max_jobs:
@@ -50,10 +54,15 @@ def run_remote_worker(
             )
         except RemoteWorkerError as error_message:
             if "409:" in str(error_message):
+                if poll_interval_seconds > 0 and idle_polls < max(0, int(max_idle_polls)):
+                    idle_polls += 1
+                    time.sleep(poll_interval_seconds)
+                    continue
                 stopped_reason = "no_jobs"
                 break
             raise
         processed_count += 1
+        idle_polls = 0
         if str(payload.get("status", "")) == "completed":
             completed_count += 1
 

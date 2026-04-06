@@ -321,6 +321,7 @@ def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:
         "notifications": workspace.notifications_manifest_path,
         "review_actions": workspace.review_actions_manifest_path,
         "review_queue": workspace.review_queue_manifest_path,
+        "shared_workspace": workspace.shared_workspace_manifest_path,
         "sources": workspace.sources_manifest_path,
         "sync_history": workspace.sync_history_manifest_path,
         "usage": workspace.usage_manifest_path,

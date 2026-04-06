@@ -32,6 +32,7 @@ from cognisync.collaboration import (
     request_review,
     resolve_review,
 )
+from cognisync.control_plane import ensure_control_plane_manifest, load_control_plane_manifest
 from cognisync.maintenance import (
     MaintenanceError,
     accept_concept_candidate,
@@ -41,7 +42,7 @@ from cognisync.maintenance import (
     reopen_review_item,
     resolve_entity_merge,
 )
-from cognisync.connectors import ConnectorError, list_connectors, sync_all_connectors, sync_connector
+from cognisync.connectors import ConnectorError, list_connectors, list_due_connectors, sync_all_connectors, sync_connector
 from cognisync.jobs import JobError, list_jobs, read_worker_registry, run_job_worker
 from cognisync.manifests import read_json_manifest, write_workspace_manifests
 from cognisync.linter import lint_snapshot
@@ -50,6 +51,7 @@ from cognisync.observability import build_audit_manifest, build_usage_manifest, 
 from cognisync.planner import build_compile_plan
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
+from cognisync.sharing import ensure_shared_workspace_manifest, load_shared_workspace_manifest
 from cognisync.sync import list_sync_events
 from cognisync.types import IndexSnapshot
 from cognisync.utils import slugify, utc_timestamp
@@ -142,6 +144,8 @@ def render_review_ui_html(
     connectors = dict(payload.get("connectors", {}))
     connector_items = list(connectors.get("items", []))
     access = dict(payload.get("access", {}))
+    sharing = dict(payload.get("sharing", {}))
+    control_plane = dict(payload.get("control_plane", {}))
     collaboration = dict(payload.get("collaboration", {}))
     audit = dict(payload.get("audit", {}))
     usage = dict(payload.get("usage", {}))
@@ -162,6 +166,8 @@ def render_review_ui_html(
         ("Sync Events", str(sync.get("total_count", 0))),
         ("Connectors", str(connectors.get("total_count", 0))),
         ("Workspace Members", str(access.get("member_count", 0))),
+        ("Shared Peers", str(sharing.get("peer_count", 0))),
+        ("Active Tokens", str(dict(control_plane.get("summary", {})).get("active_token_count", 0))),
         ("Collaboration Threads", str(collaboration.get("thread_count", 0))),
         ("Audit Events", str(audit.get("total_count", 0))),
         ("Notifications", str(notifications.get("total_count", 0))),
@@ -285,6 +291,14 @@ def render_review_ui_html(
             "        <article class=\"panel\">",
             "          <h2>Workspace Access</h2>",
             _render_access_summary(access),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Shared Workspace</h2>",
+            _render_sharing_summary(sharing),
+            "        </article>",
+            "        <article class=\"panel\">",
+            "          <h2>Control Plane</h2>",
+            _render_control_plane_summary(control_plane),
             "        </article>",
             "        <article class=\"panel\">",
             "          <h2>Collaboration</h2>",
@@ -434,6 +448,8 @@ def build_review_ui_state(
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
     access = _build_access_summary(workspace, actor_id=actor_id)
+    sharing = _build_sharing_summary(workspace)
+    control_plane = _build_control_plane_summary(workspace)
     collaboration = _build_collaboration_summary(workspace)
     workers = _build_worker_summary(workspace)
     audit = _build_audit_history(workspace)
@@ -454,6 +470,8 @@ def build_review_ui_state(
             "connector_registry_path": workspace.relative_path(workspace.connector_registry_path),
             "notifications_manifest_path": workspace.relative_path(workspace.notifications_manifest_path),
             "access_manifest_path": workspace.relative_path(workspace.access_manifest_path),
+            "shared_workspace_manifest_path": workspace.relative_path(workspace.shared_workspace_manifest_path),
+            "control_plane_manifest_path": workspace.relative_path(workspace.control_plane_manifest_path),
             "collaboration_manifest_path": workspace.relative_path(workspace.collaboration_manifest_path),
             "audit_manifest_path": workspace.relative_path(workspace.audit_manifest_path),
             "usage_manifest_path": workspace.relative_path(workspace.usage_manifest_path),
@@ -468,6 +486,8 @@ def build_review_ui_state(
         "sync": sync,
         "connectors": connectors,
         "access": access,
+        "sharing": sharing,
+        "control_plane": control_plane,
         "collaboration": collaboration,
         "audit": audit,
         "usage": usage,
@@ -729,6 +749,21 @@ def _render_connector_global_actions() -> str:
     return _render_inline_form("/api/connectors/sync-all", [], "Sync all connectors")
 
 
+def _format_connector_schedule(subscription: Dict[str, object]) -> str:
+    if not bool(subscription.get("enabled", False)):
+        return "schedule: disabled"
+    schedule_type = str(subscription.get("schedule_type", "interval"))
+    if schedule_type == "weekly":
+        weekdays = ",".join(str(item) for item in list(subscription.get("weekdays", []))) or "?"
+        hour = int(subscription.get("hour", 0) or 0)
+        minute = int(subscription.get("minute", 0) or 0)
+        return f"schedule: weekly {weekdays} at {hour:02d}:{minute:02d}"
+    interval_hours = subscription.get("interval_hours")
+    if interval_hours is None:
+        return "schedule: enabled"
+    return f"schedule: every {interval_hours}h"
+
+
 def _render_inline_form(
     action: str,
     hidden_fields: Sequence[tuple[str, str]],
@@ -984,6 +1019,7 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
         label = escape(str(item.get("label", "")))
         source = escape(str(item.get("source", "")))
         kind = escape(str(item.get("kind", "")))
+        schedule_label = escape(str(item.get("schedule_label", "")) or "-")
         created_by_id = escape(str(item.get("created_by_id", "")) or "-")
         last_synced_at = escape(str(item.get("last_synced_at", "")) or "-")
         lines.extend(
@@ -996,7 +1032,9 @@ def _render_connector_summary(connectors: Dict[str, object]) -> str:
                     + label
                     + "</a></strong><br><span class=\"muted\"><code>"
                     + source
-                    + "</code></span></td>"
+                    + "</code></span><br><span class=\"muted\">"
+                    + schedule_label
+                    + "</span></td>"
                 ),
                 f"                <td>{kind}</td>",
                 f"                <td>{created_by_id}</td>",
@@ -1065,6 +1103,69 @@ def _render_access_summary(access: Dict[str, object]) -> str:
             ]
         )
     lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_sharing_summary(sharing: Dict[str, object]) -> str:
+    peers = list(sharing.get("peers", []))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">peers <strong>{escape(str(sharing.get('peer_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">accepted <strong>{escape(str(sharing.get('accepted_peer_count', 0)))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{escape(str(sharing.get('manifest_path', '')))}</code></p>",
+        f"          <p class=\"muted\">published control plane: <code>{escape(str(sharing.get('published_control_plane_url', '') or 'unbound'))}</code></p>",
+    ]
+    if not peers:
+        lines.append("          <p class=\"empty\">No shared peers recorded.</p>")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "          <table>",
+            "            <thead><tr><th>Peer</th><th>Role</th><th>Status</th></tr></thead>",
+            "            <tbody>",
+        ]
+    )
+    for peer in peers[:8]:
+        lines.extend(
+            [
+                "              <tr>",
+                f"                <td><strong>{escape(str(peer.get('display_name', peer.get('peer_id', ''))))}</strong><br><span class=\"muted\"><code>{escape(str(peer.get('peer_id', '')))}</code></span></td>",
+                f"                <td>{escape(str(peer.get('role', '')))}</td>",
+                f"                <td>{escape(str(peer.get('status', '')))}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    return "\n".join(lines)
+
+
+def _render_control_plane_summary(control_plane: Dict[str, object]) -> str:
+    summary = dict(control_plane.get("summary", {}))
+    scheduler = dict(control_plane.get("scheduler", {}))
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">tokens <strong>{escape(str(summary.get('active_token_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">due connectors <strong>{escape(str(control_plane.get('due_connector_count', 0)))}</strong></span>",
+        "          </div>",
+        f"          <p class=\"muted\">manifest: <code>{escape(str(control_plane.get('manifest_path', '')))}</code></p>",
+        f"          <p class=\"muted\">last scheduler action: <code>{escape(str(scheduler.get('last_action', '') or 'none'))}</code></p>",
+    ]
+    due_connector_ids = list(control_plane.get("due_connector_ids", []))
+    if due_connector_ids:
+        lines.append("          <p class=\"muted\">due: " + ", ".join(f"<code>{escape(str(item))}</code>" for item in due_connector_ids) + "</p>")
+    history = list(control_plane.get("history", []))
+    if history:
+        lines.extend(["          <h3>Recent Scheduler History</h3>", "          <ul>"])
+        for entry in history[:6]:
+            lines.append(
+                "            <li><code>"
+                + escape(str(entry.get("tick_at", "")))
+                + "</code> "
+                + escape(str(entry.get("action", "")))
+                + "</li>"
+            )
+        lines.append("          </ul>")
     return "\n".join(lines)
 
 
@@ -1890,6 +1991,7 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
                 "kind": kind,
                 "name": str(connector.get("name", "")),
                 "source": str(connector.get("source", "")),
+                "schedule_label": _format_connector_schedule(dict(connector.get("subscription", {}))),
                 "created_by_id": str(created_by.get("principal_id", "")),
                 "updated_by_id": str(updated_by.get("principal_id", "")),
                 "last_synced_by_id": str(last_synced_by.get("principal_id", "")),
@@ -1920,6 +2022,37 @@ def _build_connector_registry(workspace: Workspace, limit: int = 24) -> Dict[str
         "synced_count": sum(1 for connector in connectors if connector.get("last_synced_at")),
         "counts_by_kind": dict(counts_by_kind),
         "items": items[:limit],
+    }
+
+
+def _build_sharing_summary(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
+    ensure_shared_workspace_manifest(workspace)
+    payload = load_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    return {
+        "manifest_path": workspace.relative_path(workspace.shared_workspace_manifest_path),
+        "workspace_id": str(payload.get("workspace_id", "")),
+        "workspace_name": str(payload.get("workspace_name", "")),
+        "published_control_plane_url": str(payload.get("published_control_plane_url", "")),
+        "peer_count": len(peers),
+        "accepted_peer_count": sum(1 for peer in peers if str(peer.get("status", "")) == "accepted"),
+        "pending_peer_count": sum(1 for peer in peers if str(peer.get("status", "")) == "pending"),
+        "peers": peers[:limit],
+    }
+
+
+def _build_control_plane_summary(workspace: Workspace) -> Dict[str, object]:
+    payload = load_control_plane_manifest(workspace)
+    summary = dict(payload.get("summary", {}))
+    scheduler = dict(payload.get("scheduler", {}))
+    due_connector_ids = [str(connector.get("connector_id", "")) for connector in list_due_connectors(workspace)]
+    return {
+        "manifest_path": workspace.relative_path(workspace.control_plane_manifest_path),
+        "summary": summary,
+        "scheduler": scheduler,
+        "due_connector_count": len(due_connector_ids),
+        "due_connector_ids": due_connector_ids,
+        "history": [dict(item) for item in list(scheduler.get("history", []))[:12]],
     }
 
 
