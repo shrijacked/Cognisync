@@ -26,7 +26,14 @@ from cognisync.collaboration import (
     request_review,
     resolve_review,
 )
-from cognisync.connectors import connector_subscription_is_due, list_connectors, list_due_connectors, sync_all_connectors
+from cognisync.connectors import (
+    ConnectorSyncResult,
+    connector_subscription_is_due,
+    list_connectors,
+    list_due_connectors,
+    sync_all_connectors,
+    sync_connector,
+)
 from cognisync.jobs import (
     JobError,
     claim_next_job,
@@ -42,7 +49,10 @@ from cognisync.sharing import (
     list_due_shared_peer_syncs,
     load_shared_workspace_manifest,
     record_shared_peer_scheduler_tick,
+    set_shared_trust_policy,
     sharing_summary,
+    subscribe_shared_peer_sync,
+    unsubscribe_shared_peer_sync,
 )
 from cognisync.utils import slugify, utc_timestamp
 
@@ -498,6 +508,28 @@ def _find_collaboration_thread(workspace: "Workspace", artifact_path: str) -> Di
     return {}
 
 
+def _connector_summary_payload(workspace: "Workspace") -> Dict[str, object]:
+    connectors = list_connectors(workspace)
+    due_connector_ids = [str(item.get("connector_id", "")) for item in list_due_connectors(workspace)]
+    return {
+        "connector_count": len(connectors),
+        "due_connector_count": len(due_connector_ids),
+        "due_connector_ids": due_connector_ids,
+    }
+
+
+def _serialize_connector_sync_result(workspace: "Workspace", result: ConnectorSyncResult) -> Dict[str, object]:
+    return {
+        "connector_id": result.connector_id,
+        "connector_kind": result.connector_kind,
+        "synced_count": result.synced_count,
+        "registry_path": workspace.relative_path(result.registry_path),
+        "change_summary_path": workspace.relative_path(result.change_summary_path),
+        "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+        "result_paths": [workspace.relative_path(path) for path in result.result_paths],
+    }
+
+
 def _record_scheduler_observations(workspace: "Workspace", due_connector_ids: List[str]) -> None:
     if not workspace.connector_registry_path.exists():
         return
@@ -661,6 +693,17 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"actor": _serialize_actor(actor), **payload})
             return
 
+        if parsed.path == "/api/connectors":
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    "summary": _connector_summary_payload(self._workspace),
+                    "connectors": [dict(item) for item in list_connectors(self._workspace)],
+                },
+            )
+            return
+
         if parsed.path == "/api/scheduler":
             self._send_json(200, _scheduler_status_payload(self._workspace))
             return
@@ -815,6 +858,86 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     actor_id=str(actor.get("principal_id", "")),
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), "thread": thread})
+                return
+            if parsed.path == "/api/share/set-policy":
+                actor = self._authenticate(["control.read"])
+                updated = set_shared_trust_policy(
+                    self._workspace,
+                    actor_id=str(actor.get("principal_id", "")),
+                    allow_remote_workers=payload.get("allow_remote_workers"),
+                    allow_sync_imports_from_peers=payload.get("allow_sync_imports_from_peers"),
+                    default_peer_role=str(payload.get("default_peer_role", "")) or None,
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "trust_policy": dict(updated.get("trust_policy", {})),
+                        "summary": sharing_summary(self._workspace),
+                    },
+                )
+                return
+            if parsed.path == "/api/share/subscribe-sync":
+                actor = self._authenticate(["control.read"])
+                peer = subscribe_shared_peer_sync(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_ref", "")),
+                    every_hours=int(payload.get("every_hours", 0) or 0),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "peer": peer})
+                return
+            if parsed.path == "/api/share/unsubscribe-sync":
+                actor = self._authenticate(["control.read"])
+                peer = unsubscribe_shared_peer_sync(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_ref", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "peer": peer})
+                return
+            if parsed.path == "/api/connectors/sync":
+                actor = self._authenticate(["connectors.sync"])
+                result = sync_connector(
+                    self._workspace,
+                    connector_id=str(payload.get("connector_id", "")),
+                    force=bool(payload.get("force", False)),
+                    actor=actor,
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "result": _serialize_connector_sync_result(self._workspace, result),
+                    },
+                )
+                return
+            if parsed.path == "/api/connectors/sync-all":
+                actor = self._authenticate(["connectors.sync"])
+                result = sync_all_connectors(
+                    self._workspace,
+                    force=bool(payload.get("force", False)),
+                    limit=int(payload["limit"]) if payload.get("limit") is not None else None,
+                    scheduled_only=bool(payload.get("scheduled_only", False)),
+                    actor=actor,
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "summary": {
+                            "connector_count": result.connector_count,
+                            "synced_connector_count": result.synced_connector_count,
+                            "total_result_count": result.total_result_count,
+                            "registry_path": self._workspace.relative_path(result.registry_path),
+                            "run_manifest_path": self._workspace.relative_path(result.run_manifest_path),
+                        },
+                        "connector_results": [
+                            _serialize_connector_sync_result(self._workspace, item)
+                            for item in result.connector_results
+                        ],
+                    },
+                )
                 return
         except (CollaborationError, AccessError) as error:
             message = str(error)
