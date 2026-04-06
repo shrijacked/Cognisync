@@ -80,6 +80,7 @@ from cognisync.sharing import (
     subscribe_shared_peer_sync,
     unsubscribe_shared_peer_sync,
 )
+from cognisync.sync import list_sync_events
 from cognisync.utils import slugify, utc_timestamp
 
 if TYPE_CHECKING:
@@ -571,6 +572,99 @@ def _review_payload(workspace: "Workspace") -> Dict[str, object]:
     }
 
 
+def _run_history_payload(workspace: "Workspace") -> Dict[str, object]:
+    items: List[Dict[str, object]] = []
+    counts_by_kind: Dict[str, int] = {}
+    counts_by_status: Dict[str, int] = {}
+    manifests = sorted(workspace.runs_dir.glob("*.json"), reverse=True)
+    for path in manifests:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        run_kind = str(manifest.get("run_kind", "unknown"))
+        status = str(manifest.get("status", "unknown"))
+        counts_by_kind[run_kind] = counts_by_kind.get(run_kind, 0) + 1
+        counts_by_status[status] = counts_by_status.get(status, 0) + 1
+        items.append(
+            {
+                "run_id": path.stem,
+                "run_kind": run_kind,
+                "status": status,
+                "generated_at": str(manifest.get("generated_at", "")),
+                "mode": str(manifest.get("mode", "")),
+                "label": str(manifest.get("run_label", manifest.get("question", path.stem))),
+                "question": str(manifest.get("question", "")),
+                "path": workspace.relative_path(path),
+            }
+        )
+    return {
+        "items": items,
+        "summary": {
+            "total_count": len(items),
+            "counts_by_kind": dict(sorted(counts_by_kind.items())),
+            "counts_by_status": dict(sorted(counts_by_status.items())),
+        },
+        "state_paths": {
+            "runs_dir": workspace.relative_path(workspace.runs_dir),
+        },
+    }
+
+
+def _sync_history_payload(workspace: "Workspace") -> Dict[str, object]:
+    events = list_sync_events(workspace)
+    counts_by_operation: Dict[str, int] = {}
+    items: List[Dict[str, object]] = []
+    for event in events:
+        operation = str(event.get("operation", "unknown"))
+        counts_by_operation[operation] = counts_by_operation.get(operation, 0) + 1
+        items.append(
+            {
+                "sync_id": str(event.get("sync_id", "")),
+                "operation": operation,
+                "status": str(event.get("status", "")),
+                "generated_at": str(event.get("generated_at", "")),
+                "file_count": int(event.get("file_count", 0) or 0),
+                "path": workspace.relative_path(workspace.sync_manifests_dir / f"{event.get('sync_id', '')}.json"),
+                "bundle_dir_relative": str(event.get("bundle_dir_relative", "")),
+            }
+        )
+    return {
+        "items": items,
+        "summary": {
+            "total_count": len(items),
+            "counts_by_operation": dict(sorted(counts_by_operation.items())),
+        },
+        "state_paths": {
+            "history_manifest_path": workspace.relative_path(workspace.sync_history_manifest_path),
+            "manifests_dir": workspace.relative_path(workspace.sync_manifests_dir),
+        },
+    }
+
+
+def _change_summary_payload(workspace: "Workspace") -> Dict[str, object]:
+    items: List[Dict[str, object]] = []
+    counts_by_trigger: Dict[str, int] = {}
+    files = sorted(workspace.change_summaries_dir.glob("*.md"), reverse=True) if workspace.change_summaries_dir.exists() else []
+    for path in files:
+        trigger = path.stem.split("-", 1)[0] if "-" in path.stem else path.stem
+        counts_by_trigger[trigger] = counts_by_trigger.get(trigger, 0) + 1
+        items.append(
+            {
+                "name": path.name,
+                "trigger": trigger,
+                "path": workspace.relative_path(path),
+            }
+        )
+    return {
+        "items": items,
+        "summary": {
+            "total_count": len(items),
+            "counts_by_trigger": dict(sorted(counts_by_trigger.items())),
+        },
+        "state_paths": {
+            "change_summaries_dir": workspace.relative_path(workspace.change_summaries_dir),
+        },
+    }
+
+
 def _serialize_connector_sync_result(workspace: "Workspace", result: ConnectorSyncResult) -> Dict[str, object]:
     return {
         "connector_id": result.connector_id,
@@ -789,6 +883,18 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
             if self._workspace.job_queue_manifest_path.exists():
                 queue_payload = json.loads(self._workspace.job_queue_manifest_path.read_text(encoding="utf-8"))
             self._send_json(200, queue_payload or {"jobs": [], "queued_count": 0, "job_count": 0})
+            return
+
+        if parsed.path == "/api/runs":
+            self._send_json(200, {"actor": _serialize_actor(actor), **_run_history_payload(self._workspace)})
+            return
+
+        if parsed.path == "/api/sync":
+            self._send_json(200, {"actor": _serialize_actor(actor), **_sync_history_payload(self._workspace)})
+            return
+
+        if parsed.path == "/api/change-summaries":
+            self._send_json(200, {"actor": _serialize_actor(actor), **_change_summary_payload(self._workspace)})
             return
 
         if parsed.path == "/api/workers":

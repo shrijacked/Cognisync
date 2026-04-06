@@ -24,6 +24,7 @@
 - added `cognisync access list|grant|revoke` plus `.cognisync/access.json` so workspace roles now persist as first-class file-native state
 - added `cognisync collab list|request-review|comment|approve|request-changes|resolve` plus `.cognisync/collaboration.json` so artifact-level review threads now persist as first-class workspace state
 - added `GET /api/review` plus remote review actions over the hosted control plane, so concept acceptance, merge resolution, backlink promotion, conflict filing, and dismissal management can all happen over token-backed HTTP
+- added `GET /api/runs`, `GET /api/sync`, and `GET /api/change-summaries` over the hosted control plane, so remote operators can inspect execution history and corpus deltas without local shell access
 - taught default reviewer and operator control-plane tokens to include `review.run`, while still keeping review mutations gated by the workspace role roster
 - added `cognisync audit list` plus `.cognisync/audit.json` so runs, jobs, sync events, connectors, and access state now materialize into a readable audit index
 - added `cognisync usage report` plus `.cognisync/usage.json` so the workspace can derive counts for runs, jobs, connectors, sync volume, roles, collaboration, and storage

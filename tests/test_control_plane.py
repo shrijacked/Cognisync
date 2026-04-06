@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import threading
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 from tests import support  # noqa: F401
 
 from cognisync.cli import main
+from cognisync.config import LLMProfile, load_config, save_config
 from cognisync.control_plane import create_control_plane_server
 from cognisync.remote_worker import run_remote_worker
 from cognisync.workspace import Workspace
@@ -617,6 +619,102 @@ class ControlPlaneTests(unittest.TestCase):
                 payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(response.status, 403)
                 self.assertIn("review.run", payload["error"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_exposes_run_sync_and_change_summary_history_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted History Surface Workspace")
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["researcher"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use structured memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--profile",
+                        "researcher",
+                        "--mode",
+                        "memo",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["sync", "export", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+
+            reviewer_token_path = Path(tmp) / "reviewer-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(reviewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            reviewer_token = json.loads(reviewer_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/runs", headers={"Authorization": f"Bearer {reviewer_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertGreaterEqual(payload["summary"]["total_count"], 1)
+                self.assertTrue(any(item["run_kind"] == "research" for item in payload["items"]))
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/sync", headers={"Authorization": f"Bearer {reviewer_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["summary"]["total_count"], 1)
+                self.assertEqual(payload["items"][0]["operation"], "export")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/change-summaries", headers={"Authorization": f"Bearer {reviewer_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertGreaterEqual(payload["summary"]["total_count"], 2)
+                triggers = {item["trigger"] for item in payload["items"]}
+                self.assertIn("scan", triggers)
+                self.assertIn("research", triggers)
                 connection.close()
             finally:
                 server.shutdown()
