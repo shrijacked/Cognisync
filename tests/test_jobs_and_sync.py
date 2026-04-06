@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,103 @@ from cognisync.config import LLMProfile, load_config, save_config
 
 
 class JobsAndSyncTests(unittest.TestCase):
+    def test_jobs_worker_can_execute_remote_style_ingest_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Queued Ingest Workspace"]), 0)
+
+            repo_dir = Path(tmp) / "repo-source"
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            (repo_dir / "README.md").write_text("# Remote Sample\n\nTracked by queued ingest.\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "seed repo"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+            page_one = Path(tmp) / "page-one.html"
+            page_two = Path(tmp) / "page-two.html"
+            page_one.write_text(
+                "<html><head><title>Page One</title></head><body><p>First captured page.</p></body></html>",
+                encoding="utf-8",
+            )
+            page_two.write_text(
+                "<html><head><title>Page Two</title></head><body><p>Second captured page.</p></body></html>",
+                encoding="utf-8",
+            )
+            sitemap = Path(tmp) / "sitemap.xml"
+            sitemap.write_text(
+                "\n".join(
+                    [
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+                        "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">",
+                        f"  <url><loc>{page_one.resolve().as_uri()}</loc></url>",
+                        f"  <url><loc>{page_two.resolve().as_uri()}</loc></url>",
+                        "</urlset>",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "ingest-url",
+                        "data:text/html;charset=utf-8,<html><head><title>Queued URL</title></head><body><p>Queued body.</p></body></html>",
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "queued-url",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "ingest-repo",
+                        repo_dir.resolve().as_uri(),
+                        "--workspace",
+                        str(root),
+                        "--name",
+                        "queued-repo",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "ingest-sitemap",
+                        sitemap.resolve().as_uri(),
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            self.assertEqual(main(["jobs", "work", "--workspace", str(root), "--max-jobs", "3"]), 0)
+
+            self.assertTrue((root / "raw" / "urls" / "queued-url.md").exists())
+            self.assertTrue((root / "raw" / "repos" / "queued-repo.md").exists())
+            self.assertTrue((root / "raw" / "urls" / "page-one.md").exists())
+            self.assertTrue((root / "raw" / "urls" / "page-two.md").exists())
+
+            queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+            self.assertEqual(queue_payload["queued_count"], 0)
+            self.assertEqual(queue_payload["status_counts"]["completed"], 3)
+
+            run_manifests = sorted((root / ".cognisync" / "runs").glob("ingest-*.json"))
+            self.assertEqual(len(run_manifests), 3)
+
     def test_jobs_enqueue_cli_enforces_operator_role(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

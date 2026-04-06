@@ -247,7 +247,7 @@ The served API now covers a real remote review surface too:
 - `POST /api/share/set-policy`, `subscribe-sync`, and `unsubscribe-sync` let operator tokens manage shared-workspace trust policy and scheduled peer exports remotely
 - `POST /api/share/invite-peer`, `accept-peer`, and `issue-peer-bundle` let operator tokens prepare remote peer handoffs over HTTP too
 - `GET /api/connectors` plus `POST /api/connectors/add`, `subscribe`, `unsubscribe`, `sync`, and `sync-all` let the hosted-alpha layer inspect and execute connector work without falling back to a local shell
-- `POST /api/jobs/enqueue/research|compile|lint|maintain|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
+- `POST /api/jobs/enqueue/research|compile|lint|maintain|ingest-url|ingest-repo|ingest-sitemap|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
 
 ### `worker remote`
 
@@ -432,6 +432,9 @@ Supported paths in this release:
 
 - `cognisync jobs enqueue research --profile codex "..." --actor-id local-operator`
 - `cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat --actor-id local-operator`
+- `cognisync jobs enqueue ingest-url https://example.com/paper --name paper-source --actor-id local-operator`
+- `cognisync jobs enqueue ingest-repo https://github.com/example/research-repo --name research-repo --actor-id local-operator`
+- `cognisync jobs enqueue ingest-sitemap https://example.com/sitemap.xml --actor-id local-operator`
 - `cognisync jobs enqueue compile --actor-id local-operator`
 - `cognisync jobs enqueue lint --actor-id local-operator`
 - `cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2 --actor-id local-operator`
@@ -454,7 +457,7 @@ The command family:
 3. requires an operator actor for queue submission and retry mutations, so scheduler-facing actions obey the same workspace role model as sync and the review UI
 4. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
 5. can renew that lease with `jobs heartbeat`, so long-running workers do not need to drop and reclaim ownership just to stay alive
-6. reuses the same `research`, `improve research`, `compile`, `lint`, `maintain`, `connector sync`, `connector sync-all`, and peer-scoped `sync export` runtimes when a worker executes queued jobs
+6. reuses the same `research`, `improve research`, `ingest`, `compile`, `lint`, `maintain`, `connector sync`, `connector sync-all`, and peer-scoped `sync export` runtimes when a worker executes queued jobs
 7. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
 8. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
 9. records result paths back into the job manifest instead of dropping that state into terminal-only output

@@ -266,7 +266,7 @@ The operator loop now has a review layer too:
 - `cognisync control-plane workers` surfaces the derived worker registry through the hosted-alpha layer too, so active and idle remote operators are inspectable without scraping queue manifests
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, the workspace roster, and collaboration activity
 - `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, storage bytes, and collaboration threads
-- `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, `jobs workers`, and `jobs list` provide a persisted local queue plus retry lineage, renewable worker leases, and a file-native worker roster for remote-style research, compile, lint, maintenance, and scheduled connector execution, and queue submission/retry now accepts `--actor-id` so only operator principals can schedule work
+- `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, `jobs workers`, and `jobs list` provide a persisted local queue plus retry lineage, renewable worker leases, and a file-native worker roster for remote-style research, compile, lint, maintenance, ingest, and scheduled connector execution, and queue submission/retry now accepts `--actor-id` so only operator principals can schedule work
 - `cognisync worker remote --server-url ... --token ...` polls the hosted-alpha control plane and executes queued jobs against the same manifest-backed runtime, so another process can drain work without sharing a shell session
 - `cognisync worker remote --poll-interval-seconds 2 --max-idle-polls 30` lets a remote worker stay attached to the control plane long enough to catch future jobs instead of exiting immediately when the queue is briefly empty
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, attribute every export/import event to an explicit workspace actor, and can scope bundle exchange to an accepted shared peer with `--for-peer` and `--from-peer`
@@ -354,7 +354,7 @@ That layer keeps the same filesystem-first contract:
 - the same served control plane now also accepts shared-workspace policy updates plus peer sync subscription changes over HTTP, so trust policy and scheduled peer exports can be managed remotely without hand-editing manifests
 - the same served control plane now also accepts peer invites, peer acceptance, and peer bundle issuance over HTTP, so remote operator handoffs can be prepared through the hosted-alpha surface too
 - connector registry state is now readable at `/api/connectors`, and operator tokens can add connectors, manage subscriptions, or trigger `/api/connectors/sync` and `/api/connectors/sync-all` remotely through the same hosted-alpha surface
-- job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`
+- job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, ingest, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`
 - sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace
 
 ```mermaid
@@ -426,6 +426,9 @@ You can now stage remote-style work locally instead of running everything immedi
 ```bash
 cognisync jobs enqueue research --profile codex "map the open questions in this corpus"
 cognisync jobs enqueue improve-research --profile codex --provider-format openai-chat
+cognisync jobs enqueue ingest-url https://example.com/paper --name paper-source
+cognisync jobs enqueue ingest-repo https://github.com/example/research-repo --name research-repo
+cognisync jobs enqueue ingest-sitemap https://example.com/sitemap.xml
 cognisync jobs enqueue compile
 cognisync jobs enqueue lint
 cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2
@@ -448,6 +451,7 @@ cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /
 
 - `jobs enqueue research` persists a queued research manifest under `.cognisync/jobs/manifests/`
 - `jobs enqueue improve-research` queues the one-shot correction-and-training loop for later execution
+- `jobs enqueue ingest-url`, `jobs enqueue ingest-repo`, and `jobs enqueue ingest-sitemap` let workers grow the raw corpus through the same leased queue model as the rest of the operator loop
 - `jobs enqueue compile`, `jobs enqueue lint`, and `jobs enqueue maintain` let the same queue drive the rest of the operator loop instead of only question answering
 - `jobs enqueue connector-sync <connector-id>` lets connector pulls land through the same worker and audit path
 - `jobs enqueue connector-sync-all --scheduled-only` lets the queue execute only due connector subscriptions instead of re-walking the whole registry

@@ -82,6 +82,9 @@ from cognisync.jobs import (
     enqueue_compile_job,
     enqueue_connector_sync_job,
     enqueue_connector_sync_all_job,
+    enqueue_ingest_repo_job,
+    enqueue_ingest_sitemap_job,
+    enqueue_ingest_url_job,
     enqueue_improve_research_job,
     enqueue_lint_job,
     enqueue_maintain_job,
@@ -382,6 +385,63 @@ def cmd_jobs_enqueue_sync_export(args: argparse.Namespace) -> int:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Queued sync-export job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_ingest_url(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_ingest_url_job(
+            workspace,
+            url=args.url,
+            name=args.name,
+            force=args.force,
+            requested_by=actor,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Queued ingest-url job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_ingest_repo(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_ingest_repo_job(
+            workspace,
+            source=args.source,
+            name=args.name,
+            force=args.force,
+            requested_by=actor,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Queued ingest-repo job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_ingest_sitemap(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_ingest_sitemap_job(
+            workspace,
+            source=args.source,
+            force=args.force,
+            limit=args.limit,
+            requested_by=actor,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Queued ingest-sitemap job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
 
@@ -2377,6 +2437,39 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_sync_export_parser.add_argument("--output-dir", default=None)
     jobs_enqueue_sync_export_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_sync_export_parser.set_defaults(func=cmd_jobs_enqueue_sync_export)
+
+    jobs_enqueue_ingest_url_parser = jobs_enqueue_subparsers.add_parser(
+        "ingest-url",
+        help="Queue a URL ingest job for later worker execution",
+    )
+    jobs_enqueue_ingest_url_parser.add_argument("url")
+    jobs_enqueue_ingest_url_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_ingest_url_parser.add_argument("--name", default=None)
+    jobs_enqueue_ingest_url_parser.add_argument("--force", action="store_true")
+    jobs_enqueue_ingest_url_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    jobs_enqueue_ingest_url_parser.set_defaults(func=cmd_jobs_enqueue_ingest_url)
+
+    jobs_enqueue_ingest_repo_parser = jobs_enqueue_subparsers.add_parser(
+        "ingest-repo",
+        help="Queue a repository ingest job for later worker execution",
+    )
+    jobs_enqueue_ingest_repo_parser.add_argument("source")
+    jobs_enqueue_ingest_repo_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_ingest_repo_parser.add_argument("--name", default=None)
+    jobs_enqueue_ingest_repo_parser.add_argument("--force", action="store_true")
+    jobs_enqueue_ingest_repo_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    jobs_enqueue_ingest_repo_parser.set_defaults(func=cmd_jobs_enqueue_ingest_repo)
+
+    jobs_enqueue_ingest_sitemap_parser = jobs_enqueue_subparsers.add_parser(
+        "ingest-sitemap",
+        help="Queue a sitemap ingest job for later worker execution",
+    )
+    jobs_enqueue_ingest_sitemap_parser.add_argument("source")
+    jobs_enqueue_ingest_sitemap_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_ingest_sitemap_parser.add_argument("--force", action="store_true")
+    jobs_enqueue_ingest_sitemap_parser.add_argument("--limit", type=int, default=None)
+    jobs_enqueue_ingest_sitemap_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    jobs_enqueue_ingest_sitemap_parser.set_defaults(func=cmd_jobs_enqueue_ingest_sitemap)
 
     jobs_enqueue_lint_parser = jobs_enqueue_subparsers.add_parser(
         "lint",

@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1194,6 +1195,153 @@ class ControlPlaneTests(unittest.TestCase):
                 self.assertEqual(response.status, 403)
                 self.assertIn("jobs.run", payload["error"])
                 connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_can_enqueue_remote_ingest_jobs_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Remote Ingest Workspace")
+
+            repo_dir = Path(tmp) / "repo-source"
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            (repo_dir / "README.md").write_text("# Remote Sample\n\nTracked by ingest.\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "seed repo"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+            page_one = Path(tmp) / "page-one.html"
+            page_two = Path(tmp) / "page-two.html"
+            page_one.write_text(
+                "<html><head><title>Page One</title></head><body><p>First captured page.</p></body></html>",
+                encoding="utf-8",
+            )
+            page_two.write_text(
+                "<html><head><title>Page Two</title></head><body><p>Second captured page.</p></body></html>",
+                encoding="utf-8",
+            )
+            sitemap = Path(tmp) / "sitemap.xml"
+            sitemap.write_text(
+                "\n".join(
+                    [
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+                        "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">",
+                        f"  <url><loc>{page_one.resolve().as_uri()}</loc></url>",
+                        f"  <url><loc>{page_two.resolve().as_uri()}</loc></url>",
+                        "</urlset>",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/ingest-url",
+                    body=json.dumps(
+                        {
+                            "url": "data:text/html;charset=utf-8,<html><head><title>Remote Notes</title></head><body><p>Remote ingest body.</p></body></html>",
+                            "name": "remote-notes",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["job"]["job_type"], "ingest_url")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/ingest-repo",
+                    body=json.dumps({"source": repo_dir.resolve().as_uri(), "name": "remote-sample"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["job"]["job_type"], "ingest_repo")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/ingest-sitemap",
+                    body=json.dumps({"source": sitemap.resolve().as_uri()}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["job"]["job_type"], "ingest_sitemap")
+                connection.close()
+
+                self.assertEqual(
+                    main(
+                        [
+                            "worker",
+                            "remote",
+                            "--server-url",
+                            f"http://{host}:{port}",
+                            "--token",
+                            operator_token,
+                            "--worker-id",
+                            "remote-ingest",
+                            "--max-jobs",
+                            "3",
+                        ]
+                    ),
+                    0,
+                )
+
+                self.assertTrue((root / "raw" / "urls" / "remote-notes.md").exists())
+                self.assertTrue((root / "raw" / "repos" / "remote-sample.md").exists())
+                self.assertTrue((root / "raw" / "urls" / "page-one.md").exists())
+                self.assertTrue((root / "raw" / "urls" / "page-two.md").exists())
+
+                queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+                self.assertEqual(queue_payload["queued_count"], 0)
+                self.assertEqual(queue_payload["status_counts"]["completed"], 3)
             finally:
                 server.shutdown()
                 server.server_close()

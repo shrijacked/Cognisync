@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.compile_flow import run_compile_cycle
 from cognisync.connectors import sync_all_connectors, sync_connector
+from cognisync.ingest import ingest_repo, ingest_sitemap, ingest_url
 from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.linter import lint_snapshot
 from cognisync.maintenance import run_maintenance_cycle
@@ -171,6 +173,66 @@ def enqueue_sync_export_job(
         {
             "peer_ref": peer_ref,
             "output_dir": output_dir,
+        },
+        requested_by=requested_by,
+    )
+
+
+def enqueue_ingest_url_job(
+    workspace: Workspace,
+    url: str,
+    name: Optional[str] = None,
+    force: bool = False,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
+    return _enqueue_job(
+        workspace,
+        "ingest_url",
+        name or url,
+        {
+            "url": url,
+            "name": name,
+            "force": force,
+        },
+        requested_by=requested_by,
+    )
+
+
+def enqueue_ingest_repo_job(
+    workspace: Workspace,
+    source: str,
+    name: Optional[str] = None,
+    force: bool = False,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
+    return _enqueue_job(
+        workspace,
+        "ingest_repo",
+        name or source,
+        {
+            "source": source,
+            "name": name,
+            "force": force,
+        },
+        requested_by=requested_by,
+    )
+
+
+def enqueue_ingest_sitemap_job(
+    workspace: Workspace,
+    source: str,
+    force: bool = False,
+    limit: Optional[int] = None,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
+    return _enqueue_job(
+        workspace,
+        "ingest_sitemap",
+        source,
+        {
+            "source": source,
+            "force": force,
+            "limit": limit,
         },
         requested_by=requested_by,
     )
@@ -513,6 +575,113 @@ def run_next_job(
 def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, object]:
     job_type = str(job.get("job_type", ""))
     parameters = dict(job.get("parameters", {}))
+    if job_type == "ingest_url":
+        previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
+        result = ingest_url(
+            workspace,
+            url=str(parameters.get("url", "")),
+            name=_optional_string(parameters.get("name")),
+            force=bool(parameters.get("force", False)),
+        )
+        snapshot = workspace.refresh_index()
+        write_workspace_manifests(workspace, snapshot)
+        change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+        run_manifest_path = write_run_manifest(
+            workspace,
+            "ingest",
+            {
+                "run_label": f"ingest-url-{result.path.stem}",
+                "status": "completed",
+                "source_kind": "url",
+                "result_paths": [workspace.relative_path(result.path)],
+                "change_summary_path": workspace.relative_path(change_summary.path),
+            },
+        )
+        append_workspace_log(
+            workspace,
+            operation="ingest",
+            title=f"Executed queued URL ingest for {result.path.name}",
+            details=[f"Queued ingest captured URL source {parameters.get('url', '')}."],
+            related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(run_manifest_path),
+            "change_summary_path": workspace.relative_path(change_summary.path),
+            "result_paths": [workspace.relative_path(result.path)],
+            "source_kind": "url",
+        }
+    if job_type == "ingest_repo":
+        previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
+        result = ingest_repo(
+            workspace,
+            repo_path=str(parameters.get("source", "")),
+            name=_optional_string(parameters.get("name")),
+            force=bool(parameters.get("force", False)),
+        )
+        snapshot = workspace.refresh_index()
+        write_workspace_manifests(workspace, snapshot)
+        change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+        run_manifest_path = write_run_manifest(
+            workspace,
+            "ingest",
+            {
+                "run_label": f"ingest-repo-{result.path.stem}",
+                "status": "completed",
+                "source_kind": "repo",
+                "result_paths": [workspace.relative_path(result.path)],
+                "change_summary_path": workspace.relative_path(change_summary.path),
+            },
+        )
+        append_workspace_log(
+            workspace,
+            operation="ingest",
+            title=f"Executed queued repo ingest for {result.path.name}",
+            details=[f"Queued ingest captured repository metadata from {parameters.get('source', '')}."],
+            related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(run_manifest_path),
+            "change_summary_path": workspace.relative_path(change_summary.path),
+            "result_paths": [workspace.relative_path(result.path)],
+            "source_kind": "repo",
+        }
+    if job_type == "ingest_sitemap":
+        previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
+        results = ingest_sitemap(
+            workspace,
+            source=str(parameters.get("source", "")),
+            force=bool(parameters.get("force", False)),
+            limit=int(parameters["limit"]) if parameters.get("limit") is not None else None,
+        )
+        snapshot = workspace.refresh_index()
+        write_workspace_manifests(workspace, snapshot)
+        change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+        run_manifest_path = write_run_manifest(
+            workspace,
+            "ingest",
+            {
+                "run_label": f"ingest-sitemap-{slugify(str(parameters.get('source', '')))[:32] or 'batch'}",
+                "status": "completed",
+                "source_kind": "sitemap",
+                "result_paths": [workspace.relative_path(result.path) for result in results],
+                "result_count": len(results),
+                "change_summary_path": workspace.relative_path(change_summary.path),
+            },
+        )
+        append_workspace_log(
+            workspace,
+            operation="ingest",
+            title="Executed queued sitemap ingest",
+            details=[f"Queued ingest imported {len(results)} URL source(s) from sitemap {parameters.get('source', '')}."],
+            related_paths=[workspace.relative_path(change_summary.path)] + [workspace.relative_path(result.path) for result in results[:5]],
+        )
+        return {
+            "run_manifest_path": workspace.relative_path(run_manifest_path),
+            "change_summary_path": workspace.relative_path(change_summary.path),
+            "result_paths": [workspace.relative_path(result.path) for result in results],
+            "result_count": len(results),
+            "source_kind": "sitemap",
+        }
     if job_type == "compile":
         result = run_compile_cycle(
             workspace,

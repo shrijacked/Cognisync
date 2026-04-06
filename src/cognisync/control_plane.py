@@ -45,6 +45,9 @@ from cognisync.jobs import (
     enqueue_compile_job,
     enqueue_connector_sync_job,
     enqueue_connector_sync_all_job,
+    enqueue_ingest_repo_job,
+    enqueue_ingest_sitemap_job,
+    enqueue_ingest_url_job,
     enqueue_lint_job,
     enqueue_maintain_job,
     enqueue_research_job,
@@ -1094,6 +1097,48 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     self._workspace,
                     peer_ref=str(payload.get("peer_ref", "")) or None,
                     output_dir=str(payload.get("output_dir", "")) or None,
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/ingest-url":
+                actor = self._authenticate(["jobs.run"])
+                url = str(payload.get("url", "")).strip()
+                if not url:
+                    raise ControlPlaneError("A source URL is required.")
+                manifest_path = enqueue_ingest_url_job(
+                    self._workspace,
+                    url=url,
+                    name=str(payload.get("name", "")) or None,
+                    force=bool(payload.get("force", False)),
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/ingest-repo":
+                actor = self._authenticate(["jobs.run"])
+                source = str(payload.get("source", "")).strip()
+                if not source:
+                    raise ControlPlaneError("A repository source is required.")
+                manifest_path = enqueue_ingest_repo_job(
+                    self._workspace,
+                    source=source,
+                    name=str(payload.get("name", "")) or None,
+                    force=bool(payload.get("force", False)),
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/ingest-sitemap":
+                actor = self._authenticate(["jobs.run"])
+                source = str(payload.get("source", "")).strip()
+                if not source:
+                    raise ControlPlaneError("A sitemap source is required.")
+                manifest_path = enqueue_ingest_sitemap_job(
+                    self._workspace,
+                    source=source,
+                    force=bool(payload.get("force", False)),
+                    limit=int(payload["limit"]) if payload.get("limit") is not None else None,
                     requested_by=actor,
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
