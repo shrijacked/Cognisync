@@ -241,6 +241,7 @@ The served API now covers a real remote review surface too:
 - `GET /api/share`, `GET /api/access`, `GET /api/collab`, `GET /api/notifications`, `GET /api/audit`, and `GET /api/usage` expose the same file-native state the local CLI renders
 - `GET /api/review` exposes the live open queue, dismissal ledger, and persisted review-action state over the same token-backed surface
 - `GET /api/runs`, `GET /api/sync`, and `GET /api/change-summaries` expose run history, sync history, and corpus-delta history over the same file-native control-plane surface
+- `POST /api/access/grant`, `revoke`, `GET /api/invites`, `POST /api/invites/create`, `accept`, `GET /api/tokens`, and `POST /api/tokens/issue`, `revoke` let operator tokens manage the remote auth layer itself instead of falling back to the local shell
 - `POST /api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed` let reviewer or operator tokens mutate the review loop remotely while still resolving back through `.cognisync/access.json`
 - `POST /api/collab/request-review`, `comment`, `approve`, `request-changes`, and `resolve` let editors and reviewers mutate artifact-review state over HTTP while still enforcing the workspace role model
 - `POST /api/share/set-policy`, `subscribe-sync`, and `unsubscribe-sync` let operator tokens manage shared-workspace trust policy and scheduled peer exports remotely

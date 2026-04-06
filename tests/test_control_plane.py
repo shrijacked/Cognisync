@@ -836,6 +836,144 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_can_manage_access_invites_and_tokens_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Auth Admin Workspace")
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/access/grant",
+                    body=json.dumps(
+                        {
+                            "principal_id": "reviewer-2",
+                            "role": "reviewer",
+                            "display_name": "Reviewer Two",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["member"]["principal_id"], "reviewer-2")
+                self.assertEqual(payload["member"]["role"], "reviewer")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/invites/create",
+                    body=json.dumps({"principal_id": "editor-2", "role": "editor"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["invite"]["principal_id"], "editor-2")
+                self.assertEqual(payload["invite"]["status"], "pending")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/invites/accept",
+                    body=json.dumps({"invite_ref": "editor-2"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["invite"]["status"], "accepted")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/tokens/issue",
+                    body=json.dumps({"principal_id": "reviewer-2"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["token"].startswith("cp_"))
+                reviewer_token_id = payload["token_metadata"]["token_id"]
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/tokens", headers={"Authorization": f"Bearer {operator_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(any(item["token_id"] == reviewer_token_id for item in payload["tokens"]))
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/invites", headers={"Authorization": f"Bearer {operator_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(any(item["principal_id"] == "editor-2" for item in payload["invites"]))
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/tokens/revoke",
+                    body=json.dumps({"token_id": reviewer_token_id}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["token"]["status"], "revoked")
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_control_plane_can_inspect_and_run_connectors_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

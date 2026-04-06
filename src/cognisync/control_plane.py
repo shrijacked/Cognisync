@@ -18,6 +18,7 @@ from cognisync.access import (
     grant_access_member,
     load_access_manifest,
     require_access_role,
+    revoke_access_member,
 )
 from cognisync.collaboration import (
     CollaborationError,
@@ -88,7 +89,16 @@ if TYPE_CHECKING:
 
 
 DEFAULT_CONTROL_SCOPES = {
-    "operator": ["connectors.sync", "control.read", "jobs.claim", "jobs.heartbeat", "jobs.run", "review.run", "scheduler.run"],
+    "operator": [
+        "connectors.sync",
+        "control.admin",
+        "control.read",
+        "jobs.claim",
+        "jobs.heartbeat",
+        "jobs.run",
+        "review.run",
+        "scheduler.run",
+    ],
     "reviewer": ["control.read", "review.run"],
     "editor": ["control.read"],
     "viewer": ["control.read"],
@@ -686,6 +696,15 @@ def _require_review_actor(workspace: "Workspace", actor: Dict[str, object], acti
     )
 
 
+def _require_control_admin_actor(workspace: "Workspace", actor: Dict[str, object], action_label: str) -> Dict[str, object]:
+    return require_access_role(
+        workspace,
+        str(actor.get("principal_id", "")),
+        OPERATOR_ACTION_ROLES,
+        action_label,
+    )
+
+
 def _load_job_manifest(manifest_path: Path) -> Dict[str, object]:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -819,6 +838,34 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/invites":
+            payload = ensure_control_plane_manifest(self._workspace)
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    "invites": [dict(item) for item in list(payload.get("invites", []))],
+                    "summary": dict(payload.get("summary", {})),
+                },
+            )
+            return
+
+        if parsed.path == "/api/tokens":
+            tokens = list_control_plane_tokens(self._workspace)
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    "tokens": tokens,
+                    "summary": {
+                        "total_count": len(tokens),
+                        "active_count": sum(1 for item in tokens if str(item.get("status", "")) == "active"),
+                        "revoked_count": sum(1 for item in tokens if str(item.get("status", "")) == "revoked"),
+                    },
+                },
+            )
+            return
+
         if parsed.path == "/api/collab":
             payload = load_collaboration_manifest(self._workspace)
             self._send_json(
@@ -907,6 +954,73 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             payload = self._read_json_body()
+            if parsed.path == "/api/access/grant":
+                actor = self._authenticate(["control.admin"])
+                actor = _require_control_admin_actor(self._workspace, actor, "manage workspace access over the control plane")
+                member = grant_access_member(
+                    self._workspace,
+                    principal_id=str(payload.get("principal_id", "")),
+                    role=str(payload.get("role", "")),
+                    display_name=str(payload.get("display_name", "")) or None,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "member": member})
+                return
+            if parsed.path == "/api/access/revoke":
+                actor = self._authenticate(["control.admin"])
+                actor = _require_control_admin_actor(self._workspace, actor, "manage workspace access over the control plane")
+                member = revoke_access_member(self._workspace, str(payload.get("principal_id", "")))
+                self._send_json(200, {"actor": _serialize_actor(actor), "member": member})
+                return
+            if parsed.path == "/api/invites/create":
+                actor = self._authenticate(["control.admin"])
+                actor = _require_control_admin_actor(self._workspace, actor, "manage control-plane invites over the control plane")
+                invite = create_control_plane_invite(
+                    self._workspace,
+                    principal_id=str(payload.get("principal_id", "")),
+                    role=str(payload.get("role", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "invite": invite})
+                return
+            if parsed.path == "/api/invites/accept":
+                actor = self._authenticate(["control.admin"])
+                actor = _require_control_admin_actor(self._workspace, actor, "manage control-plane invites over the control plane")
+                invite = accept_control_plane_invite(
+                    self._workspace,
+                    invite_ref=str(payload.get("invite_ref", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "invite": invite})
+                return
+            if parsed.path == "/api/tokens/issue":
+                actor = self._authenticate(["control.admin"])
+                actor = _require_control_admin_actor(self._workspace, actor, "issue control-plane tokens over the control plane")
+                token_metadata, raw_token = issue_control_plane_token(
+                    self._workspace,
+                    principal_id=str(payload.get("principal_id", "")),
+                    scopes=[str(item) for item in list(payload.get("scopes", []))] or None,
+                    actor_id=str(actor.get("principal_id", "")),
+                    description=str(payload.get("description", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "token": raw_token,
+                        "token_metadata": token_metadata,
+                    },
+                )
+                return
+            if parsed.path == "/api/tokens/revoke":
+                actor = self._authenticate(["control.admin"])
+                actor = _require_control_admin_actor(self._workspace, actor, "revoke control-plane tokens over the control plane")
+                token = revoke_control_plane_token(
+                    self._workspace,
+                    token_id=str(payload.get("token_id", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "token": token})
+                return
             if parsed.path == "/api/jobs/enqueue/research":
                 actor = self._authenticate(["jobs.run"])
                 question = str(payload.get("question", "")).strip()
