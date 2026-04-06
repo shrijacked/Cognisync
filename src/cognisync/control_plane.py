@@ -14,6 +14,7 @@ from cognisync.access import (
     AccessError,
     DEFAULT_LOCAL_OPERATOR_ID,
     OPERATOR_ACTION_ROLES,
+    REVIEW_ACTION_ROLES,
     grant_access_member,
     load_access_manifest,
     require_access_role,
@@ -51,7 +52,21 @@ from cognisync.jobs import (
     read_worker_registry,
     run_next_job,
 )
+from cognisync.maintenance import (
+    MaintenanceError,
+    accept_concept_candidate,
+    apply_backlink_suggestion,
+    clear_dismissed_review_item,
+    dismiss_review_item,
+    file_conflict_review,
+    list_dismissed_review_items,
+    reopen_review_item,
+    resolve_entity_merge,
+)
 from cognisync.notifications import write_notifications_manifest
+from cognisync.review_queue import build_review_queue
+from cognisync.review_state import read_review_actions
+from cognisync.scanner import scan_workspace
 from cognisync.sharing import (
     accept_shared_peer,
     ensure_shared_workspace_manifest,
@@ -72,8 +87,8 @@ if TYPE_CHECKING:
 
 
 DEFAULT_CONTROL_SCOPES = {
-    "operator": ["connectors.sync", "control.read", "jobs.claim", "jobs.heartbeat", "jobs.run", "scheduler.run"],
-    "reviewer": ["control.read"],
+    "operator": ["connectors.sync", "control.read", "jobs.claim", "jobs.heartbeat", "jobs.run", "review.run", "scheduler.run"],
+    "reviewer": ["control.read", "review.run"],
     "editor": ["control.read"],
     "viewer": ["control.read"],
 }
@@ -529,6 +544,33 @@ def _connector_summary_payload(workspace: "Workspace") -> Dict[str, object]:
     }
 
 
+def _review_payload(workspace: "Workspace") -> Dict[str, object]:
+    snapshot = scan_workspace(workspace)
+    queue = build_review_queue(workspace, snapshot)
+    dismissed_items = list_dismissed_review_items(workspace)
+    actions = read_review_actions(workspace)
+
+    counts_by_kind: Dict[str, int] = {}
+    for item in list(queue.get("items", [])):
+        kind = str(item.get("kind", "unknown"))
+        counts_by_kind[kind] = counts_by_kind.get(kind, 0) + 1
+
+    return {
+        "open_items": [dict(item) for item in list(queue.get("items", []))],
+        "dismissed_items": dismissed_items,
+        "action_state": actions,
+        "summary": {
+            "open_item_count": len(list(queue.get("items", []))),
+            "dismissed_item_count": len(dismissed_items),
+            "counts_by_kind": dict(sorted(counts_by_kind.items())),
+        },
+        "state_paths": {
+            "review_queue_path": workspace.relative_path(workspace.review_queue_manifest_path),
+            "review_actions_path": workspace.relative_path(workspace.review_actions_manifest_path),
+        },
+    }
+
+
 def _serialize_connector_sync_result(workspace: "Workspace", result: ConnectorSyncResult) -> Dict[str, object]:
     return {
         "connector_id": result.connector_id,
@@ -539,6 +581,15 @@ def _serialize_connector_sync_result(workspace: "Workspace", result: ConnectorSy
         "run_manifest_path": workspace.relative_path(result.run_manifest_path),
         "result_paths": [workspace.relative_path(path) for path in result.result_paths],
     }
+
+
+def _require_review_actor(workspace: "Workspace", actor: Dict[str, object], action_label: str) -> Dict[str, object]:
+    return require_access_role(
+        workspace,
+        str(actor.get("principal_id", "")),
+        REVIEW_ACTION_ROLES,
+        action_label,
+    )
 
 
 def _load_job_manifest(manifest_path: Path) -> Dict[str, object]:
@@ -686,6 +737,16 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/review":
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    **_review_payload(self._workspace),
+                },
+            )
+            return
+
         if parsed.path == "/api/notifications":
             write_notifications_manifest(self._workspace)
             payload = json.loads(self._workspace.notifications_manifest_path.read_text(encoding="utf-8"))
@@ -816,6 +877,105 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     requested_by=actor,
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/review/accept-concept":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "apply review actions over the control plane")
+                concept_path = accept_concept_candidate(self._workspace, str(payload.get("slug", "")))
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "concept_path": self._workspace.relative_path(concept_path),
+                        "review": _review_payload(self._workspace),
+                    },
+                )
+                return
+            if parsed.path == "/api/review/resolve-merge":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "apply review actions over the control plane")
+                concept_path = resolve_entity_merge(
+                    self._workspace,
+                    canonical_label=str(payload.get("canonical_label", "")),
+                    preferred_label=str(payload.get("preferred_label", "")) or None,
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "concept_path": self._workspace.relative_path(concept_path),
+                        "review": _review_payload(self._workspace),
+                    },
+                )
+                return
+            if parsed.path == "/api/review/apply-backlink":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "apply review actions over the control plane")
+                path = apply_backlink_suggestion(self._workspace, str(payload.get("target_path", "")))
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "path": self._workspace.relative_path(path),
+                        "review": _review_payload(self._workspace),
+                    },
+                )
+                return
+            if parsed.path == "/api/review/file-conflict":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "apply review actions over the control plane")
+                note_path = file_conflict_review(self._workspace, str(payload.get("subject", "")))
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "note_path": self._workspace.relative_path(note_path),
+                        "review": _review_payload(self._workspace),
+                    },
+                )
+                return
+            if parsed.path == "/api/review/dismiss":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "apply review actions over the control plane")
+                dismissed = dismiss_review_item(
+                    self._workspace,
+                    review_id=str(payload.get("review_id", "")),
+                    reason=str(payload.get("reason", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "dismissed": dismissed,
+                        "review": _review_payload(self._workspace),
+                    },
+                )
+                return
+            if parsed.path == "/api/review/reopen":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "apply review actions over the control plane")
+                reopened = reopen_review_item(self._workspace, str(payload.get("review_id", "")))
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "reopened": reopened,
+                        "review": _review_payload(self._workspace),
+                    },
+                )
+                return
+            if parsed.path == "/api/review/clear-dismissed":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "apply review actions over the control plane")
+                cleared = clear_dismissed_review_item(self._workspace, str(payload.get("review_id", "")))
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "cleared": cleared,
+                        "review": _review_payload(self._workspace),
+                    },
+                )
                 return
             if parsed.path == "/api/jobs/claim-next":
                 actor = self._authenticate(["jobs.claim"])
@@ -1107,6 +1267,9 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
         except JobError as error:
             status = 409 if "No claimable jobs found" in str(error) or "No active job lease found" in str(error) else 400
             self._send_error(status, str(error))
+            return
+        except MaintenanceError as error:
+            self._send_error(400, str(error))
             return
         except Exception as error:  # pragma: no cover - server fallback
             self._send_error(400, str(error))

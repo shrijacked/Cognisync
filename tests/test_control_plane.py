@@ -311,6 +311,318 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_exposes_review_queue_and_dismissal_state_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Review Read Surface Workspace")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Systems\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+
+            reviewer_token_path = Path(tmp) / "reviewer-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(reviewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            reviewer_token = json.loads(reviewer_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/review", headers={"Authorization": f"Bearer {reviewer_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertGreaterEqual(payload["summary"]["open_item_count"], 2)
+                open_review_ids = {item["review_id"] for item in payload["open_items"]}
+                self.assertIn("backlink:wiki-queries-agent-memory.md:raw-retrieval.md", open_review_ids)
+                self.assertIn("conflict:raw-cloud.md:raw-local.md:the deployment model:is", open_review_ids)
+                self.assertFalse(payload["dismissed_items"])
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/review/dismiss",
+                    body=json.dumps(
+                        {
+                            "review_id": "backlink:wiki-queries-agent-memory.md:raw-retrieval.md",
+                            "reason": "tracked in another navigation note",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["dismissed"]["reason"], "tracked in another navigation note")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/review", headers={"Authorization": f"Bearer {reviewer_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["summary"]["dismissed_item_count"], 1)
+                self.assertEqual(payload["dismissed_items"][0]["review_id"], "backlink:wiki-queries-agent-memory.md:raw-retrieval.md")
+                open_review_ids = {item["review_id"] for item in payload["open_items"]}
+                self.assertNotIn("backlink:wiki-queries-agent-memory.md:raw-retrieval.md", open_review_ids)
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/review/reopen",
+                    body=json.dumps({"review_id": "backlink:wiki-queries-agent-memory.md:raw-retrieval.md"}),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["reopened"]["reason"], "tracked in another navigation note")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/review", headers={"Authorization": f"Bearer {reviewer_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["summary"]["dismissed_item_count"], 0)
+                open_review_ids = {item["review_id"] for item in payload["open_items"]}
+                self.assertIn("backlink:wiki-queries-agent-memory.md:raw-retrieval.md", open_review_ids)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_can_apply_review_actions_over_http_and_enforce_review_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Review Action Workspace")
+
+            (workspace.raw_dir / "retrieval.md").write_text(
+                "# Retrieval Systems\n\n## Vector Database\n\nVector Database improves recall.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory Systems\n\n## Vector Databases\n\nVector Databases help persistence.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "runtimes-a.md").write_text(
+                "# Runtime Systems\n\n## Agent Runtimes\n\nAgent Runtimes coordinate tools.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "runtimes-b.md").write_text(
+                "# Runtime Notes\n\n## Agent Runtimes\n\nAgent Runtimes coordinate tools.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "cloud.md").write_text(
+                "# Cloud First\n\nThe deployment model is cloud only.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "local.md").write_text(
+                "# Local First\n\nThe deployment model is local first.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "tagged-retrieval.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Retrieval Tags\n\n"
+                "## Agent Memory\n\n"
+                "Agent Memory benefits from explicit links.\n",
+                encoding="utf-8",
+            )
+            (workspace.wiki_dir / "queries" / "agent-memory.md").write_text(
+                "---\n"
+                "tags: [agents]\n"
+                "---\n"
+                "# Agent Memory\n\n"
+                "Operator note without backlinks yet.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(main(["scan", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "viewer-1", "viewer", "--workspace", str(root)]), 0)
+
+            reviewer_token_path = Path(tmp) / "reviewer-token.json"
+            viewer_token_path = Path(tmp) / "viewer-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(reviewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "viewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(viewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            reviewer_token = json.loads(reviewer_token_path.read_text(encoding="utf-8"))["token"]
+            viewer_token = json.loads(viewer_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/review/accept-concept",
+                    body=json.dumps({"slug": "agent-runtimes"}),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["concept_path"].endswith("wiki/concepts/agent-runtimes.md"))
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/review/resolve-merge",
+                    body=json.dumps({"canonical_label": "vector database"}),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["concept_path"].endswith("wiki/concepts/vector-databases.md"))
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/review/apply-backlink",
+                    body=json.dumps({"target_path": "wiki/queries/agent-memory.md"}),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["path"].endswith("wiki/queries.md"))
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/review/file-conflict",
+                    body=json.dumps({"subject": "the deployment model"}),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["note_path"].endswith("wiki/queries/conflicts/the-deployment-model.md"))
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/review/dismiss",
+                    body=json.dumps(
+                        {
+                            "review_id": "backlink:wiki-queries-agent-memory.md:raw-tagged-retrieval.md",
+                            "reason": "viewer should not be able to do this",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {viewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 403)
+                self.assertIn("review.run", payload["error"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_control_plane_can_manage_shared_sync_policy_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
