@@ -28,16 +28,24 @@ from cognisync.collaboration import (
 )
 from cognisync.connectors import (
     ConnectorSyncResult,
+    add_connector,
     connector_subscription_is_due,
     list_connectors,
     list_due_connectors,
+    subscribe_connector,
     sync_all_connectors,
     sync_connector,
+    unsubscribe_connector,
 )
 from cognisync.jobs import (
     JobError,
     claim_next_job,
+    enqueue_compile_job,
+    enqueue_connector_sync_job,
     enqueue_connector_sync_all_job,
+    enqueue_lint_job,
+    enqueue_maintain_job,
+    enqueue_research_job,
     enqueue_sync_export_job,
     heartbeat_job,
     read_worker_registry,
@@ -45,7 +53,10 @@ from cognisync.jobs import (
 )
 from cognisync.notifications import write_notifications_manifest
 from cognisync.sharing import (
+    accept_shared_peer,
     ensure_shared_workspace_manifest,
+    invite_shared_peer,
+    issue_shared_peer_bundle,
     list_due_shared_peer_syncs,
     load_shared_workspace_manifest,
     record_shared_peer_scheduler_tick,
@@ -530,6 +541,10 @@ def _serialize_connector_sync_result(workspace: "Workspace", result: ConnectorSy
     }
 
 
+def _load_job_manifest(manifest_path: Path) -> Dict[str, object]:
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
 def _record_scheduler_observations(workspace: "Workspace", due_connector_ids: List[str]) -> None:
     if not workspace.connector_registry_path.exists():
         return
@@ -725,6 +740,83 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             payload = self._read_json_body()
+            if parsed.path == "/api/jobs/enqueue/research":
+                actor = self._authenticate(["jobs.run"])
+                question = str(payload.get("question", "")).strip()
+                if not question:
+                    raise ControlPlaneError("A research question is required.")
+                manifest_path = enqueue_research_job(
+                    self._workspace,
+                    question=question,
+                    profile_name=str(payload.get("profile_name", "")) or None,
+                    limit=int(payload.get("limit", 5) or 5),
+                    mode=str(payload.get("mode", "wiki") or "wiki"),
+                    slides=bool(payload.get("slides", False)),
+                    job_profile=str(payload.get("job_profile", "")) or None,
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/compile":
+                actor = self._authenticate(["jobs.run"])
+                manifest_path = enqueue_compile_job(
+                    self._workspace,
+                    profile_name=str(payload.get("profile_name", "")) or None,
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/lint":
+                actor = self._authenticate(["jobs.run"])
+                manifest_path = enqueue_lint_job(self._workspace, requested_by=actor)
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/maintain":
+                actor = self._authenticate(["jobs.run"])
+                manifest_path = enqueue_maintain_job(
+                    self._workspace,
+                    max_concepts=int(payload.get("max_concepts", 10) or 10),
+                    max_merges=int(payload.get("max_merges", 10) or 10),
+                    max_backlinks=int(payload.get("max_backlinks", 10) or 10),
+                    max_conflicts=int(payload.get("max_conflicts", 10) or 10),
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/connector-sync":
+                actor = self._authenticate(["jobs.run"])
+                connector_id = str(payload.get("connector_id", "")).strip()
+                if not connector_id:
+                    raise ControlPlaneError("A connector id is required.")
+                manifest_path = enqueue_connector_sync_job(
+                    self._workspace,
+                    connector_id=connector_id,
+                    force=bool(payload.get("force", False)),
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/connector-sync-all":
+                actor = self._authenticate(["jobs.run"])
+                manifest_path = enqueue_connector_sync_all_job(
+                    self._workspace,
+                    force=bool(payload.get("force", False)),
+                    limit=int(payload["limit"]) if payload.get("limit") is not None else None,
+                    scheduled_only=bool(payload.get("scheduled_only", False)),
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/sync-export":
+                actor = self._authenticate(["jobs.run"])
+                manifest_path = enqueue_sync_export_job(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_ref", "")) or None,
+                    output_dir=str(payload.get("output_dir", "")) or None,
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
             if parsed.path == "/api/jobs/claim-next":
                 actor = self._authenticate(["jobs.claim"])
                 result = claim_next_job(
@@ -877,6 +969,38 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if parsed.path == "/api/share/invite-peer":
+                actor = self._authenticate(["control.read"])
+                peer = invite_shared_peer(
+                    self._workspace,
+                    peer_id=str(payload.get("peer_id", "")),
+                    role=str(payload.get("role", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                    base_url=str(payload.get("base_url", "")) or None,
+                    capabilities=[str(item) for item in list(payload.get("capabilities", []))],
+                    display_name=str(payload.get("display_name", "")) or None,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "peer": peer})
+                return
+            if parsed.path == "/api/share/accept-peer":
+                actor = self._authenticate(["control.read"])
+                peer = accept_shared_peer(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_ref", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "peer": peer})
+                return
+            if parsed.path == "/api/share/issue-peer-bundle":
+                actor = self._authenticate(["control.read"])
+                bundle = issue_shared_peer_bundle(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_ref", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                    scopes=[str(item) for item in list(payload.get("scopes", []))] or None,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "bundle": bundle})
+                return
             if parsed.path == "/api/share/subscribe-sync":
                 actor = self._authenticate(["control.read"])
                 peer = subscribe_shared_peer_sync(
@@ -911,6 +1035,39 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                         "result": _serialize_connector_sync_result(self._workspace, result),
                     },
                 )
+                return
+            if parsed.path == "/api/connectors/add":
+                actor = self._authenticate(["connectors.sync"])
+                connector = add_connector(
+                    self._workspace,
+                    kind=str(payload.get("kind", "")),
+                    source=str(payload.get("source", "")),
+                    name=str(payload.get("name", "")) or None,
+                    actor=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "connector": connector})
+                return
+            if parsed.path == "/api/connectors/subscribe":
+                actor = self._authenticate(["connectors.sync"])
+                connector = subscribe_connector(
+                    self._workspace,
+                    connector_id=str(payload.get("connector_id", "")),
+                    every_hours=int(payload["every_hours"]) if payload.get("every_hours") is not None else None,
+                    weekdays=[str(item) for item in list(payload.get("weekdays", []))],
+                    hour=int(payload["hour"]) if payload.get("hour") is not None else None,
+                    minute=int(payload.get("minute", 0) or 0),
+                    actor=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "connector": connector})
+                return
+            if parsed.path == "/api/connectors/unsubscribe":
+                actor = self._authenticate(["connectors.sync"])
+                connector = unsubscribe_connector(
+                    self._workspace,
+                    connector_id=str(payload.get("connector_id", "")),
+                    actor=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "connector": connector})
                 return
             if parsed.path == "/api/connectors/sync-all":
                 actor = self._authenticate(["connectors.sync"])

@@ -349,7 +349,9 @@ That layer keeps the same filesystem-first contract:
 - `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely
 - the same served control plane now accepts collaboration actions over HTTP, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through the same token-backed surface
 - the same served control plane now also accepts shared-workspace policy updates plus peer sync subscription changes over HTTP, so trust policy and scheduled peer exports can be managed remotely without hand-editing manifests
-- connector registry state is now readable at `/api/connectors`, and operator tokens can trigger `/api/connectors/sync` or `/api/connectors/sync-all` remotely through the same hosted-alpha surface
+- the same served control plane now also accepts peer invites, peer acceptance, and peer bundle issuance over HTTP, so remote operator handoffs can be prepared through the hosted-alpha surface too
+- connector registry state is now readable at `/api/connectors`, and operator tokens can add connectors, manage subscriptions, or trigger `/api/connectors/sync` and `/api/connectors/sync-all` remotely through the same hosted-alpha surface
+- job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`
 - sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace
 
 ```mermaid

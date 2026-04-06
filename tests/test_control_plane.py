@@ -535,6 +535,386 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_can_enqueue_jobs_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Queue Submission Workspace")
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            reviewer_token_path = Path(tmp) / "reviewer-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(reviewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+            reviewer_token = json.loads(reviewer_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/lint",
+                    body=json.dumps({}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["job"]["job_type"], "lint")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/research",
+                    body=json.dumps(
+                        {
+                            "question": "how do agent loops use memory?",
+                            "limit": 3,
+                            "mode": "memo",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["job"]["job_type"], "research")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/jobs", headers={"Authorization": f"Bearer {operator_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["queued_count"], 2)
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/lint",
+                    body=json.dumps({}),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 403)
+                self.assertIn("jobs.run", payload["error"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_can_enqueue_peer_scoped_sync_exports_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Sync Export Queue Workspace")
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/sync-export",
+                    body=json.dumps({"peer_ref": "remote-ops"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["job"]["job_type"], "sync_export")
+                self.assertEqual(payload["job"]["parameters"]["peer_ref"], "remote-ops")
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_can_register_and_schedule_connectors_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Connector Admin Workspace")
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                connector_url = "data:text/html;charset=utf-8,<html><head><title>Connector Source</title></head><body><p>Remote sync.</p></body></html>"
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/connectors/add",
+                    body=json.dumps({"kind": "url", "source": connector_url, "name": "connector-source"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["connector"]["connector_id"], "url-connector-source")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/connectors/subscribe",
+                    body=json.dumps({"connector_id": "url-connector-source", "every_hours": 1}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["connector"]["subscription"]["enabled"])
+                self.assertEqual(payload["connector"]["subscription"]["interval_hours"], 1)
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/connectors/unsubscribe",
+                    body=json.dumps({"connector_id": "url-connector-source"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertFalse(payload["connector"]["subscription"]["enabled"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_can_invite_accept_and_issue_peer_bundles_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Peer Admin Workspace")
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/share/invite-peer",
+                    body=json.dumps(
+                        {
+                            "peer_id": "remote-ops",
+                            "role": "operator",
+                            "base_url": "https://remote.example.test/cognisync",
+                            "capabilities": ["jobs.remote"],
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["peer"]["status"], "pending")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/share/accept-peer",
+                    body=json.dumps({"peer_ref": "remote-ops"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["peer"]["status"], "accepted")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/share/issue-peer-bundle",
+                    body=json.dumps({"peer_ref": "remote-ops"}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["bundle"]["principal_id"], "remote-ops")
+                self.assertTrue(payload["bundle"]["token"].startswith("cp_"))
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_share_issue_peer_bundle_writes_remote_operator_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

@@ -77,6 +77,9 @@
 - added hosted-alpha collaboration write endpoints, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through token-backed HTTP calls
 - added hosted-alpha share-policy write endpoints, so operator tokens can update trust policy and scheduled peer sync subscriptions over HTTP
 - added hosted-alpha connector registry and sync endpoints, so remote operators can inspect connector state and trigger connector pulls without a local shell
+- added hosted-alpha peer invite, accept, and bundle-issuance endpoints, so remote workspace handoffs can be prepared over HTTP too
+- added hosted-alpha job enqueue endpoints, so operator tokens can submit new research, maintenance, connector, and peer-sync work into the manifest-backed queue remotely
+- expanded hosted-alpha connector endpoints to cover add, subscribe, and unsubscribe, so connector registry management is no longer local-shell only
 
 ## v0.1.4 - 2026-04-03
 

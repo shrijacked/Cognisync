@@ -241,7 +241,9 @@ The served API now covers a real remote review surface too:
 - `GET /api/share`, `GET /api/access`, `GET /api/collab`, `GET /api/notifications`, `GET /api/audit`, and `GET /api/usage` expose the same file-native state the local CLI renders
 - `POST /api/collab/request-review`, `comment`, `approve`, `request-changes`, and `resolve` let editors and reviewers mutate artifact-review state over HTTP while still enforcing the workspace role model
 - `POST /api/share/set-policy`, `subscribe-sync`, and `unsubscribe-sync` let operator tokens manage shared-workspace trust policy and scheduled peer exports remotely
-- `GET /api/connectors` plus `POST /api/connectors/sync` and `sync-all` let the hosted-alpha layer inspect and execute connector work without falling back to a local shell
+- `POST /api/share/invite-peer`, `accept-peer`, and `issue-peer-bundle` let operator tokens prepare remote peer handoffs over HTTP too
+- `GET /api/connectors` plus `POST /api/connectors/add`, `subscribe`, `unsubscribe`, `sync`, and `sync-all` let the hosted-alpha layer inspect and execute connector work without falling back to a local shell
+- `POST /api/jobs/enqueue/research|compile|lint|maintain|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
 
 ### `worker remote`
 
