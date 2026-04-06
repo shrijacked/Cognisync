@@ -10,7 +10,22 @@ import secrets
 from typing import Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import urlparse
 
-from cognisync.access import DEFAULT_LOCAL_OPERATOR_ID, OPERATOR_ACTION_ROLES, grant_access_member, require_access_role
+from cognisync.access import (
+    AccessError,
+    DEFAULT_LOCAL_OPERATOR_ID,
+    OPERATOR_ACTION_ROLES,
+    grant_access_member,
+    load_access_manifest,
+    require_access_role,
+)
+from cognisync.collaboration import (
+    CollaborationError,
+    add_comment,
+    load_collaboration_manifest,
+    record_decision,
+    request_review,
+    resolve_review,
+)
 from cognisync.connectors import connector_subscription_is_due, list_connectors, list_due_connectors, sync_all_connectors
 from cognisync.jobs import (
     JobError,
@@ -21,9 +36,11 @@ from cognisync.jobs import (
     read_worker_registry,
     run_next_job,
 )
+from cognisync.notifications import write_notifications_manifest
 from cognisync.sharing import (
     ensure_shared_workspace_manifest,
     list_due_shared_peer_syncs,
+    load_shared_workspace_manifest,
     record_shared_peer_scheduler_tick,
     sharing_summary,
 )
@@ -472,6 +489,15 @@ def _scheduler_status_payload(workspace: "Workspace") -> Dict[str, object]:
     }
 
 
+def _find_collaboration_thread(workspace: "Workspace", artifact_path: str) -> Dict[str, object]:
+    normalized_path = str(artifact_path).strip()
+    payload = load_collaboration_manifest(workspace)
+    for thread in list(payload.get("threads", [])):
+        if str(thread.get("artifact_path", "")) == normalized_path:
+            return dict(thread)
+    return {}
+
+
 def _record_scheduler_observations(workspace: "Workspace", due_connector_ids: List[str]) -> None:
     if not workspace.connector_registry_path.exists():
         return
@@ -565,6 +591,76 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/share":
+            payload = load_shared_workspace_manifest(self._workspace)
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    "workspace_id": str(payload.get("workspace_id", "")),
+                    "workspace_name": str(payload.get("workspace_name", "")),
+                    "published_control_plane_url": str(payload.get("published_control_plane_url", "")),
+                    "trust_policy": dict(payload.get("trust_policy", {})),
+                    "summary": sharing_summary(self._workspace),
+                    "peers": [dict(item) for item in list(payload.get("peers", []))],
+                },
+            )
+            return
+
+        if parsed.path == "/api/access":
+            payload = load_access_manifest(self._workspace)
+            members = [dict(item) for item in list(payload.get("members", []))]
+            counts_by_role: Dict[str, int] = {}
+            for member in members:
+                role = str(member.get("role", "viewer"))
+                counts_by_role[role] = counts_by_role.get(role, 0) + 1
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    "members": members,
+                    "summary": {
+                        "member_count": len(members),
+                        "counts_by_role": dict(sorted(counts_by_role.items())),
+                    },
+                },
+            )
+            return
+
+        if parsed.path == "/api/collab":
+            payload = load_collaboration_manifest(self._workspace)
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    "threads": [dict(item) for item in list(payload.get("threads", []))],
+                    "summary": dict(payload.get("summary", {})),
+                },
+            )
+            return
+
+        if parsed.path == "/api/notifications":
+            write_notifications_manifest(self._workspace)
+            payload = json.loads(self._workspace.notifications_manifest_path.read_text(encoding="utf-8"))
+            self._send_json(200, {"actor": _serialize_actor(actor), **payload})
+            return
+
+        if parsed.path == "/api/audit":
+            from cognisync.observability import write_audit_manifest
+
+            write_audit_manifest(self._workspace)
+            payload = json.loads(self._workspace.audit_manifest_path.read_text(encoding="utf-8"))
+            self._send_json(200, {"actor": _serialize_actor(actor), **payload})
+            return
+
+        if parsed.path == "/api/usage":
+            from cognisync.observability import write_usage_manifest
+
+            write_usage_manifest(self._workspace)
+            payload = json.loads(self._workspace.usage_manifest_path.read_text(encoding="utf-8"))
+            self._send_json(200, {"actor": _serialize_actor(actor), **payload})
+            return
+
         if parsed.path == "/api/scheduler":
             self._send_json(200, _scheduler_status_payload(self._workspace))
             return
@@ -647,6 +743,84 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if parsed.path == "/api/collab/request-review":
+                actor = self._authenticate(["control.read"])
+                thread = request_review(
+                    self._workspace,
+                    artifact_path=str(payload.get("artifact_path", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                    assignee_ids=[str(item) for item in list(payload.get("assignee_ids", []))],
+                    note=str(payload.get("note", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "thread": thread})
+                return
+            if parsed.path == "/api/collab/comment":
+                actor = self._authenticate(["control.read"])
+                comment = add_comment(
+                    self._workspace,
+                    artifact_path=str(payload.get("artifact_path", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                    message=str(payload.get("message", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "comment": comment,
+                        "thread": _find_collaboration_thread(self._workspace, str(payload.get("artifact_path", ""))),
+                    },
+                )
+                return
+            if parsed.path == "/api/collab/approve":
+                actor = self._authenticate(["control.read"])
+                decision = record_decision(
+                    self._workspace,
+                    artifact_path=str(payload.get("artifact_path", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                    decision="approved",
+                    summary=str(payload.get("summary", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "decision": decision,
+                        "thread": _find_collaboration_thread(self._workspace, str(payload.get("artifact_path", ""))),
+                    },
+                )
+                return
+            if parsed.path == "/api/collab/request-changes":
+                actor = self._authenticate(["control.read"])
+                decision = record_decision(
+                    self._workspace,
+                    artifact_path=str(payload.get("artifact_path", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                    decision="changes_requested",
+                    summary=str(payload.get("summary", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "decision": decision,
+                        "thread": _find_collaboration_thread(self._workspace, str(payload.get("artifact_path", ""))),
+                    },
+                )
+                return
+            if parsed.path == "/api/collab/resolve":
+                actor = self._authenticate(["control.read"])
+                thread = resolve_review(
+                    self._workspace,
+                    artifact_path=str(payload.get("artifact_path", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "thread": thread})
+                return
+        except (CollaborationError, AccessError) as error:
+            message = str(error)
+            status = 403 if "permission" in message or "active member" in message else 400
+            self._send_error(status, message)
+            return
         except ControlPlaneError as error:
             self._send_error(403, str(error))
             return

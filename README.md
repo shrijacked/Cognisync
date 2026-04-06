@@ -346,6 +346,8 @@ That layer keeps the same filesystem-first contract:
 - shared-workspace trust policy can disable remote worker bundles or sync imports from peers without editing manifests by hand
 - scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, and scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, without adding a second queue system
 - remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including scheduled peer-sync export work
+- `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely
+- the same served control plane now accepts collaboration actions over HTTP, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through the same token-backed surface
 - sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace
 
 ```mermaid

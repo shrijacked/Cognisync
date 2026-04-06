@@ -230,11 +230,16 @@ The command family:
 2. keeps workspace invites and accepted memberships file-native instead of hiding them in process memory
 3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes
 4. supports scheduler ticks that enqueue or execute scheduled connector sync work and due peer-scoped sync-export jobs against the same queue and connector manifests the local CLI already uses
-5. serves a lightweight HTTP layer for status, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
+5. serves a lightweight HTTP layer for status, shared-workspace state, access roster, collaboration threads, notifications, audit, usage, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
 6. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
 7. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
+
+The served API now covers a real remote review surface too:
+
+- `GET /api/share`, `GET /api/access`, `GET /api/collab`, `GET /api/notifications`, `GET /api/audit`, and `GET /api/usage` expose the same file-native state the local CLI renders
+- `POST /api/collab/request-review`, `comment`, `approve`, `request-changes`, and `resolve` let editors and reviewers mutate artifact-review state over HTTP while still enforcing the workspace role model
 
 ### `worker remote`
 

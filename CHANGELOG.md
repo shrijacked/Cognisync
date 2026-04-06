@@ -73,6 +73,8 @@
 - added `cognisync control-plane scheduler-status` plus due peer-sync ids in `/api/scheduler` and `/api/scheduler/tick`, so scheduled peer exports are inspectable over both CLI and HTTP
 - added peer-scoped `sync export --for-peer`, `sync import --from-peer`, and queued `jobs enqueue sync-export`, so shared-workspace handoffs can move through the same manifest-backed worker system as the rest of the control plane
 - hardened notification manifest reads against transient concurrent queue writes, so remote polling workers and local enqueues can overlap without breaking the operator inbox
+- added hosted-alpha read endpoints for shared-workspace, access, collaboration, notifications, audit, and usage state, so the remote control plane can inspect more than just jobs and scheduler status
+- added hosted-alpha collaboration write endpoints, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through token-backed HTTP calls
 
 ## v0.1.4 - 2026-04-03
 

@@ -15,6 +15,302 @@ from cognisync.workspace import Workspace
 
 
 class ControlPlaneTests(unittest.TestCase):
+    def test_control_plane_exposes_shared_workspace_access_and_notifications(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Read Surface Workspace")
+            (root / "outputs" / "reports").mkdir(parents=True, exist_ok=True)
+            (root / "outputs" / "reports" / "artifact.md").write_text("# Artifact\n\nPending review.\n", encoding="utf-8")
+
+            self.assertEqual(
+                main(["access", "grant", "editor-1", "editor", "--workspace", str(root)]),
+                0,
+            )
+            self.assertEqual(
+                main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                        "--capability",
+                        "jobs.remote",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "collab",
+                        "request-review",
+                        "outputs/reports/artifact.md",
+                        "--workspace",
+                        str(root),
+                        "--assign",
+                        "reviewer-1",
+                        "--actor-id",
+                        "editor-1",
+                    ]
+                ),
+                0,
+            )
+
+            token_stdout = Path(tmp) / "reader-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "editor-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/share", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["summary"]["accepted_peer_count"], 1)
+                self.assertEqual(payload["peers"][0]["peer_id"], "remote-ops")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/access", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["summary"]["member_count"], 4)
+                member_ids = {item["principal_id"] for item in payload["members"]}
+                self.assertIn("editor-1", member_ids)
+                self.assertIn("reviewer-1", member_ids)
+                self.assertIn("remote-ops", member_ids)
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/collab", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["summary"]["thread_count"], 1)
+                self.assertEqual(payload["threads"][0]["status"], "pending_review")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/notifications", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                notification_kinds = {item["kind"] for item in payload["notifications"]}
+                self.assertIn("collaboration_pending_review", notification_kinds)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_control_plane_collaboration_actions_respect_workspace_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Collaboration Workspace")
+            (root / "outputs" / "reports").mkdir(parents=True, exist_ok=True)
+            (root / "outputs" / "reports" / "artifact.md").write_text("# Artifact\n\nNeeds review.\n", encoding="utf-8")
+
+            self.assertEqual(main(["access", "grant", "editor-1", "editor", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+            self.assertEqual(main(["access", "grant", "viewer-1", "viewer", "--workspace", str(root)]), 0)
+
+            editor_token_path = Path(tmp) / "editor-token.json"
+            reviewer_token_path = Path(tmp) / "reviewer-token.json"
+            viewer_token_path = Path(tmp) / "viewer-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "editor-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(editor_token_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(reviewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "viewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(viewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            editor_token = json.loads(editor_token_path.read_text(encoding="utf-8"))["token"]
+            reviewer_token = json.loads(reviewer_token_path.read_text(encoding="utf-8"))["token"]
+            viewer_token = json.loads(viewer_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/collab/request-review",
+                    body=json.dumps(
+                        {
+                            "artifact_path": "outputs/reports/artifact.md",
+                            "assignee_ids": ["reviewer-1"],
+                            "note": "please review",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {editor_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["thread"]["status"], "pending_review")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/collab/comment",
+                    body=json.dumps(
+                        {
+                            "artifact_path": "outputs/reports/artifact.md",
+                            "message": "looks mostly good",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["comment"]["actor"]["principal_id"], "reviewer-1")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/collab/request-changes",
+                    body=json.dumps(
+                        {
+                            "artifact_path": "outputs/reports/artifact.md",
+                            "summary": "cite the supporting source",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["decision"]["decision"], "changes_requested")
+                self.assertEqual(payload["thread"]["status"], "changes_requested")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/collab/resolve",
+                    body=json.dumps({"artifact_path": "outputs/reports/artifact.md"}),
+                    headers={
+                        "Authorization": f"Bearer {editor_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["thread"]["status"], "resolved")
+                self.assertEqual(payload["thread"]["resolved_by"]["principal_id"], "editor-1")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/collab/request-review",
+                    body=json.dumps({"artifact_path": "outputs/reports/artifact.md"}),
+                    headers={
+                        "Authorization": f"Bearer {viewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 403)
+                self.assertIn("does not have permission", payload["error"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_share_issue_peer_bundle_writes_remote_operator_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
