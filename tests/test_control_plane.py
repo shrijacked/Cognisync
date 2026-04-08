@@ -148,6 +148,209 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_can_manage_attached_remotes_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            publisher_root = Path(tmp) / "publisher"
+            follower_root = Path(tmp) / "follower"
+            first_bundle_path = Path(tmp) / "downstream-first-bundle.json"
+            refreshed_bundle_path = Path(tmp) / "downstream-refreshed-bundle.json"
+
+            self.assertEqual(main(["init", str(publisher_root), "--name", "Publisher Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control-a.example.test/api",
+                        "--workspace",
+                        str(publisher_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "downstream",
+                        "operator",
+                        "--workspace",
+                        str(publisher_root),
+                        "--capability",
+                        "sync.import",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "downstream", "--workspace", str(publisher_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "issue-peer-bundle",
+                        "downstream",
+                        "--workspace",
+                        str(publisher_root),
+                        "--output-file",
+                        str(first_bundle_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["init", str(follower_root), "--name", "Follower Workspace"]), 0)
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://follower-control.example.test/api",
+                        "--workspace",
+                        str(follower_root),
+                    ]
+                ),
+                0,
+            )
+            token_path = Path(tmp) / "follower-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(follower_root),
+                        "--scope",
+                        "control.read",
+                        "--output-file",
+                        str(token_path),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_path.read_text(encoding="utf-8"))["token"]
+
+            follower_workspace = Workspace(follower_root)
+            server = create_control_plane_server(workspace=follower_workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                first_bundle = json.loads(first_bundle_path.read_text(encoding="utf-8"))
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/share/remotes/attach",
+                    body=json.dumps({"bundle": first_bundle}),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["remote"]["principal_id"], "downstream")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/share", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(len(payload["attached_remotes"]), 1)
+                first_remote = payload["attached_remotes"][0]
+                first_attached_at = first_remote["attached_at"]
+                first_remote_id = first_remote["remote_id"]
+                first_token = first_remote["token"]
+                connection.close()
+
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "bind-control-plane",
+                            "https://control-b.example.test/api",
+                            "--workspace",
+                            str(publisher_root),
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "issue-peer-bundle",
+                            "downstream",
+                            "--workspace",
+                            str(publisher_root),
+                            "--output-file",
+                            str(refreshed_bundle_path),
+                        ]
+                    ),
+                    0,
+                )
+                refreshed_bundle = json.loads(refreshed_bundle_path.read_text(encoding="utf-8"))
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/share/remotes/refresh",
+                    body=json.dumps({"bundle": refreshed_bundle}),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["remote"]["server_url"], "https://control-b.example.test/api")
+                self.assertNotEqual(payload["remote"]["token"], first_token)
+                self.assertEqual(payload["remote"]["attached_at"], first_attached_at)
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/share/remotes/suspend",
+                    body=json.dumps({"remote_ref": "downstream"}),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["remote"]["status"], "suspended")
+                self.assertFalse(payload["remote"]["pull_subscription"]["enabled"])
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/share/remotes/remove",
+                    body=json.dumps({"remote_ref": "downstream"}),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["removed_remote_id"], first_remote_id)
+                self.assertEqual(payload["sharing"]["attached_remote_count"], 0)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_control_plane_collaboration_actions_respect_workspace_roles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

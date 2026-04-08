@@ -253,6 +253,162 @@ class SharingAndSchedulerTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_share_attached_remote_lifecycle_can_refresh_suspend_and_detach_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            publisher_root = Path(tmp) / "publisher"
+            follower_root = Path(tmp) / "follower"
+            first_bundle_path = Path(tmp) / "downstream-first-bundle.json"
+            refreshed_bundle_path = Path(tmp) / "downstream-refreshed-bundle.json"
+
+            self.assertEqual(main(["init", str(publisher_root), "--name", "Publisher Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control-a.example.test/api",
+                        "--workspace",
+                        str(publisher_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "downstream",
+                        "operator",
+                        "--workspace",
+                        str(publisher_root),
+                        "--capability",
+                        "sync.import",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "downstream", "--workspace", str(publisher_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "issue-peer-bundle",
+                        "downstream",
+                        "--workspace",
+                        str(publisher_root),
+                        "--output-file",
+                        str(first_bundle_path),
+                    ]
+                ),
+                0,
+            )
+
+            follower_workspace = Workspace(follower_root)
+            follower_workspace.initialize(name="Follower Workspace")
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "attach-remote-bundle",
+                        str(first_bundle_path),
+                        "--workspace",
+                        str(follower_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "subscribe-remote-pull",
+                        "downstream",
+                        "--workspace",
+                        str(follower_root),
+                        "--every-hours",
+                        "3",
+                    ]
+                ),
+                0,
+            )
+
+            first_payload = json.loads((follower_root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+            first_remote = first_payload["attached_remotes"][0]
+            first_attached_at = first_remote["attached_at"]
+            first_token = first_remote["token"]
+            self.assertTrue(first_remote["pull_subscription"]["enabled"])
+            self.assertEqual(first_remote["pull_subscription"]["interval_hours"], 3)
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control-b.example.test/api",
+                        "--workspace",
+                        str(publisher_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "issue-peer-bundle",
+                        "downstream",
+                        "--workspace",
+                        str(publisher_root),
+                        "--output-file",
+                        str(refreshed_bundle_path),
+                    ]
+                ),
+                0,
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "refresh-remote-bundle",
+                        str(refreshed_bundle_path),
+                        "--workspace",
+                        str(follower_root),
+                    ]
+                ),
+                0,
+            )
+
+            refreshed_payload = json.loads(
+                (follower_root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8")
+            )
+            refreshed_remote = refreshed_payload["attached_remotes"][0]
+            self.assertEqual(refreshed_remote["server_url"], "https://control-b.example.test/api")
+            self.assertNotEqual(refreshed_remote["token"], first_token)
+            self.assertEqual(refreshed_remote["attached_at"], first_attached_at)
+            self.assertEqual(refreshed_remote["status"], "attached")
+            self.assertTrue(refreshed_remote["pull_subscription"]["enabled"])
+            self.assertEqual(refreshed_remote["pull_subscription"]["interval_hours"], 3)
+
+            self.assertEqual(main(["share", "suspend-remote", "downstream", "--workspace", str(follower_root)]), 0)
+            suspended_payload = json.loads(
+                (follower_root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8")
+            )
+            suspended_remote = suspended_payload["attached_remotes"][0]
+            self.assertEqual(suspended_remote["status"], "suspended")
+            self.assertTrue(suspended_remote["suspended_at"])
+            self.assertFalse(suspended_remote["pull_subscription"]["enabled"])
+            self.assertEqual(suspended_remote["pull_subscription"]["next_pull_at"], "")
+
+            tick = run_scheduler_tick(follower_workspace, enqueue_only=True)
+            self.assertNotIn("downstream", tick.due_remote_pull_ids)
+            self.assertEqual(tick.due_remote_pull_ids, [])
+
+            self.assertEqual(main(["share", "detach-remote", "downstream", "--workspace", str(follower_root)]), 0)
+            final_payload = json.loads((follower_root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+            self.assertEqual(final_payload["attached_remotes"], [])
+
     def test_share_peer_lifecycle_can_update_suspend_and_remove_peer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

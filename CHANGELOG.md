@@ -3,6 +3,7 @@
 ## Unreleased
 
 - added `cognisync share attach-remote-bundle|list-attached-remotes|pull-remote|subscribe-remote-pull|unsubscribe-remote-pull`, so peer bundles can now become durable upstream remotes instead of only one-off worker handoffs
+- added `cognisync share refresh-remote-bundle|suspend-remote|detach-remote` plus hosted `/api/share/remotes/attach|refresh|suspend|remove`, so attached remotes now have a real lifecycle through both the local CLI and the hosted-alpha control plane
 - added queued `remote-sync-pull` jobs plus scheduler support for due attached-remote pulls, so hosted-alpha automation now covers inbound remote workspace syncs as well as outbound peer exports
 - taught peer bundles with `sync.import` capability to receive a narrower `sync.export` control-plane scope, so remote sync pull tokens no longer depend on the broader `jobs.run` permission
 - taught sync import validation to trust attached remotes recorded in `.cognisync/shared-workspace.json`, so remote pull imports can preserve peer provenance without pretending every upstream source is a local accepted peer

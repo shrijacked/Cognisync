@@ -261,7 +261,7 @@ The operator loop now has a review layer too:
 - `cognisync notify list` materializes a filesystem-native notification inbox from jobs, runs, connectors, and review state so operators can see backlog, due subscriptions, and failure signals without scraping logs
 - `cognisync notify list` now also surfaces collaboration review backlog and outstanding requested-change threads from `.cognisync/collaboration.json`
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json`, and mutating roster changes now accept `--actor-id` so only operator principals can change workspace membership
-- `cognisync share status|bind-control-plane|invite-peer|accept-peer|list-peers|issue-peer-bundle|attach-remote-bundle|list-attached-remotes|pull-remote|set-peer-role|suspend-peer|remove-peer|set-policy|subscribe-sync|unsubscribe-sync|subscribe-remote-pull|unsubscribe-remote-pull` materializes a file-native shared-workspace manifest in `.cognisync/shared-workspace.json`, so accepted peers, attached upstream remotes, published control-plane URLs, trust policy, scheduled peer exports, scheduled remote pulls, and peer lifecycle changes can be handed off without inventing a second state store
+- `cognisync share status|bind-control-plane|invite-peer|accept-peer|list-peers|issue-peer-bundle|attach-remote-bundle|refresh-remote-bundle|list-attached-remotes|pull-remote|suspend-remote|detach-remote|set-peer-role|suspend-peer|remove-peer|set-policy|subscribe-sync|unsubscribe-sync|subscribe-remote-pull|unsubscribe-remote-pull` materializes a file-native shared-workspace manifest in `.cognisync/shared-workspace.json`, so accepted peers, attached upstream remotes, published control-plane URLs, trust policy, scheduled peer exports, scheduled remote pulls, and peer lifecycle changes can be handed off without inventing a second state store
 - `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|schedule-research|schedule-compile|schedule-lint|schedule-maintain|list-scheduled-jobs|remove-scheduled-job|scheduler-status|scheduler-tick|serve` adds a hosted-alpha control plane on top of the same workspace, with durable invites, scoped bearer tokens, optional token expiry, recurring job subscriptions, scheduler state, due peer-sync visibility, due remote-pull visibility, and a local HTTP surface for remote workers
 - `cognisync control-plane workers` surfaces the derived worker registry through the hosted-alpha layer too, so active and idle remote operators are inspectable without scraping queue manifests
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, the workspace roster, and collaboration activity
@@ -336,7 +336,10 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync share subscribe-sync remote-ops --workspace . --every-hours 1`
 - `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
 - `cognisync share attach-remote-bundle remote-ops.json --workspace ./mirror`
+- `cognisync share refresh-remote-bundle remote-ops.json --workspace ./mirror`
 - `cognisync share pull-remote remote-ops --workspace ./mirror`
+- `cognisync share suspend-remote remote-ops --workspace ./mirror`
+- `cognisync share detach-remote remote-ops --workspace ./mirror`
 - `cognisync share subscribe-remote-pull remote-ops --workspace ./mirror --every-hours 1`
 - `cognisync control-plane invite reviewer-2 reviewer --workspace .`
 - `cognisync control-plane accept-invite reviewer-2 --workspace .`
@@ -360,6 +363,7 @@ That layer keeps the same filesystem-first contract:
 - peer bundles carry the control-plane URL, token, scopes, and role for a specific accepted remote principal, so another machine can attach cleanly without manual token surgery
 - peer bundle scopes now derive from declared peer capabilities like `jobs.remote`, `review.remote`, `scheduler.remote`, `connectors.sync`, `control.admin`, or explicit scope strings, so remote handoffs do not silently overgrant the full role default
 - attached remotes can now be created directly from a peer bundle, then pulled over the hosted control plane into another workspace without manually exporting and unpacking bundle directories
+- attached remotes can now also be refreshed from a rotated peer bundle, suspended without deleting local provenance, or detached entirely when the upstream relationship is no longer trusted
 - shared-workspace trust policy can disable remote worker bundles or sync imports from peers without editing manifests by hand
 - shared peers can now be re-roled, suspended, or removed through the same file-native workflow, and those lifecycle changes revoke live access plus peer-issued control-plane tokens automatically
 - control-plane tokens can now carry an hourly expiry and are marked invalid as soon as that TTL passes, so hosted-alpha bearer auth no longer defaults to effectively permanent credentials
@@ -375,7 +379,7 @@ That layer keeps the same filesystem-first contract:
 - the same served control plane now exposes `GET /api/artifacts/preview?path=...`, so remote operators can inspect text artifacts and manifests directly over the hosted surface
 - the same served control plane now also exposes remote auth-admin endpoints like `POST /api/access/grant`, `/api/access/revoke`, `/api/invites/create`, `/api/invites/accept`, `/api/tokens/issue`, and `/api/tokens/revoke`, so roster and token management no longer require direct shell access either
 - the same served control plane now also accepts shared-workspace policy updates plus peer sync subscription changes over HTTP, so trust policy and scheduled peer exports can be managed remotely without hand-editing manifests
-- the same served control plane now also accepts peer invites, peer acceptance, and peer bundle issuance over HTTP, so remote operator handoffs can be prepared through the hosted-alpha surface too
+- the same served control plane now also accepts peer invites, peer acceptance, peer bundle issuance, attached-remote attach and refresh actions, and attached-remote suspend and remove actions over HTTP, so remote operator handoffs can be prepared and tightened through the hosted-alpha surface too
 - the same served control plane now also accepts peer role updates, suspension, and removal over HTTP, so shared-workspace trust can be tightened remotely instead of only granted
 - connector registry state is now readable at `/api/connectors`, and operator tokens can add connectors, manage subscriptions, or trigger `/api/connectors/sync` and `/api/connectors/sync-all` remotely through the same hosted-alpha surface
 - job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, ingest, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`

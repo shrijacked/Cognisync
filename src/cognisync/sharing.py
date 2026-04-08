@@ -376,65 +376,36 @@ def attach_remote_bundle(
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
 ) -> Dict[str, object]:
     require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "attach remote shared-workspace bundles")
-    bundle_path = Path(bundle_file).expanduser()
-    if not bundle_path.is_absolute():
-        bundle_path = workspace.root / bundle_path
-    bundle_path = bundle_path.resolve()
-    if not bundle_path.exists():
-        raise SharingError(f"Could not find remote peer bundle at {bundle_path}.")
-    try:
-        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise SharingError(f"Remote peer bundle {bundle_path} is not valid JSON.") from error
+    bundle = _load_remote_bundle_file(workspace, bundle_file)
+    return attach_remote_payload(workspace, bundle=bundle, actor_id=actor_id)
 
-    principal_id = str(bundle.get("principal_id", "")).strip()
-    workspace_id = str(bundle.get("workspace_id", "")).strip()
-    server_url = str(bundle.get("server_url", "")).strip()
-    token = str(bundle.get("token", "")).strip()
-    token_id = str(bundle.get("token_id", "")).strip()
-    if not principal_id:
-        raise SharingError("Remote peer bundles must include a principal_id.")
-    if not workspace_id:
-        raise SharingError("Remote peer bundles must include a workspace_id.")
-    if not server_url:
-        raise SharingError("Remote peer bundles must include a server_url.")
-    if not token:
-        raise SharingError("Remote peer bundles must include a bearer token.")
-    if not token_id:
-        raise SharingError("Remote peer bundles must include a token_id.")
 
-    remote_id = f"{workspace_id}:{principal_id}"
-    payload = ensure_shared_workspace_manifest(workspace)
-    remotes = {str(item.get("remote_id", "")): dict(item) for item in list(payload.get("attached_remotes", []))}
-    existing = remotes.get(remote_id) or {}
-    now = utc_timestamp()
-    remote = {
-        "remote_id": remote_id,
-        "workspace_id": workspace_id,
-        "workspace_name": str(bundle.get("workspace_name", "")).strip() or workspace_id,
-        "principal_id": principal_id,
-        "display_name": str(bundle.get("display_name", "")).strip() or principal_id,
-        "role": str(bundle.get("role", "viewer")).strip().lower() or "viewer",
-        "status": "attached",
-        "server_url": server_url,
-        "base_url": str(bundle.get("base_url", "")).strip(),
-        "capabilities": _sorted_capabilities(list(bundle.get("capabilities", []))),
-        "scopes": _sorted_capabilities(list(bundle.get("scopes", []))),
-        "token": token,
-        "token_id": token_id,
-        "attached_at": str(existing.get("attached_at", now)) or now,
-        "updated_at": now,
-        "last_pull_at": str(existing.get("last_pull_at", "")),
-        "last_pull_status": str(existing.get("last_pull_status", "")),
-        "last_imported_sync_event_path": str(existing.get("last_imported_sync_event_path", "")),
-        "last_imported_sync_history_path": str(existing.get("last_imported_sync_history_path", "")),
-        "pull_subscription": _normalize_pull_subscription(dict(existing.get("pull_subscription", {}))),
-    }
-    remotes[remote_id] = remote
-    payload["attached_remotes"] = _sorted_attached_remotes(remotes.values())
-    payload["updated_at"] = now
-    _write_shared_workspace_manifest(workspace, payload)
-    return remote
+def attach_remote_payload(
+    workspace: "Workspace",
+    bundle: Dict[str, object],
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "attach remote shared-workspace bundles")
+    return _upsert_attached_remote(workspace, bundle=bundle, require_existing=False)
+
+
+def refresh_attached_remote_bundle(
+    workspace: "Workspace",
+    bundle_file: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "refresh attached remote bundles")
+    bundle = _load_remote_bundle_file(workspace, bundle_file)
+    return refresh_attached_remote_payload(workspace, bundle=bundle, actor_id=actor_id)
+
+
+def refresh_attached_remote_payload(
+    workspace: "Workspace",
+    bundle: Dict[str, object],
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "refresh attached remote bundles")
+    return _upsert_attached_remote(workspace, bundle=bundle, require_existing=True)
 
 
 def pull_attached_remote(
@@ -557,6 +528,48 @@ def unsubscribe_attached_remote_pull(
     remote["updated_at"] = utc_timestamp()
     payload["attached_remotes"] = _sorted_attached_remotes(remotes)
     payload["updated_at"] = str(remote.get("updated_at", ""))
+    _write_shared_workspace_manifest(workspace, payload)
+    return remote
+
+
+def suspend_attached_remote(
+    workspace: "Workspace",
+    remote_ref: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "suspend attached remote workspaces")
+    payload = ensure_shared_workspace_manifest(workspace)
+    remotes = [dict(item) for item in list(payload.get("attached_remotes", []))]
+    remote = _find_attached_remote_in_list(remotes, remote_ref)
+    now = utc_timestamp()
+    remote["status"] = "suspended"
+    remote["suspended_at"] = now
+    remote["updated_at"] = now
+    subscription = _normalize_pull_subscription(dict(remote.get("pull_subscription", {})))
+    subscription["enabled"] = False
+    subscription["next_pull_at"] = ""
+    subscription["last_tick_status"] = "suspended"
+    remote["pull_subscription"] = subscription
+    payload["attached_remotes"] = _sorted_attached_remotes(remotes)
+    payload["updated_at"] = now
+    _write_shared_workspace_manifest(workspace, payload)
+    return remote
+
+
+def detach_attached_remote(
+    workspace: "Workspace",
+    remote_ref: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "detach attached remote workspaces")
+    payload = ensure_shared_workspace_manifest(workspace)
+    remotes = [dict(item) for item in list(payload.get("attached_remotes", []))]
+    remote = _find_attached_remote_in_list(remotes, remote_ref)
+    remote_id = str(remote.get("remote_id", ""))
+    payload["attached_remotes"] = _sorted_attached_remotes(
+        [item for item in remotes if str(item.get("remote_id", "")) != remote_id]
+    )
+    payload["updated_at"] = utc_timestamp()
     _write_shared_workspace_manifest(workspace, payload)
     return remote
 
@@ -873,6 +886,7 @@ def _sorted_attached_remotes(remotes: List[Dict[str, object]]) -> List[Dict[str,
                 "token": str(remote.get("token", "")).strip(),
                 "token_id": str(remote.get("token_id", "")).strip(),
                 "attached_at": str(remote.get("attached_at", "")) or utc_timestamp(),
+                "suspended_at": str(remote.get("suspended_at", "")),
                 "last_pull_at": str(remote.get("last_pull_at", "")),
                 "last_pull_status": str(remote.get("last_pull_status", "")),
                 "last_imported_sync_event_path": str(remote.get("last_imported_sync_event_path", "")),
@@ -963,6 +977,89 @@ def _control_plane_api_root(server_url: str) -> str:
     if normalized.endswith("/api"):
         return normalized
     return f"{normalized}/api"
+
+
+def _load_remote_bundle_file(workspace: "Workspace", bundle_file: str) -> Dict[str, object]:
+    bundle_path = Path(bundle_file).expanduser()
+    if not bundle_path.is_absolute():
+        bundle_path = workspace.root / bundle_path
+    bundle_path = bundle_path.resolve()
+    if not bundle_path.exists():
+        raise SharingError(f"Could not find remote peer bundle at {bundle_path}.")
+    try:
+        return json.loads(bundle_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SharingError(f"Remote peer bundle {bundle_path} is not valid JSON.") from error
+
+
+def _validated_remote_bundle(bundle: Dict[str, object]) -> Dict[str, object]:
+    principal_id = str(bundle.get("principal_id", "")).strip()
+    workspace_id = str(bundle.get("workspace_id", "")).strip()
+    server_url = str(bundle.get("server_url", "")).strip()
+    token = str(bundle.get("token", "")).strip()
+    token_id = str(bundle.get("token_id", "")).strip()
+    if not principal_id:
+        raise SharingError("Remote peer bundles must include a principal_id.")
+    if not workspace_id:
+        raise SharingError("Remote peer bundles must include a workspace_id.")
+    if not server_url:
+        raise SharingError("Remote peer bundles must include a server_url.")
+    if not token:
+        raise SharingError("Remote peer bundles must include a bearer token.")
+    if not token_id:
+        raise SharingError("Remote peer bundles must include a token_id.")
+    normalized = dict(bundle)
+    normalized["principal_id"] = principal_id
+    normalized["workspace_id"] = workspace_id
+    normalized["server_url"] = server_url
+    normalized["token"] = token
+    normalized["token_id"] = token_id
+    return normalized
+
+
+def _upsert_attached_remote(
+    workspace: "Workspace",
+    bundle: Dict[str, object],
+    require_existing: bool,
+) -> Dict[str, object]:
+    normalized_bundle = _validated_remote_bundle(bundle)
+    principal_id = str(normalized_bundle.get("principal_id", ""))
+    workspace_id = str(normalized_bundle.get("workspace_id", ""))
+    remote_id = f"{workspace_id}:{principal_id}"
+    payload = ensure_shared_workspace_manifest(workspace)
+    remotes = {str(item.get("remote_id", "")): dict(item) for item in list(payload.get("attached_remotes", []))}
+    existing = remotes.get(remote_id) or {}
+    if require_existing and not existing:
+        raise SharingError(f"Could not find attached remote '{remote_id}' to refresh.")
+    now = utc_timestamp()
+    remote = {
+        "remote_id": remote_id,
+        "workspace_id": workspace_id,
+        "workspace_name": str(normalized_bundle.get("workspace_name", "")).strip() or workspace_id,
+        "principal_id": principal_id,
+        "display_name": str(normalized_bundle.get("display_name", "")).strip() or principal_id,
+        "role": str(normalized_bundle.get("role", "viewer")).strip().lower() or "viewer",
+        "status": "attached",
+        "server_url": str(normalized_bundle.get("server_url", "")).strip(),
+        "base_url": str(normalized_bundle.get("base_url", "")).strip(),
+        "capabilities": _sorted_capabilities(list(normalized_bundle.get("capabilities", []))),
+        "scopes": _sorted_capabilities(list(normalized_bundle.get("scopes", []))),
+        "token": str(normalized_bundle.get("token", "")).strip(),
+        "token_id": str(normalized_bundle.get("token_id", "")).strip(),
+        "attached_at": str(existing.get("attached_at", now)) or now,
+        "suspended_at": "",
+        "updated_at": now,
+        "last_pull_at": str(existing.get("last_pull_at", "")),
+        "last_pull_status": str(existing.get("last_pull_status", "")),
+        "last_imported_sync_event_path": str(existing.get("last_imported_sync_event_path", "")),
+        "last_imported_sync_history_path": str(existing.get("last_imported_sync_history_path", "")),
+        "pull_subscription": _normalize_pull_subscription(dict(existing.get("pull_subscription", {}))),
+    }
+    remotes[remote_id] = remote
+    payload["attached_remotes"] = _sorted_attached_remotes(list(remotes.values()))
+    payload["updated_at"] = now
+    _write_shared_workspace_manifest(workspace, payload)
+    return remote
 
 
 def _post_remote_json(url: str, token: str, payload: Dict[str, object]) -> Dict[str, object]:

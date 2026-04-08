@@ -82,7 +82,10 @@ from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE
 from cognisync.scanner import scan_workspace
 from cognisync.sharing import (
     accept_shared_peer,
+    attach_remote_payload,
+    detach_attached_remote,
     ensure_shared_workspace_manifest,
+    refresh_attached_remote_payload,
     invite_shared_peer,
     issue_shared_peer_bundle,
     list_attached_remotes,
@@ -96,6 +99,7 @@ from cognisync.sharing import (
     set_shared_peer_role,
     set_shared_trust_policy,
     sharing_summary,
+    suspend_attached_remote,
     subscribe_shared_peer_sync,
     suspend_shared_peer,
     unsubscribe_shared_peer_sync,
@@ -1248,6 +1252,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     "trust_policy": dict(payload.get("trust_policy", {})),
                     "summary": sharing_summary(self._workspace),
                     "peers": [dict(item) for item in list(payload.get("peers", []))],
+                    "attached_remotes": [dict(item) for item in list(payload.get("attached_remotes", []))],
                 },
             )
             return
@@ -2224,6 +2229,58 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     scopes=[str(item) for item in list(payload.get("scopes", []))] or None,
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), "bundle": bundle})
+                return
+            if parsed.path == "/api/share/remotes/attach":
+                actor = self._authenticate(["control.read"])
+                remote = attach_remote_payload(
+                    self._workspace,
+                    bundle=dict(payload.get("bundle", {})),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "remote": remote, "sharing": sharing_summary(self._workspace)},
+                )
+                return
+            if parsed.path == "/api/share/remotes/refresh":
+                actor = self._authenticate(["control.read"])
+                remote = refresh_attached_remote_payload(
+                    self._workspace,
+                    bundle=dict(payload.get("bundle", {})),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "remote": remote, "sharing": sharing_summary(self._workspace)},
+                )
+                return
+            if parsed.path == "/api/share/remotes/suspend":
+                actor = self._authenticate(["control.read"])
+                remote = suspend_attached_remote(
+                    self._workspace,
+                    remote_ref=str(payload.get("remote_ref", "")) or str(payload.get("remote_id", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "remote": remote, "sharing": sharing_summary(self._workspace)},
+                )
+                return
+            if parsed.path == "/api/share/remotes/remove":
+                actor = self._authenticate(["control.read"])
+                remote = detach_attached_remote(
+                    self._workspace,
+                    remote_ref=str(payload.get("remote_ref", "")) or str(payload.get("remote_id", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "removed_remote_id": str(remote.get("remote_id", "")),
+                        "sharing": sharing_summary(self._workspace),
+                    },
+                )
                 return
             if parsed.path == "/api/share/subscribe-sync":
                 actor = self._authenticate(["control.read"])

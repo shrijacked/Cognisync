@@ -200,8 +200,11 @@ Supported paths in this release:
 - `cognisync share unsubscribe-sync remote-ops --workspace .`
 - `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
 - `cognisync share attach-remote-bundle remote-ops.json --workspace ./mirror`
+- `cognisync share refresh-remote-bundle remote-ops.json --workspace ./mirror`
 - `cognisync share list-attached-remotes --workspace ./mirror`
 - `cognisync share pull-remote remote-ops --workspace ./mirror`
+- `cognisync share suspend-remote remote-ops --workspace ./mirror`
+- `cognisync share detach-remote remote-ops --workspace ./mirror`
 - `cognisync share subscribe-remote-pull remote-ops --workspace ./mirror --every-hours 1`
 - `cognisync share unsubscribe-remote-pull remote-ops --workspace ./mirror`
 
@@ -218,6 +221,7 @@ The command family:
 9. lets operators re-role, suspend, or remove a peer without hand-editing manifests, and those lifecycle actions revoke shared access plus peer-issued tokens automatically
 10. lets another workspace attach a peer bundle as an upstream remote, then pull and import that remote state over HTTP without manually unpacking sync archives
 11. can subscribe attached remotes to hourly pull imports, so the same manifest now tracks both outbound peer exports and inbound upstream syncs
+12. lets operators refresh an attached remote from a rotated peer bundle, suspend it without deleting local provenance, or detach it entirely when the upstream relationship should be removed
 
 ### `control-plane`
 

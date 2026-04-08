@@ -133,6 +133,8 @@ from cognisync.sharing import (
     accept_shared_peer,
     attach_remote_bundle,
     bind_shared_control_plane_url,
+    detach_attached_remote,
+    refresh_attached_remote_bundle,
     invite_shared_peer,
     issue_shared_peer_bundle,
     list_attached_remotes,
@@ -146,6 +148,7 @@ from cognisync.sharing import (
     set_shared_trust_policy,
     subscribe_attached_remote_pull,
     subscribe_shared_peer_sync,
+    suspend_attached_remote,
     suspend_shared_peer,
     unsubscribe_attached_remote_pull,
     unsubscribe_shared_peer_sync,
@@ -1023,6 +1026,23 @@ def cmd_share_list_attached_remotes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_share_refresh_remote_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        remote = refresh_attached_remote_bundle(
+            workspace,
+            bundle_file=args.bundle_file,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Refreshed remote {remote['principal_id']} from {remote['workspace_name']}")
+    print(f"Remote id: {remote['remote_id']}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
 def cmd_share_pull_remote(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     try:
@@ -1039,6 +1059,38 @@ def cmd_share_pull_remote(args: argparse.Namespace) -> int:
     print(f"Sync event: {result['event_manifest_path']}")
     print(f"Sync history: {result['history_manifest_path']}")
     print(f"Copied {result['file_count']} file(s) from the remote bundle.")
+    return 0
+
+
+def cmd_share_suspend_remote(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        remote = suspend_attached_remote(
+            workspace,
+            remote_ref=args.remote_ref,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Suspended attached remote {remote['principal_id']}.")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_detach_remote(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        remote = detach_attached_remote(
+            workspace,
+            remote_ref=args.remote_ref,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Detached remote {remote['principal_id']} from {remote['workspace_name']}.")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
     return 0
 
 
@@ -2599,6 +2651,15 @@ def build_parser() -> argparse.ArgumentParser:
     share_attach_remote_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     share_attach_remote_parser.set_defaults(func=cmd_share_attach_remote_bundle)
 
+    share_refresh_remote_parser = share_subparsers.add_parser(
+        "refresh-remote-bundle",
+        help="Refresh an attached remote bundle with rotated control-plane credentials",
+    )
+    share_refresh_remote_parser.add_argument("bundle_file")
+    share_refresh_remote_parser.add_argument("--workspace", default=".")
+    share_refresh_remote_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_refresh_remote_parser.set_defaults(func=cmd_share_refresh_remote_bundle)
+
     share_list_attached_parser = share_subparsers.add_parser(
         "list-attached-remotes",
         help="List attached remote workspaces imported from peer bundles",
@@ -2615,6 +2676,24 @@ def build_parser() -> argparse.ArgumentParser:
     share_pull_remote_parser.add_argument("--workspace", default=".")
     share_pull_remote_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     share_pull_remote_parser.set_defaults(func=cmd_share_pull_remote)
+
+    share_suspend_remote_parser = share_subparsers.add_parser(
+        "suspend-remote",
+        help="Suspend an attached remote and disable its scheduled pull imports",
+    )
+    share_suspend_remote_parser.add_argument("remote_ref")
+    share_suspend_remote_parser.add_argument("--workspace", default=".")
+    share_suspend_remote_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_suspend_remote_parser.set_defaults(func=cmd_share_suspend_remote)
+
+    share_detach_remote_parser = share_subparsers.add_parser(
+        "detach-remote",
+        help="Detach an attached remote from the local workspace",
+    )
+    share_detach_remote_parser.add_argument("remote_ref")
+    share_detach_remote_parser.add_argument("--workspace", default=".")
+    share_detach_remote_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_detach_remote_parser.set_defaults(func=cmd_share_detach_remote)
 
     share_set_peer_role_parser = share_subparsers.add_parser(
         "set-peer-role",
