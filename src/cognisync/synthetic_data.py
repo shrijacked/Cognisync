@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from cognisync.knowledge_surfaces import is_navigation_surface_path
-from cognisync.manifests import build_graph_manifest
+from cognisync.manifests import build_graph_manifest, read_json_manifest
 from cognisync.types import IndexSnapshot
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
@@ -31,6 +31,22 @@ def export_synthetic_contrastive_bundle(
 ) -> SyntheticBundleResult:
     records = build_synthetic_contrastive_records(workspace)
     return _write_bundle(workspace, "synthetic-contrastive", records, output_dir=output_dir)
+
+
+def export_synthetic_graph_completion_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+) -> SyntheticBundleResult:
+    records = build_synthetic_graph_completion_records(workspace)
+    return _write_bundle(workspace, "synthetic-graph-completion", records, output_dir=output_dir)
+
+
+def export_synthetic_report_writing_bundle(
+    workspace: Workspace,
+    output_dir: Optional[Path] = None,
+) -> SyntheticBundleResult:
+    records = build_synthetic_report_writing_records(workspace)
+    return _write_bundle(workspace, "synthetic-report-writing", records, output_dir=output_dir)
 
 
 def build_synthetic_qa_records(workspace: Workspace) -> List[Dict[str, object]]:
@@ -95,6 +111,86 @@ def build_synthetic_contrastive_records(workspace: Workspace) -> List[Dict[str, 
     return records
 
 
+def build_synthetic_graph_completion_records(workspace: Workspace) -> List[Dict[str, object]]:
+    snapshot = _ensure_snapshot(workspace)
+    graph_manifest = build_graph_manifest(workspace, snapshot)
+    assertions = _assertion_nodes(graph_manifest)
+    records: List[Dict[str, object]] = []
+    for assertion in assertions:
+        subject = str(assertion.get("subject", "")).strip()
+        verb = str(assertion.get("verb", "")).strip()
+        obj = str(assertion.get("object", "")).strip()
+        support_paths = list(assertion.get("support_paths", []))
+        if not subject or not verb or not obj or not support_paths:
+            continue
+        records.append(
+            {
+                "task_type": "graph_completion",
+                "prompt": "\n".join(
+                    [
+                        "Complete the missing graph edge using the support paths.",
+                        f"Subject: {subject}",
+                        f"Verb: {verb}",
+                        "Object: <mask>",
+                        f"Support paths: {', '.join(support_paths)}",
+                    ]
+                ),
+                "response": obj,
+                "assertion": {
+                    "subject": subject,
+                    "verb": verb,
+                    "object": obj,
+                },
+                "support_paths": support_paths,
+                "source_paths": support_paths,
+            }
+        )
+    return records
+
+
+def build_synthetic_report_writing_records(workspace: Workspace) -> List[Dict[str, object]]:
+    records: List[Dict[str, object]] = []
+    for manifest_path in sorted(workspace.runs_dir.glob("*.json")):
+        manifest = read_json_manifest(manifest_path)
+        if str(manifest.get("run_kind", "")) != "research":
+            continue
+        question = str(manifest.get("question", "")).strip()
+        mode = str(manifest.get("mode", "report")).strip() or "report"
+        response_text = ""
+        for candidate in (
+            _workspace_path(workspace, manifest.get("answer_path")),
+            _workspace_path(workspace, manifest.get("report_path")),
+            _workspace_path(workspace, manifest.get("source_packet_path")),
+        ):
+            response_text = _read_text(candidate)
+            if response_text:
+                break
+        if not question or not response_text:
+            continue
+        sources = [
+            str(source.get("path", "")).strip()
+            for source in list(manifest.get("sources", []))
+            if isinstance(source, dict) and str(source.get("path", "")).strip()
+        ]
+        records.append(
+            {
+                "task_type": "report_writing",
+                "prompt": (
+                    f"Write a {mode} answering \"{question}\". "
+                    "Use the persisted corpus artifacts and preserve inline citations where available."
+                ),
+                "response": response_text,
+                "question": question,
+                "mode": mode,
+                "job_profile": str(manifest.get("job_profile", "")),
+                "source_paths": sources,
+                "citations": list(dict(manifest.get("validation", {})).get("used", [])),
+                "run_manifest_path": workspace.relative_path(manifest_path),
+            }
+        )
+    return records
+
+
 def _ensure_snapshot(workspace: Workspace) -> IndexSnapshot:
     return workspace.refresh_index()
 
@@ -141,6 +237,19 @@ def _sentence_case(text: str) -> str:
     if not stripped:
         return stripped
     return stripped[:1].upper() + stripped[1:]
+
+
+def _workspace_path(workspace: Workspace, value: object) -> Optional[Path]:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    return workspace.root / normalized
+
+
+def _read_text(path: Optional[Path]) -> str:
+    if path is None or not path.exists() or not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
 
 
 def _write_bundle(

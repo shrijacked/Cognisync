@@ -271,6 +271,7 @@ The operator loop now has a review layer too:
 - `cognisync worker remote --server-url ... --token ...` polls the hosted-alpha control plane and executes queued jobs against the same manifest-backed runtime, so another process can drain work without sharing a shell session
 - `cognisync worker remote --poll-interval-seconds 2 --max-idle-polls 30` lets a remote worker stay attached to the control plane long enough to catch future jobs instead of exiting immediately when the queue is briefly empty
 - `cognisync worker remote --capability workspace --capability connector` lets a remote worker advertise its declared capability set over HTTP, and the queue will only hand it matching jobs
+- `cognisync worker remote --workspace /path/to/mirror` now claims detached jobs over HTTP, executes them inside a mirrored workspace, and syncs only the resulting artifacts back to the served workspace, so remote execution no longer depends on the server process doing the actual work locally
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, attribute every export/import event to an explicit workspace actor, and can scope bundle exchange to an accepted shared peer with `--for-peer` and `--from-peer`
 - `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and connector mutations now accept `--actor-id` so only operator principals can register, schedule, or run connector pulls
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
@@ -343,6 +344,7 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync control-plane serve --workspace .`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id remote-a --max-jobs 5 --poll-interval-seconds 2 --max-idle-polls 30`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id workspace-a --capability workspace --capability connector --max-jobs 5`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id ingest-a --workspace /tmp/cognisync-mirror --capability ingest --max-jobs 5`
 
 That layer keeps the same filesystem-first contract:
 
@@ -356,6 +358,7 @@ That layer keeps the same filesystem-first contract:
 - scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, and recurring research, compile, lint, or maintain subscriptions can enqueue regular corpus work without adding a second queue system
 - remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including scheduled peer-sync export work
 - remote workers now report their declared capability set through `.cognisync/jobs/workers.json` and `/api/workers`, and hosted job claims respect that routing data when a worker polls with `--capability`
+- mirrored remote workers can now use `/api/jobs/dispatch-next`, `/api/jobs/complete`, and `/api/jobs/fail` to claim work, execute it against a synced local mirror, and push back only the result artifacts through a targeted sync bundle instead of asking the server process to do the execution itself
 - `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely
 - the same served control plane now accepts collaboration actions over HTTP, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through the same token-backed surface
 - the same served control plane now exposes `GET /api/review` plus remote review actions like `/api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed`, so the filesystem-backed review queue is remotely readable and actionable without bypassing workspace roles
@@ -367,6 +370,7 @@ That layer keeps the same filesystem-first contract:
 - connector registry state is now readable at `/api/connectors`, and operator tokens can add connectors, manage subscriptions, or trigger `/api/connectors/sync` and `/api/connectors/sync-all` remotely through the same hosted-alpha surface
 - job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, ingest, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`
 - hosted job mutation endpoints stay role-gated too: matching `jobs.*` scopes are not enough on their own, because `/api/jobs/enqueue/...`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/jobs/run-next` also resolve back through `.cognisync/access.json` and require an operator principal
+- hosted detached-worker endpoints now also exist: `/api/jobs/dispatch-next`, `/api/jobs/complete`, and `/api/jobs/fail` let a mirrored worker claim work, execute it remotely, and return result artifacts plus sync history over the same scoped control-plane surface
 - scheduler subscriptions are remotely manageable too: `GET /api/scheduler/jobs` and `POST /api/scheduler/jobs/research|compile|lint|maintain|remove` expose the recurring-job layer over the same token-backed surface
 - sync bundles can now move directly over HTTP too: `POST /api/sync/export` can emit an inline archive payload and `POST /api/sync/import` can restore that archive into another served workspace with the same peer-trust checks as the local CLI
 - sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace

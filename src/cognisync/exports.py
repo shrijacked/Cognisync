@@ -8,7 +8,12 @@ import shutil
 from typing import Dict, List, Optional
 
 from cognisync.manifests import read_json_manifest
-from cognisync.synthetic_data import build_synthetic_contrastive_records, build_synthetic_qa_records
+from cognisync.synthetic_data import (
+    build_synthetic_contrastive_records,
+    build_synthetic_graph_completion_records,
+    build_synthetic_qa_records,
+    build_synthetic_report_writing_records,
+)
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -366,6 +371,45 @@ def _build_supervised_finetune_records(workspace: Workspace) -> List[Dict[str, o
                 "metadata": {
                     "assertion": dict(record.get("assertion", {})),
                     "support_count": int(record.get("support_count", 0) or 0),
+                },
+            }
+        )
+
+    for record in build_synthetic_graph_completion_records(workspace):
+        prompt_text = str(record.get("prompt") or "").strip()
+        response_text = str(record.get("response") or "").strip()
+        if not prompt_text or not response_text:
+            continue
+        records.append(
+            {
+                "example_type": "graph_completion",
+                "prompt": prompt_text,
+                "response": response_text,
+                "source_paths": list(record.get("source_paths", [])),
+                "metadata": {
+                    "assertion": dict(record.get("assertion", {})),
+                    "support_paths": list(record.get("support_paths", [])),
+                },
+            }
+        )
+
+    for record in build_synthetic_report_writing_records(workspace):
+        prompt_text = str(record.get("prompt") or "").strip()
+        response_text = str(record.get("response") or "").strip()
+        if not prompt_text or not response_text:
+            continue
+        records.append(
+            {
+                "example_type": "report_writing",
+                "prompt": prompt_text,
+                "response": response_text,
+                "citations": list(record.get("citations", [])),
+                "source_paths": list(record.get("source_paths", [])),
+                "metadata": {
+                    "question": str(record.get("question", "")),
+                    "mode": str(record.get("mode", "")),
+                    "job_profile": str(record.get("job_profile", "")),
+                    "run_manifest_path": str(record.get("run_manifest_path", "")),
                 },
             }
         )

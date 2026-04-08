@@ -46,12 +46,15 @@ from cognisync.connectors import (
 from cognisync.jobs import (
     JobError,
     claim_next_job,
+    complete_dispatched_job,
+    dispatch_next_job,
     enqueue_compile_job,
     enqueue_connector_sync_job,
     enqueue_connector_sync_all_job,
     enqueue_ingest_repo_job,
     enqueue_ingest_sitemap_job,
     enqueue_ingest_url_job,
+    fail_dispatched_job,
     enqueue_lint_job,
     enqueue_maintain_job,
     enqueue_research_job,
@@ -1701,6 +1704,38 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), **result.__dict__})
                 return
+            if parsed.path == "/api/jobs/dispatch-next":
+                actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "dispatch jobs over the control plane",
+                )
+                result = dispatch_next_job(
+                    self._workspace,
+                    worker_id=str(payload.get("worker_id", "")),
+                    lease_seconds=int(payload.get("lease_seconds", 300) or 300),
+                    worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))],
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "job": {
+                            "job_id": result.job_id,
+                            "job_type": result.job_type,
+                            "worker_id": result.worker_id,
+                            "lease_expires_at": result.lease_expires_at,
+                            "status": result.status,
+                            "worker_capability": result.worker_capability,
+                            "parameters": result.parameters,
+                            "requested_by": result.requested_by,
+                            "job_manifest_path": self._workspace.relative_path(result.job_manifest_path),
+                            "queue_manifest_path": self._workspace.relative_path(result.queue_manifest_path),
+                        },
+                    },
+                )
+                return
             if parsed.path == "/api/jobs/heartbeat":
                 actor = self._authenticate(["jobs.heartbeat"])
                 actor = _require_control_admin_actor(
@@ -1738,6 +1773,67 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                         "status": result.status,
                         "job_manifest_path": self._workspace.relative_path(result.job_manifest_path),
                         "queue_manifest_path": self._workspace.relative_path(result.queue_manifest_path),
+                    },
+                )
+                return
+            if parsed.path == "/api/jobs/complete":
+                actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "complete dispatched jobs over the control plane",
+                )
+                archive_base64 = str(payload.get("sync_archive_base64", "")).strip()
+                archive_bytes: Optional[bytes] = None
+                if archive_base64:
+                    try:
+                        archive_bytes = base64.b64decode(archive_base64.encode("ascii"), validate=True)
+                    except (ValueError, binascii.Error) as error:
+                        raise ControlPlaneError("The provided sync archive is not valid base64.") from error
+                result = complete_dispatched_job(
+                    self._workspace,
+                    job_id=str(payload.get("job_id", "")),
+                    worker_id=str(payload.get("worker_id", "")),
+                    result_payload=dict(payload.get("result", {})),
+                    sync_archive_bytes=archive_bytes,
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "job_id": result.job_id,
+                        "job_type": result.job_type,
+                        "status": result.status,
+                        "job_manifest_path": self._workspace.relative_path(result.job_manifest_path),
+                        "queue_manifest_path": self._workspace.relative_path(result.queue_manifest_path),
+                        "job": _load_job_manifest(result.job_manifest_path),
+                    },
+                )
+                return
+            if parsed.path == "/api/jobs/fail":
+                actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "fail dispatched jobs over the control plane",
+                )
+                result = fail_dispatched_job(
+                    self._workspace,
+                    job_id=str(payload.get("job_id", "")),
+                    worker_id=str(payload.get("worker_id", "")),
+                    error_message=str(payload.get("error", "")).strip() or "remote execution failed",
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "job_id": result.job_id,
+                        "job_type": result.job_type,
+                        "status": result.status,
+                        "job_manifest_path": self._workspace.relative_path(result.job_manifest_path),
+                        "queue_manifest_path": self._workspace.relative_path(result.queue_manifest_path),
+                        "job": _load_job_manifest(result.job_manifest_path),
                     },
                 )
                 return

@@ -264,6 +264,7 @@ The served API now covers a real remote review surface too:
 - `POST /api/sync/export` and `POST /api/sync/import` let operator tokens exchange inline sync archives over HTTP while still honoring accepted-peer trust policy on import
 - peer-scoped sync handoffs now require the accepted peer to declare `sync.import`, so `sync export --for-peer`, `sync import --from-peer`, and their HTTP equivalents remain explicit capability-based trust decisions instead of role-only defaults
 - `POST /api/jobs/run-next`, `claim-next`, and `heartbeat` now also accept `worker_capabilities`, and `GET /api/workers` persists those declared capabilities in the derived worker registry
+- `POST /api/jobs/dispatch-next`, `complete`, and `fail` now support detached mirrored workers too, so remote operators can claim a job, execute it against a synced local mirror, and return only the resulting artifacts instead of asking the server process to do the work locally
 
 ### `worker remote`
 
@@ -274,15 +275,18 @@ Supported path in this release:
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --max-jobs 5`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --poll-interval-seconds 2 --max-idle-polls 30`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id workspace-a --capability workspace --capability connector`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id ingest-a --workspace /tmp/cognisync-mirror --capability ingest`
 
 The command:
 
-1. polls `/api/jobs/run-next` on the served control plane
-2. reuses the same manifest-backed runtimes as `jobs run-next`
-3. keeps worker identity explicit through `--worker-id`
-4. can keep polling through short idle windows, so a remote worker can stay warm for scheduled jobs instead of exiting on the first empty queue
-5. can advertise declared capabilities like `workspace`, `research`, `ingest`, `connector`, or `sync`, so the hosted queue only hands it compatible work
-6. works with scheduler-enqueued connector jobs and peer-scoped sync-export jobs, so scheduled connector pulls and shared-workspace handoffs can be drained by a remote worker instead of the local shell
+1. polls `/api/jobs/run-next` when no mirror workspace is provided, so the hosted-alpha shim can still execute work directly on the served workspace
+2. switches to `/api/jobs/dispatch-next`, `complete`, and `fail` when `--workspace` points at a mirrored workspace, so the remote process actually performs the job locally and then syncs the result artifacts back
+3. reuses the same manifest-backed runtimes as `jobs run-next`
+4. keeps worker identity explicit through `--worker-id`
+5. can keep polling through short idle windows, so a remote worker can stay warm for scheduled jobs instead of exiting on the first empty queue
+6. can advertise declared capabilities like `workspace`, `research`, `ingest`, `connector`, or `sync`, so the hosted queue only hands it compatible work
+7. works with scheduler-enqueued connector jobs and peer-scoped sync-export jobs, so scheduled connector pulls and shared-workspace handoffs can be drained by a remote worker instead of the local shell
+8. syncs back only the touched result artifacts from the mirrored workspace, which keeps remote execution file-native without copying the whole mirror state on every job
 
 Together, `control-plane serve`, `control-plane scheduler-tick`, and `worker remote` give Cognisync a remote-ready operator loop without breaking the local-first contract.
 

@@ -16,6 +16,7 @@ from cognisync.cli import main
 from cognisync.config import LLMProfile, load_config, save_config
 from cognisync.control_plane import create_control_plane_server
 from cognisync.remote_worker import run_remote_worker
+from cognisync.sync import encode_sync_bundle_archive, export_sync_bundle, import_sync_bundle_archive
 from cognisync.workspace import Workspace
 
 
@@ -2361,6 +2362,96 @@ class ControlPlaneTests(unittest.TestCase):
                 self.assertEqual(workers_payload["workers"][0]["worker_id"], "remote-workspace")
                 self.assertEqual(workers_payload["workers"][0]["declared_capabilities"], ["workspace"])
                 connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_remote_worker_can_execute_jobs_in_a_mirrored_workspace_and_sync_results_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server_root = Path(tmp) / "server-workspace"
+            mirror_root = Path(tmp) / "mirror-workspace"
+            workspace = Workspace(server_root)
+            workspace.initialize(name="Mirrored Remote Worker Server Workspace")
+            (server_root / "raw" / "seed.md").write_text(
+                "# Seed\n\nThe server workspace starts with one seed note.\n",
+                encoding="utf-8",
+            )
+
+            initial_bundle = export_sync_bundle(workspace)
+            mirror_workspace = Workspace(mirror_root)
+            mirror_workspace.initialize(name="Mirrored Remote Worker Mirror")
+            import_sync_bundle_archive(
+                mirror_workspace,
+                encode_sync_bundle_archive(initial_bundle.directory),
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "ingest-url",
+                        "data:text/html;charset=utf-8,<html><head><title>Remote Mirror</title></head><body><p>Remote mirror execution.</p></body></html>",
+                        "--workspace",
+                        str(server_root),
+                        "--name",
+                        "remote-mirror",
+                    ]
+                ),
+                0,
+            )
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(server_root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.claim",
+                        "--scope",
+                        "jobs.heartbeat",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = run_remote_worker(
+                    server_url=f"http://{host}:{port}",
+                    token=token_value,
+                    worker_id="remote-mirror",
+                    max_jobs=1,
+                    worker_capabilities=["ingest"],
+                    workspace_root=mirror_root,
+                )
+
+                self.assertEqual(worker_result.processed_count, 1)
+                self.assertEqual(worker_result.completed_count, 1)
+                self.assertTrue((mirror_root / "raw" / "urls" / "remote-mirror.md").exists())
+                self.assertTrue((server_root / "raw" / "urls" / "remote-mirror.md").exists())
+
+                queue_payload = json.loads((server_root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+                completed_job = next(job for job in queue_payload["jobs"] if job["status"] == "completed")
+                self.assertEqual(completed_job["job_type"], "ingest_url")
+
+                sync_history = json.loads((server_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
+                self.assertGreaterEqual(sync_history["operation_counts"].get("import", 0), 1)
             finally:
                 server.shutdown()
                 server.server_close()

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from cognisync.access import DEFAULT_LOCAL_OPERATOR_ID
 from cognisync.change_summaries import capture_change_state, write_change_summary
 from cognisync.compile_flow import run_compile_cycle
 from cognisync.connectors import sync_all_connectors, sync_connector
@@ -17,7 +18,7 @@ from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.notifications import write_notifications_manifest
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, run_research_cycle
 from cognisync.scanner import scan_workspace
-from cognisync.sync import export_sync_bundle
+from cognisync.sync import export_sync_bundle, import_sync_bundle_archive
 from cognisync.training_loop import improve_research_loop
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
@@ -79,6 +80,20 @@ class JobHeartbeatResult:
     worker_id: str
     lease_expires_at: str
     status: str
+
+
+@dataclass(frozen=True)
+class JobDispatchResult:
+    job_manifest_path: Path
+    queue_manifest_path: Path
+    job_id: str
+    job_type: str
+    worker_id: str
+    lease_expires_at: str
+    status: str
+    parameters: Dict[str, object]
+    requested_by: Optional[Dict[str, str]]
+    worker_capability: str
 
 
 def enqueue_research_job(
@@ -535,12 +550,12 @@ def run_job_worker(
     )
 
 
-def run_next_job(
+def dispatch_next_job(
     workspace: Workspace,
     worker_id: str = "local-worker",
     lease_seconds: int = 300,
     worker_capabilities: Optional[List[str]] = None,
-) -> JobRunResult:
+) -> JobDispatchResult:
     normalized_worker_id = _normalize_worker_id(worker_id)
     normalized_worker_capabilities = _normalize_worker_capabilities(worker_capabilities)
     owned_job = _find_active_job_for_worker(list_jobs(workspace), normalized_worker_id)
@@ -553,9 +568,11 @@ def run_next_job(
         )
         manifest_path = claim.job_manifest_path
         job = _read_job_by_id(workspace, claim.job_id)
+        lease_expires_at = claim.lease_expires_at
     else:
         manifest_path = workspace.job_manifests_dir / f"{owned_job['job_id']}.json"
         job = owned_job
+        lease_expires_at = str(dict(job.get("lease", {})).get("lease_expires_at", ""))
 
     claim_count = _existing_claim_count(job)
     lease = _build_lease_payload(
@@ -582,25 +599,52 @@ def run_next_job(
         claim_count=lease["claim_count"],
         audit_entry=f"{audit_entry} Worker: {normalized_worker_id}.",
     )
+    queue_manifest_path = _write_queue_manifest(workspace)
+    return JobDispatchResult(
+        job_manifest_path=manifest_path,
+        queue_manifest_path=queue_manifest_path,
+        job_id=str(job["job_id"]),
+        job_type=str(job["job_type"]),
+        worker_id=normalized_worker_id,
+        lease_expires_at=str(lease["lease_expires_at"]),
+        status=str(job["status"]),
+        parameters=dict(job.get("parameters", {})),
+        requested_by=dict(job.get("requested_by", {})) if isinstance(job.get("requested_by", {}), dict) else None,
+        worker_capability=str(job.get("worker_capability", "")),
+    )
 
-    try:
-        result_payload = _execute_job(workspace, job)
-    except Exception as error:  # pragma: no cover - exercised through CLI/tests
-        job = _update_job_manifest(
-            manifest_path,
-            status="failed",
-            finished_at=utc_timestamp(),
-            error=str(error),
-            audit_entry=f"Job failed: {error}",
+
+def complete_dispatched_job(
+    workspace: Workspace,
+    job_id: str,
+    worker_id: str,
+    result_payload: Dict[str, object],
+    sync_archive_bytes: Optional[bytes] = None,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> JobRunResult:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    manifest_path = workspace.job_manifests_dir / f"{job_id}.json"
+    job = _read_job_by_id(workspace, job_id)
+    _require_job_worker(job, normalized_worker_id)
+
+    final_result = dict(result_payload)
+    if sync_archive_bytes:
+        import_result = import_sync_bundle_archive(
+            workspace,
+            archive_bytes=sync_archive_bytes,
+            actor_id=actor_id,
         )
-        queue_manifest_path = _write_queue_manifest(workspace)
-        raise JobError(str(error)) from error
+        final_result["imported_sync_manifest_path"] = workspace.relative_path(import_result.manifest_path)
+        final_result["imported_sync_event_path"] = workspace.relative_path(import_result.event_manifest_path)
+        final_result["imported_sync_history_path"] = workspace.relative_path(import_result.history_manifest_path)
+        snapshot = workspace.refresh_index()
+        write_workspace_manifests(workspace, snapshot)
 
     job = _update_job_manifest(
         manifest_path,
         status="completed",
         finished_at=utc_timestamp(),
-        result=result_payload,
+        result=final_result,
         error=None,
         audit_entry="Job execution completed.",
     )
@@ -611,6 +655,86 @@ def run_next_job(
         job_id=str(job["job_id"]),
         job_type=str(job["job_type"]),
         status=str(job["status"]),
+    )
+
+
+def fail_dispatched_job(
+    workspace: Workspace,
+    job_id: str,
+    worker_id: str,
+    error_message: str,
+) -> JobRunResult:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    manifest_path = workspace.job_manifests_dir / f"{job_id}.json"
+    job = _read_job_by_id(workspace, job_id)
+    _require_job_worker(job, normalized_worker_id)
+    job = _update_job_manifest(
+        manifest_path,
+        status="failed",
+        finished_at=utc_timestamp(),
+        error=error_message,
+        audit_entry=f"Job failed: {error_message}",
+    )
+    queue_manifest_path = _write_queue_manifest(workspace)
+    return JobRunResult(
+        job_manifest_path=manifest_path,
+        queue_manifest_path=queue_manifest_path,
+        job_id=str(job["job_id"]),
+        job_type=str(job["job_type"]),
+        status=str(job["status"]),
+    )
+
+
+def execute_job_payload(
+    workspace: Workspace,
+    job_type: str,
+    parameters: Dict[str, object],
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    result = _execute_job(
+        workspace,
+        {
+            "job_type": job_type,
+            "parameters": dict(parameters),
+            "requested_by": dict(requested_by or {}),
+        },
+    )
+    return _with_artifact_paths(result)
+
+
+def run_next_job(
+    workspace: Workspace,
+    worker_id: str = "local-worker",
+    lease_seconds: int = 300,
+    worker_capabilities: Optional[List[str]] = None,
+) -> JobRunResult:
+    dispatch = dispatch_next_job(
+        workspace,
+        worker_id=worker_id,
+        lease_seconds=lease_seconds,
+        worker_capabilities=worker_capabilities,
+    )
+    try:
+        result_payload = execute_job_payload(
+            workspace,
+            job_type=dispatch.job_type,
+            parameters=dispatch.parameters,
+            requested_by=dispatch.requested_by,
+        )
+    except Exception as error:  # pragma: no cover - exercised through CLI/tests
+        fail_dispatched_job(
+            workspace,
+            job_id=dispatch.job_id,
+            worker_id=dispatch.worker_id,
+            error_message=str(error),
+        )
+        raise JobError(str(error)) from error
+
+    return complete_dispatched_job(
+        workspace,
+        job_id=dispatch.job_id,
+        worker_id=dispatch.worker_id,
+        result_payload=result_payload,
     )
 
 
@@ -856,8 +980,15 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
         )
         return {
             "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+            "plan_path": workspace.relative_path(result.plan_path),
+            "packet_path": workspace.relative_path(result.packet_path),
             "report_path": workspace.relative_path(result.report_path),
             "answer_path": workspace.relative_path(result.answer_path) if result.answer_path else None,
+            "slide_path": workspace.relative_path(result.slide_path) if result.slide_path else None,
+            "notes_dir": workspace.relative_path(result.notes_dir),
+            "source_packet_path": workspace.relative_path(result.source_packet_path),
+            "checkpoints_path": workspace.relative_path(result.checkpoints_path),
+            "validation_report_path": workspace.relative_path(result.validation_report_path),
             "change_summary_path": workspace.relative_path(result.change_summary_path),
             "status": result.status,
             "warning_count": result.warning_count,
@@ -1034,6 +1165,26 @@ def _optional_string(value: object) -> Optional[str]:
     return normalized
 
 
+def _with_artifact_paths(result_payload: Dict[str, object]) -> Dict[str, object]:
+    enriched = dict(result_payload)
+    artifact_paths: List[str] = []
+    for key, value in enriched.items():
+        if key == "artifact_paths":
+            continue
+        if key.endswith(("_path", "_file", "_dir")):
+            candidate = _optional_string(value)
+            if candidate:
+                artifact_paths.append(candidate)
+        elif key.endswith(("_paths", "_files", "_dirs")) and isinstance(value, list):
+            for item in value:
+                candidate = _optional_string(item)
+                if candidate:
+                    artifact_paths.append(candidate)
+    artifact_paths.extend(["log.md", "wiki/index.md", "wiki/sources.md", "wiki/concepts.md", "wiki/queries.md"])
+    enriched["artifact_paths"] = sorted({path for path in artifact_paths if path})
+    return enriched
+
+
 def _normalize_worker_id(worker_id: str) -> str:
     normalized = worker_id.strip()
     if not normalized:
@@ -1092,6 +1243,17 @@ def _find_active_job_for_worker(jobs: List[Dict[str, object]], worker_id: str) -
         if _job_has_active_lease(job):
             return job
     return None
+
+
+def _require_job_worker(job: Dict[str, object], worker_id: str) -> None:
+    lease = dict(job.get("lease", {}))
+    current_worker_id = str(lease.get("worker_id", "")).strip()
+    if current_worker_id != worker_id:
+        raise JobError(
+            f"Job {job.get('job_id', '')} is owned by {current_worker_id or 'no active worker'} and cannot be updated by {worker_id}."
+        )
+    if str(job.get("status", "")) not in {"claimed", "running"}:
+        raise JobError(f"Job {job.get('job_id', '')} is not actively running.")
 
 
 def _job_is_claimable(job: Dict[str, object]) -> bool:

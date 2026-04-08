@@ -145,6 +145,8 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(retrieval_records[0]["example_type"], "contrastive_retrieval")
             self.assertGreaterEqual(manifest["supervised_count"], 1)
             self.assertGreaterEqual(manifest["retrieval_count"], 1)
+            self.assertGreaterEqual(manifest["supervised_example_types"].get("graph_completion", 0), 1)
+            self.assertGreaterEqual(manifest["supervised_example_types"].get("report_writing", 0), 1)
             self.assertIn("Wrote finetune export to", stdout.getvalue())
 
     def test_export_finetune_bundle_can_emit_openai_chat_supervised_records(self) -> None:

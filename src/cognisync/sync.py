@@ -6,7 +6,7 @@ import io
 import json
 from pathlib import Path
 import shutil
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import zipfile
 
 from cognisync.access import (
@@ -129,6 +129,7 @@ def export_sync_bundle(
     output_dir: Optional[Path] = None,
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
     peer_ref: Optional[str] = None,
+    included_paths: Optional[List[Union[Path, str]]] = None,
 ) -> SyncBundleResult:
     ensure_access_manifest(workspace)
     actor = require_access_role(
@@ -140,20 +141,24 @@ def export_sync_bundle(
     destination = output_dir or _next_sync_bundle_dir(workspace)
     destination.mkdir(parents=True, exist_ok=True)
 
-    included_paths = [
-        Path("raw"),
-        Path("wiki"),
-        Path("prompts"),
-        Path(".cognisync"),
-        Path("outputs") / "slides",
-        Path("outputs") / "reports" / "change-summaries",
-        Path("outputs") / "reports" / "research-jobs",
-        Path("outputs") / "reports" / "remediation-jobs",
-    ]
+    export_paths = _normalize_export_paths(
+        workspace,
+        included_paths
+        or [
+            Path("raw"),
+            Path("wiki"),
+            Path("prompts"),
+            Path(".cognisync"),
+            Path("outputs") / "slides",
+            Path("outputs") / "reports" / "change-summaries",
+            Path("outputs") / "reports" / "research-jobs",
+            Path("outputs") / "reports" / "remediation-jobs",
+        ],
+    )
     copied_paths: List[str] = []
     file_count = 0
 
-    for relative_path in included_paths:
+    for relative_path in export_paths:
         source_path = workspace.root / relative_path
         if not source_path.exists():
             continue
@@ -387,6 +392,24 @@ def _state_manifest_paths(workspace: Workspace) -> Dict[str, str]:
         for name, path in sorted(manifest_paths.items())
         if path.exists()
     }
+
+
+def _normalize_export_paths(workspace: Workspace, included_paths: List[Union[Path, str]]) -> List[Path]:
+    normalized: Dict[str, Path] = {}
+    for item in included_paths:
+        candidate = Path(str(item)).expanduser()
+        if candidate.is_absolute():
+            try:
+                candidate = candidate.relative_to(workspace.root)
+            except ValueError as error:
+                raise SyncError(
+                    f"Sync export path '{candidate}' is outside the workspace root {workspace.root}."
+                ) from error
+        candidate_text = candidate.as_posix().strip()
+        if not candidate_text or candidate_text == ".":
+            continue
+        normalized[candidate_text] = Path(candidate_text)
+    return [normalized[key] for key in sorted(normalized)]
 
 
 def _shared_peer_payload(workspace: Workspace, peer_ref: Optional[str]) -> Optional[Dict[str, object]]:

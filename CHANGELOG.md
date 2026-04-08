@@ -75,6 +75,8 @@
 - added `cognisync share set-policy|subscribe-sync|unsubscribe-sync` so shared-workspace trust policy and scheduled peer sync exports are durable operator controls instead of manual manifest edits
 - added `cognisync control-plane workers` plus `/api/workers` so remote worker state is inspectable through the same hosted-alpha surface
 - taught `cognisync worker remote` to poll through short idle windows, so scheduled or future jobs can be picked up without relaunching the worker on every empty queue
+- added detached hosted job execution endpoints so `/api/jobs/dispatch-next`, `/api/jobs/complete`, and `/api/jobs/fail` can drive mirrored remote workers without forcing the server process to execute the job itself
+- taught `cognisync worker remote --workspace /path/to/mirror` to claim jobs over HTTP, execute them inside a mirrored workspace, and sync only the resulting artifacts back through a targeted bundle
 - added `cognisync control-plane scheduler-status` plus due peer-sync ids in `/api/scheduler` and `/api/scheduler/tick`, so scheduled peer exports are inspectable over both CLI and HTTP
 - added peer-scoped `sync export --for-peer`, `sync import --from-peer`, and queued `jobs enqueue sync-export`, so shared-workspace handoffs can move through the same manifest-backed worker system as the rest of the control plane
 - hardened notification manifest reads against transient concurrent queue writes, so remote polling workers and local enqueues can overlap without breaking the operator inbox

@@ -140,7 +140,12 @@ from cognisync.sharing import (
     subscribe_shared_peer_sync,
     unsubscribe_shared_peer_sync,
 )
-from cognisync.synthetic_data import export_synthetic_contrastive_bundle, export_synthetic_qa_bundle
+from cognisync.synthetic_data import (
+    export_synthetic_contrastive_bundle,
+    export_synthetic_graph_completion_bundle,
+    export_synthetic_qa_bundle,
+    export_synthetic_report_writing_bundle,
+)
 from cognisync.sync import SyncError, export_sync_bundle, import_sync_bundle, render_sync_history
 from cognisync.training_loop import export_training_loop_bundle, improve_research_loop
 from cognisync.workspace import Workspace
@@ -1269,6 +1274,7 @@ def cmd_worker_remote(args: argparse.Namespace) -> int:
             poll_interval_seconds=args.poll_interval_seconds,
             max_idle_polls=args.max_idle_polls,
             worker_capabilities=list(args.capability or []),
+            workspace_root=Path(args.workspace).expanduser().resolve() if args.workspace else None,
         )
     except RemoteWorkerError as error:
         print(str(error), file=sys.stderr)
@@ -1765,6 +1771,38 @@ def cmd_synth_contrastive(args: argparse.Namespace) -> int:
     print(f"Wrote synthetic dataset to {result.dataset_path}")
     print(f"Wrote synthetic manifest to {result.manifest_path}")
     print(f"Generated {result.record_count} synthetic contrastive record(s).")
+    return 0
+
+
+def cmd_synth_graph_completion(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_synthetic_graph_completion_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote synthetic graph-completion bundle to {result.directory}")
+    print(f"Wrote synthetic dataset to {result.dataset_path}")
+    print(f"Wrote synthetic manifest to {result.manifest_path}")
+    print(f"Generated {result.record_count} synthetic graph-completion record(s).")
+    return 0
+
+
+def cmd_synth_report_writing(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+        if not output_dir.is_absolute():
+            output_dir = workspace.root / output_dir
+        output_dir = output_dir.resolve()
+    result = export_synthetic_report_writing_bundle(workspace, output_dir=output_dir)
+    print(f"Wrote synthetic report-writing bundle to {result.directory}")
+    print(f"Wrote synthetic dataset to {result.dataset_path}")
+    print(f"Wrote synthetic manifest to {result.manifest_path}")
+    print(f"Generated {result.record_count} synthetic report-writing record(s).")
     return 0
 
 
@@ -2795,6 +2833,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker_remote_parser.add_argument("--poll-interval-seconds", type=float, default=0.0)
     worker_remote_parser.add_argument("--max-idle-polls", type=int, default=0)
     worker_remote_parser.add_argument("--capability", action="append", default=[])
+    worker_remote_parser.add_argument("--workspace", default=None)
     worker_remote_parser.set_defaults(func=cmd_worker_remote)
 
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
@@ -3189,6 +3228,20 @@ def build_parser() -> argparse.ArgumentParser:
     synth_contrastive_parser.add_argument("--workspace", default=".")
     synth_contrastive_parser.add_argument("--output-dir", default=None)
     synth_contrastive_parser.set_defaults(func=cmd_synth_contrastive)
+
+    synth_graph_completion_parser = synth_subparsers.add_parser(
+        "graph-completion", help="Generate missing-edge completion records from assertion graph edges"
+    )
+    synth_graph_completion_parser.add_argument("--workspace", default=".")
+    synth_graph_completion_parser.add_argument("--output-dir", default=None)
+    synth_graph_completion_parser.set_defaults(func=cmd_synth_graph_completion)
+
+    synth_report_writing_parser = synth_subparsers.add_parser(
+        "report-writing", help="Generate report-writing examples from persisted research runs"
+    )
+    synth_report_writing_parser.add_argument("--workspace", default=".")
+    synth_report_writing_parser.add_argument("--output-dir", default=None)
+    synth_report_writing_parser.set_defaults(func=cmd_synth_report_writing)
 
     ui_parser = subparsers.add_parser("ui", help="Generate or serve lightweight Cognisync web interfaces")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
