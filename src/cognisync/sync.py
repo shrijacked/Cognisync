@@ -20,6 +20,7 @@ from cognisync.sharing import (
     list_shared_peers,
     load_shared_workspace_manifest,
     mark_shared_peer_sync_exported,
+    peer_has_capability,
 )
 from cognisync.utils import utc_timestamp
 from cognisync.workspace import Workspace
@@ -398,6 +399,10 @@ def _shared_peer_payload(workspace: Workspace, peer_ref: Optional[str]) -> Optio
     peer = next((item for item in peers if str(item.get("peer_id", "")) == normalized_ref), None)
     if peer is None:
         raise SyncError(f"Accepted shared peer '{normalized_ref}' is required for peer-scoped sync export.")
+    if not peer_has_capability(peer, "sync.import"):
+        raise SyncError(
+            f"Accepted shared peer '{normalized_ref}' must declare sync.import capability for peer-scoped exports."
+        )
     return {
         "peer_id": str(peer.get("peer_id", "")),
         "display_name": str(peer.get("display_name", "")),
@@ -421,8 +426,13 @@ def _validate_peer_sync_import(workspace: Workspace, manifest: Dict[str, object]
 
     effective_peer_id = requested_peer or manifest_peer_id
     peers = list_shared_peers(workspace, status="accepted")
-    if not any(str(item.get("peer_id", "")) == effective_peer_id for item in peers):
+    peer = next((item for item in peers if str(item.get("peer_id", "")) == effective_peer_id), None)
+    if peer is None:
         raise SyncError(f"Accepted shared peer '{effective_peer_id}' is required for this sync import.")
+    if not peer_has_capability(peer, "sync.import"):
+        raise SyncError(
+            f"Accepted shared peer '{effective_peer_id}' must declare sync.import capability for this sync import."
+        )
     if requested_peer and manifest_peer_id and manifest_peer_id != requested_peer:
         raise SyncError(
             f"Bundle peer mismatch: manifest targets '{manifest_peer_id}' but import was requested for '{requested_peer}'."

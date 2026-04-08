@@ -205,7 +205,8 @@ The command family:
 4. persists a shared-workspace trust policy so remote worker bundles and peer-originated sync imports can be enabled or disabled without editing JSON by hand
 5. can subscribe accepted peers to scheduled sync exports on an hourly interval, keeping that schedule beside the rest of the shared-workspace state
 6. issues peer bundles only for accepted peers and only after a control-plane URL is bound, so remote workers receive a coherent package
-7. reuses the same scoped token issuance path as `control-plane issue-token`, so peer bundles inherit the role-aware control-plane contract instead of inventing a second auth model
+7. derives bundle scopes from declared peer capabilities like `jobs.remote`, `review.remote`, `scheduler.remote`, `connectors.sync`, `control.admin`, or explicit scope strings, so peer handoffs stay intentionally least-privilege
+8. reuses the same scoped token issuance path as `control-plane issue-token`, so peer bundles inherit the role-aware control-plane contract instead of inventing a second auth model
 
 ### `control-plane`
 
@@ -240,6 +241,7 @@ The command family:
 6. serves a lightweight HTTP layer for status, shared-workspace state, access roster, collaboration threads, notifications, audit, usage, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
 7. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
 8. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
+9. requires an operator principal for hosted job mutation endpoints even when a token carries matching `jobs.*` scopes, so HTTP queue execution does not bypass the workspace roster
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
 
@@ -259,6 +261,7 @@ The served API now covers a real remote review surface too:
 - `GET /api/connectors` plus `POST /api/connectors/add`, `subscribe`, `unsubscribe`, `sync`, and `sync-all` let the hosted-alpha layer inspect and execute connector work without falling back to a local shell
 - `POST /api/jobs/enqueue/research|compile|lint|maintain|ingest-url|ingest-repo|ingest-sitemap|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
 - `POST /api/sync/export` and `POST /api/sync/import` let operator tokens exchange inline sync archives over HTTP while still honoring accepted-peer trust policy on import
+- peer-scoped sync handoffs now require the accepted peer to declare `sync.import`, so `sync export --for-peer`, `sync import --from-peer`, and their HTTP equivalents remain explicit capability-based trust decisions instead of role-only defaults
 
 ### `worker remote`
 

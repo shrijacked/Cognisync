@@ -16,6 +16,15 @@ class SharingError(RuntimeError):
     pass
 
 
+PEER_CAPABILITY_SCOPE_ALIASES = {
+    "jobs.remote": {"control.read", "jobs.run", "jobs.claim", "jobs.heartbeat"},
+    "review.remote": {"control.read", "review.run"},
+    "scheduler.remote": {"control.read", "scheduler.run"},
+    "connectors.sync": {"control.read", "connectors.sync"},
+    "control.admin": {"control.read", "control.admin"},
+}
+
+
 def ensure_shared_workspace_manifest(workspace: "Workspace") -> Dict[str, object]:
     payload = load_shared_workspace_manifest(workspace)
     _write_shared_workspace_manifest(workspace, payload)
@@ -173,7 +182,7 @@ def issue_shared_peer_bundle(
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
     scopes: Optional[List[str]] = None,
 ) -> Dict[str, object]:
-    from cognisync.control_plane import issue_control_plane_token
+    from cognisync.control_plane import DEFAULT_CONTROL_SCOPES, issue_control_plane_token
 
     require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "issue shared-workspace peer bundles")
     payload = ensure_shared_workspace_manifest(workspace)
@@ -192,11 +201,22 @@ def issue_shared_peer_bundle(
         raise SharingError(f"Could not find shared peer '{normalized_ref}'.")
     if str(peer.get("status", "")) != "accepted":
         raise SharingError(f"Peer '{normalized_ref}' must be accepted before a bundle can be issued.")
+    allowed_scopes = peer_allowed_control_scopes(peer)
+    requested_scopes = sorted({str(item).strip() for item in list(scopes or []) if str(item).strip()}) or allowed_scopes
+    disallowed_scopes = sorted(scope for scope in requested_scopes if scope not in allowed_scopes)
+    if disallowed_scopes:
+        raise SharingError(
+            "Requested scopes are not permitted by peer capabilities: "
+            + ", ".join(disallowed_scopes)
+            + "."
+        )
+    if not requested_scopes:
+        requested_scopes = list(DEFAULT_CONTROL_SCOPES.get(str(peer.get("role", "")), ["control.read"]))
 
     token_payload, raw_token = issue_control_plane_token(
         workspace,
         principal_id=str(peer.get("peer_id", "")),
-        scopes=scopes,
+        scopes=requested_scopes,
         actor_id=actor_id,
         description=f"shared-workspace bundle for {peer.get('peer_id', '')}",
     )
@@ -204,6 +224,7 @@ def issue_shared_peer_bundle(
     peer["last_bundle_issued_at"] = issued_at
     peer["last_token_id"] = str(token_payload.get("token_id", ""))
     peer["last_bundle_scopes"] = [str(item) for item in list(token_payload.get("scopes", []))]
+    peer["last_allowed_bundle_scopes"] = allowed_scopes
     peer["updated_at"] = issued_at
     payload["peers"] = _sorted_peers(peers)
     payload["updated_at"] = issued_at
@@ -413,6 +434,28 @@ def _normalize_shared_workspace_manifest(workspace: "Workspace", payload: Dict[s
 
 def _sorted_capabilities(capabilities: List[str]) -> List[str]:
     return sorted({str(item).strip() for item in capabilities if str(item).strip()})
+
+
+def peer_has_capability(peer: Dict[str, object], capability: str) -> bool:
+    normalized_capability = str(capability).strip()
+    if not normalized_capability:
+        return False
+    capabilities = {str(item).strip() for item in list(peer.get("capabilities", [])) if str(item).strip()}
+    return normalized_capability in capabilities
+
+
+def peer_allowed_control_scopes(peer: Dict[str, object]) -> List[str]:
+    from cognisync.control_plane import DEFAULT_CONTROL_SCOPES
+
+    role = str(peer.get("role", "viewer")).strip().lower() or "viewer"
+    role_scopes = set(DEFAULT_CONTROL_SCOPES.get(role, ["control.read"]))
+    known_scopes = {scope for scopes in DEFAULT_CONTROL_SCOPES.values() for scope in scopes}
+    allowed = {"control.read"}
+    for capability in _sorted_capabilities(list(peer.get("capabilities", []))):
+        if capability in known_scopes:
+            allowed.add(capability)
+        allowed.update(PEER_CAPABILITY_SCOPE_ALIASES.get(capability, set()))
+    return sorted(scope for scope in allowed if scope in role_scopes or scope == "control.read")
 
 
 def _sorted_peers(peers: List[Dict[str, object]]) -> List[Dict[str, object]]:

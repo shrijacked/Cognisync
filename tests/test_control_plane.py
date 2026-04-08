@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 import sys
@@ -5,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stderr
 from http.client import HTTPConnection
 from pathlib import Path
 
@@ -1200,6 +1202,59 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_job_endpoints_still_require_operator_role(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Queue Role Workspace")
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+
+            reviewer_token_path = Path(tmp) / "reviewer-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(reviewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            reviewer_token = json.loads(reviewer_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/lint",
+                    body=json.dumps({}),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 403)
+                self.assertIn("does not have permission", payload["error"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_control_plane_can_enqueue_remote_ingest_jobs_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -1420,7 +1475,21 @@ class ControlPlaneTests(unittest.TestCase):
                 ),
                 0,
             )
-            self.assertEqual(main(["share", "invite-peer", "remote-ops", "operator", "--workspace", str(source_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(source_root),
+                        "--capability",
+                        "sync.import",
+                    ]
+                ),
+                0,
+            )
             self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(source_root)]), 0)
 
             self.assertEqual(
@@ -1435,7 +1504,21 @@ class ControlPlaneTests(unittest.TestCase):
                 ),
                 0,
             )
-            self.assertEqual(main(["share", "invite-peer", "remote-ops", "operator", "--workspace", str(target_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(target_root),
+                        "--capability",
+                        "sync.import",
+                    ]
+                ),
+                0,
+            )
             self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(target_root)]), 0)
             self.assertEqual(
                 main(
@@ -1862,7 +1945,10 @@ class ControlPlaneTests(unittest.TestCase):
             self.assertEqual(bundle_payload["workspace_name"], "Shared Operator Workspace")
             self.assertIn("jobs.remote", bundle_payload["capabilities"])
             self.assertTrue(bundle_payload["token"].startswith("cp_"))
+            self.assertIn("jobs.claim", bundle_payload["scopes"])
+            self.assertIn("jobs.heartbeat", bundle_payload["scopes"])
             self.assertIn("jobs.run", bundle_payload["scopes"])
+            self.assertNotIn("control.admin", bundle_payload["scopes"])
 
             sharing_payload = json.loads((root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
             peer = sharing_payload["peers"][0]
@@ -1874,6 +1960,58 @@ class ControlPlaneTests(unittest.TestCase):
             remote_tokens = [item for item in control_payload["tokens"] if item["principal_id"] == "remote-ops"]
             self.assertEqual(len(remote_tokens), 1)
             self.assertEqual(remote_tokens[0]["token_id"], peer["last_token_id"])
+
+    def test_share_issue_peer_bundle_rejects_scopes_outside_capabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            bundle_path = Path(tmp) / "remote-ops-bundle.json"
+            self.assertEqual(main(["init", str(root), "--name", "Shared Operator Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                        "--capability",
+                        "jobs.remote",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "share",
+                        "issue-peer-bundle",
+                        "remote-ops",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(bundle_path),
+                        "--scope",
+                        "control.admin",
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("not permitted by peer capabilities", stderr.getvalue())
 
     def test_control_plane_tracks_invites_and_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

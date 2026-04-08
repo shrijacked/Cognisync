@@ -89,6 +89,9 @@
 - expanded hosted-alpha connector endpoints to cover add, subscribe, and unsubscribe, so connector registry management is no longer local-shell only
 - added recurring control-plane job subscriptions for research, compile, lint, and maintain, so the scheduler can enqueue corpus work alongside connector pulls and peer syncs
 - added hosted-alpha scheduler job endpoints plus CLI surfaces for listing and removing recurring subscriptions, so recurring job orchestration is remotely manageable too
+- tightened shared peer bundles so issued control-plane scopes now derive from declared peer capabilities instead of silently inheriting the full role default
+- tightened peer-scoped `sync export --for-peer`, `sync import --from-peer`, and HTTP sync handoffs so accepted peers must explicitly declare `sync.import` before workspace bundles can target them
+- tightened hosted-alpha job execution endpoints so `/api/jobs/enqueue/...`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/jobs/run-next` now require an operator principal in addition to matching token scopes
 
 ## v0.1.4 - 2026-04-03
 

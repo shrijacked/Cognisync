@@ -1376,6 +1376,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/research":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 question = str(payload.get("question", "")).strip()
                 if not question:
                     raise ControlPlaneError("A research question is required.")
@@ -1393,6 +1398,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/compile":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 manifest_path = enqueue_compile_job(
                     self._workspace,
                     profile_name=str(payload.get("profile_name", "")) or None,
@@ -1402,11 +1412,21 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/lint":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 manifest_path = enqueue_lint_job(self._workspace, requested_by=actor)
                 self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
                 return
             if parsed.path == "/api/jobs/enqueue/maintain":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 manifest_path = enqueue_maintain_job(
                     self._workspace,
                     max_concepts=int(payload.get("max_concepts", 10) or 10),
@@ -1419,6 +1439,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/connector-sync":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 connector_id = str(payload.get("connector_id", "")).strip()
                 if not connector_id:
                     raise ControlPlaneError("A connector id is required.")
@@ -1432,6 +1457,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/connector-sync-all":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 manifest_path = enqueue_connector_sync_all_job(
                     self._workspace,
                     force=bool(payload.get("force", False)),
@@ -1443,6 +1473,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/sync-export":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 manifest_path = enqueue_sync_export_job(
                     self._workspace,
                     peer_ref=str(payload.get("peer_ref", "")) or None,
@@ -1453,6 +1488,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/ingest-url":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 url = str(payload.get("url", "")).strip()
                 if not url:
                     raise ControlPlaneError("A source URL is required.")
@@ -1467,6 +1507,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/ingest-repo":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 source = str(payload.get("source", "")).strip()
                 if not source:
                     raise ControlPlaneError("A repository source is required.")
@@ -1481,6 +1526,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/enqueue/ingest-sitemap":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
                 source = str(payload.get("source", "")).strip()
                 if not source:
                     raise ControlPlaneError("A sitemap source is required.")
@@ -1638,6 +1688,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/claim-next":
                 actor = self._authenticate(["jobs.claim"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "claim jobs over the control plane",
+                )
                 result = claim_next_job(
                     self._workspace,
                     worker_id=str(payload.get("worker_id", "")),
@@ -1647,6 +1702,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/heartbeat":
                 actor = self._authenticate(["jobs.heartbeat"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "renew job leases over the control plane",
+                )
                 result = heartbeat_job(
                     self._workspace,
                     worker_id=str(payload.get("worker_id", "")),
@@ -1656,6 +1716,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/jobs/run-next":
                 actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "run jobs over the control plane",
+                )
                 result = run_next_job(
                     self._workspace,
                     worker_id=str(payload.get("worker_id", "")),

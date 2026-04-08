@@ -891,6 +891,8 @@ class JobsAndSyncTests(unittest.TestCase):
                         "operator",
                         "--workspace",
                         str(target_root),
+                        "--capability",
+                        "sync.import",
                     ]
                 ),
                 0,
@@ -969,6 +971,98 @@ class JobsAndSyncTests(unittest.TestCase):
                 )
             self.assertEqual(import_exit, 2)
             self.assertIn("Sync imports from shared peers are disabled", stderr.getvalue())
+
+    def test_peer_scoped_sync_import_requires_sync_import_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = Path(tmp) / "source"
+            target_root = Path(tmp) / "target"
+            self.assertEqual(main(["init", str(source_root), "--name", "Source Workspace"]), 0)
+            self.assertEqual(main(["init", str(target_root), "--name", "Target Workspace"]), 0)
+
+            (source_root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(main(["scan", "--workspace", str(source_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.source.test/api",
+                        "--workspace",
+                        str(source_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(source_root),
+                        "--capability",
+                        "sync.import",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(source_root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(target_root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(target_root)]), 0)
+
+            bundle_dir = source_root / "outputs" / "reports" / "sync-bundles" / "remote-peer-bundle"
+            self.assertEqual(
+                main(
+                    [
+                        "sync",
+                        "export",
+                        "--workspace",
+                        str(source_root),
+                        "--actor-id",
+                        "local-operator",
+                        "--for-peer",
+                        "remote-ops",
+                        "--output-dir",
+                        str(bundle_dir),
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                import_exit = main(
+                    [
+                        "sync",
+                        "import",
+                        str(bundle_dir),
+                        "--workspace",
+                        str(target_root),
+                        "--actor-id",
+                        "local-operator",
+                        "--from-peer",
+                        "remote-ops",
+                    ]
+                )
+            self.assertEqual(import_exit, 2)
+            self.assertIn("sync.import", stderr.getvalue())
 
     def test_jobs_worker_drains_compile_lint_and_maintain_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
