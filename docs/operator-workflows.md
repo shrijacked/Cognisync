@@ -219,6 +219,12 @@ Supported paths in this release:
 - `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
 - `cognisync control-plane list-tokens`
 - `cognisync control-plane revoke-token <token-id>`
+- `cognisync control-plane schedule-research "map contradictions in deployment notes" --every-hours 6`
+- `cognisync control-plane schedule-compile --every-hours 12`
+- `cognisync control-plane schedule-lint --every-hours 12`
+- `cognisync control-plane schedule-maintain --every-hours 12 --max-concepts 4 --max-backlinks 4`
+- `cognisync control-plane list-scheduled-jobs`
+- `cognisync control-plane remove-scheduled-job <subscription-id>`
 - `cognisync control-plane scheduler-status`
 - `cognisync control-plane workers`
 - `cognisync control-plane scheduler-tick --enqueue-only --actor-id local-operator`
@@ -229,20 +235,23 @@ The command family:
 1. materializes `.cognisync/control-plane.json`
 2. keeps workspace invites and accepted memberships file-native instead of hiding them in process memory
 3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes
-4. supports scheduler ticks that enqueue or execute scheduled connector sync work and due peer-scoped sync-export jobs against the same queue and connector manifests the local CLI already uses
-5. serves a lightweight HTTP layer for status, shared-workspace state, access roster, collaboration threads, notifications, audit, usage, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
-6. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
-7. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
+4. persists recurring research, compile, lint, and maintain subscriptions beside connector and peer-sync schedules, so the scheduler can drive corpus work without a second orchestration store
+5. supports scheduler ticks that enqueue or execute scheduled connector sync work, due peer-scoped sync-export jobs, and recurring corpus jobs against the same queue and connector manifests the local CLI already uses
+6. serves a lightweight HTTP layer for status, shared-workspace state, access roster, collaboration threads, notifications, audit, usage, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
+7. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
+8. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
 
 The served API now covers a real remote review surface too:
 
 - `GET /api/share`, `GET /api/access`, `GET /api/collab`, `GET /api/notifications`, `GET /api/audit`, and `GET /api/usage` expose the same file-native state the local CLI renders
+- `GET /api/scheduler` now exposes due recurring job ids alongside due connectors and peer syncs, and `GET /api/scheduler/jobs` exposes the persisted recurring-job manifest itself
 - `GET /api/review` exposes the live open queue, dismissal ledger, and persisted review-action state over the same token-backed surface
 - `GET /api/runs`, `GET /api/sync`, and `GET /api/change-summaries` expose run history, sync history, and corpus-delta history over the same file-native control-plane surface
 - `GET /api/artifacts/preview?path=...` exposes text artifact previews and manifest inspection over the same hosted layer
 - `POST /api/access/grant`, `revoke`, `GET /api/invites`, `POST /api/invites/create`, `accept`, `GET /api/tokens`, and `POST /api/tokens/issue`, `revoke` let operator tokens manage the remote auth layer itself instead of falling back to the local shell
+- `POST /api/scheduler/jobs/research|compile|lint|maintain|remove` lets operator tokens manage recurring job subscriptions over HTTP instead of hand-editing control-plane state
 - `POST /api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed` let reviewer or operator tokens mutate the review loop remotely while still resolving back through `.cognisync/access.json`
 - `POST /api/collab/request-review`, `comment`, `approve`, `request-changes`, and `resolve` let editors and reviewers mutate artifact-review state over HTTP while still enforcing the workspace role model
 - `POST /api/share/set-policy`, `subscribe-sync`, and `unsubscribe-sync` let operator tokens manage shared-workspace trust policy and scheduled peer exports remotely

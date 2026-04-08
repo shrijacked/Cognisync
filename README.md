@@ -262,7 +262,7 @@ The operator loop now has a review layer too:
 - `cognisync notify list` now also surfaces collaboration review backlog and outstanding requested-change threads from `.cognisync/collaboration.json`
 - `cognisync access list|grant|revoke` materializes a file-native workspace roster in `.cognisync/access.json`, and mutating roster changes now accept `--actor-id` so only operator principals can change workspace membership
 - `cognisync share status|bind-control-plane|invite-peer|accept-peer|list-peers|issue-peer-bundle|set-policy|subscribe-sync|unsubscribe-sync` materializes a file-native shared-workspace manifest in `.cognisync/shared-workspace.json`, so accepted peers, published control-plane URLs, trust policy, and scheduled peer exports can be handed off without inventing a second state store
-- `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|scheduler-status|scheduler-tick|serve` adds a hosted-alpha control plane on top of the same workspace, with durable invites, scoped bearer tokens, scheduler state, due peer-sync visibility, and a local HTTP surface for remote workers
+- `cognisync control-plane status|invite|accept-invite|issue-token|list-tokens|revoke-token|schedule-research|schedule-compile|schedule-lint|schedule-maintain|list-scheduled-jobs|remove-scheduled-job|scheduler-status|scheduler-tick|serve` adds a hosted-alpha control plane on top of the same workspace, with durable invites, scoped bearer tokens, recurring job subscriptions, scheduler state, due peer-sync visibility, and a local HTTP surface for remote workers
 - `cognisync control-plane workers` surfaces the derived worker registry through the hosted-alpha layer too, so active and idle remote operators are inspectable without scraping queue manifests
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, the workspace roster, and collaboration activity
 - `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, storage bytes, and collaboration threads
@@ -331,6 +331,9 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync control-plane invite reviewer-2 reviewer --workspace .`
 - `cognisync control-plane accept-invite reviewer-2 --workspace .`
 - `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
+- `cognisync control-plane schedule-research "map contradictions in deployment notes" --workspace . --every-hours 6 --mode memo`
+- `cognisync control-plane schedule-maintain --workspace . --every-hours 12 --max-concepts 4 --max-backlinks 4`
+- `cognisync control-plane list-scheduled-jobs --workspace .`
 - `cognisync control-plane scheduler-status --workspace .`
 - `cognisync control-plane workers --workspace .`
 - `cognisync control-plane scheduler-tick --workspace . --enqueue-only`
@@ -340,11 +343,11 @@ The hosted-alpha control-plane layer is now available too:
 That layer keeps the same filesystem-first contract:
 
 - accepted remote peers, published control-plane URLs, trust policy, scheduled peer sync subscriptions, and the last issued peer bundle metadata persist in `.cognisync/shared-workspace.json`
-- invites, issued tokens, scheduler history, and the last due connector and peer-sync ids persist in `.cognisync/control-plane.json`
+- invites, issued tokens, scheduled job subscriptions, scheduler history, and the last due connector, peer-sync, and recurring-job ids persist in `.cognisync/control-plane.json`
 - issued tokens stay scoped, so review-only actors can inspect status without being able to run jobs
 - peer bundles carry the control-plane URL, token, scopes, and role for a specific accepted remote principal, so another machine can attach cleanly without manual token surgery
 - shared-workspace trust policy can disable remote worker bundles or sync imports from peers without editing manifests by hand
-- scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, and scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, without adding a second queue system
+- scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, and recurring research, compile, lint, or maintain subscriptions can enqueue regular corpus work without adding a second queue system
 - remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including scheduled peer-sync export work
 - `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely
 - the same served control plane now accepts collaboration actions over HTTP, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through the same token-backed surface
@@ -356,6 +359,7 @@ That layer keeps the same filesystem-first contract:
 - the same served control plane now also accepts peer invites, peer acceptance, and peer bundle issuance over HTTP, so remote operator handoffs can be prepared through the hosted-alpha surface too
 - connector registry state is now readable at `/api/connectors`, and operator tokens can add connectors, manage subscriptions, or trigger `/api/connectors/sync` and `/api/connectors/sync-all` remotely through the same hosted-alpha surface
 - job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, ingest, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`
+- scheduler subscriptions are remotely manageable too: `GET /api/scheduler/jobs` and `POST /api/scheduler/jobs/research|compile|lint|maintain|remove` expose the recurring-job layer over the same token-backed surface
 - sync bundles can now move directly over HTTP too: `POST /api/sync/export` can emit an inline archive payload and `POST /api/sync/import` can restore that archive into another served workspace with the same peer-trust checks as the local CLI
 - sync bundles now include `.cognisync/control-plane.json`, so the remote-control surface can move with the workspace
 

@@ -87,6 +87,8 @@
 - expanded hosted-alpha job enqueue endpoints to cover queued URL, repo, and sitemap ingest work, so remote operators can grow the raw corpus through the same leased worker loop
 - added hosted-alpha artifact previews plus inline sync export/import endpoints, so remote operators can inspect files and exchange trusted workspace bundles over HTTP without shell access
 - expanded hosted-alpha connector endpoints to cover add, subscribe, and unsubscribe, so connector registry management is no longer local-shell only
+- added recurring control-plane job subscriptions for research, compile, lint, and maintain, so the scheduler can enqueue corpus work alongside connector pulls and peer syncs
+- added hosted-alpha scheduler job endpoints plus CLI surfaces for listing and removing recurring subscriptions, so recurring job orchestration is remotely manageable too
 
 ## v0.1.4 - 2026-04-03
 
