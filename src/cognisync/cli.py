@@ -92,6 +92,7 @@ from cognisync.jobs import (
     enqueue_improve_research_job,
     enqueue_lint_job,
     enqueue_maintain_job,
+    enqueue_remote_sync_pull_job,
     enqueue_research_job,
     enqueue_sync_export_job,
     heartbeat_job,
@@ -130,17 +131,23 @@ from cognisync.search import SearchEngine
 from cognisync.sharing import (
     SharingError,
     accept_shared_peer,
+    attach_remote_bundle,
     bind_shared_control_plane_url,
     invite_shared_peer,
     issue_shared_peer_bundle,
+    list_attached_remotes,
+    list_due_attached_remote_pulls,
     list_due_shared_peer_syncs,
     list_shared_peers,
+    pull_attached_remote,
     remove_shared_peer,
     render_shared_workspace_status,
     set_shared_peer_role,
     set_shared_trust_policy,
+    subscribe_attached_remote_pull,
     subscribe_shared_peer_sync,
     suspend_shared_peer,
+    unsubscribe_attached_remote_pull,
     unsubscribe_shared_peer_sync,
 )
 from cognisync.synthetic_data import (
@@ -397,6 +404,23 @@ def cmd_jobs_enqueue_sync_export(args: argparse.Namespace) -> int:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Queued sync-export job at {manifest_path}")
+    print(f"Queue summary: {workspace.job_queue_manifest_path}")
+    return 0
+
+
+def cmd_jobs_enqueue_remote_sync_pull(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        actor = _require_operator_actor(workspace, args.actor_id, "enqueue jobs")
+        manifest_path = enqueue_remote_sync_pull_job(
+            workspace,
+            remote_ref=args.remote_ref,
+            requested_by=actor,
+        )
+    except AccessError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Queued remote-sync-pull job at {manifest_path}")
     print(f"Queue summary: {workspace.job_queue_manifest_path}")
     return 0
 
@@ -957,6 +981,104 @@ def cmd_share_unsubscribe_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_share_attach_remote_bundle(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        remote = attach_remote_bundle(
+            workspace,
+            bundle_file=args.bundle_file,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Attached remote {remote['principal_id']} from {remote['workspace_name']}")
+    print(f"Remote id: {remote['remote_id']}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_list_attached_remotes(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    remotes = list_attached_remotes(workspace, status=args.status)
+    if not remotes:
+        print("No attached remotes found.")
+        print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+        return 0
+    print(f"Attached remotes: {len(remotes)}")
+    print("")
+    for remote in remotes:
+        scopes = ", ".join(str(item) for item in list(remote.get("scopes", [])))
+        print(f"{remote['principal_id']} [{remote['status']}] {remote['workspace_name']}")
+        print(f"remote_id: {remote['remote_id']}")
+        print(f"server_url: {remote['server_url']}")
+        if scopes:
+            print(f"scopes: {scopes}")
+        if remote.get("last_pull_at"):
+            print(f"last_pull_at: {remote['last_pull_at']}")
+        if remote.get("last_pull_status"):
+            print(f"last_pull_status: {remote['last_pull_status']}")
+        print("")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_pull_remote(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = pull_attached_remote(
+            workspace,
+            remote_ref=args.remote_ref,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError, SyncError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Pulled remote {result['remote']['principal_id']} into {workspace.root}")
+    print(f"Source manifest: {result['manifest_path']}")
+    print(f"Sync event: {result['event_manifest_path']}")
+    print(f"Sync history: {result['history_manifest_path']}")
+    print(f"Copied {result['file_count']} file(s) from the remote bundle.")
+    return 0
+
+
+def cmd_share_subscribe_remote_pull(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        remote = subscribe_attached_remote_pull(
+            workspace,
+            remote_ref=args.remote_ref,
+            every_hours=args.every_hours,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    subscription = dict(remote.get("pull_subscription", {}))
+    print(
+        f"Subscribed remote {remote['principal_id']} for pull every "
+        f"{subscription.get('interval_hours', '?')} hour(s)."
+    )
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
+def cmd_share_unsubscribe_remote_pull(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        remote = unsubscribe_attached_remote_pull(
+            workspace,
+            remote_ref=args.remote_ref,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Disabled scheduled pulls for remote {remote['principal_id']}.")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    return 0
+
+
 def cmd_control_plane_status(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     print(render_control_plane_status(workspace))
@@ -1223,11 +1345,13 @@ def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
     scheduler = dict(payload.get("scheduler", {}))
     due_connectors = [connector["connector_id"] for connector in list_due_connectors(workspace)]
     due_peer_syncs = [peer["peer_id"] for peer in list_due_shared_peer_syncs(workspace)]
+    due_remote_pulls = [remote["principal_id"] for remote in list_due_attached_remote_pulls(workspace)]
     due_job_subscriptions = [subscription["subscription_id"] for subscription in list_due_job_subscriptions(workspace)]
     print("# Scheduler Status")
     print("")
     print(f"- Due connectors: `{len(due_connectors)}`")
     print(f"- Due peer sync exports: `{len(due_peer_syncs)}`")
+    print(f"- Due attached remote pulls: `{len(due_remote_pulls)}`")
     print(f"- Due scheduled jobs: `{len(due_job_subscriptions)}`")
     print(f"- Last tick at: `{scheduler.get('last_tick_at', '')}`")
     print(f"- Last action: `{scheduler.get('last_action', '')}`")
@@ -1243,6 +1367,12 @@ def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
         print("")
         for peer_id in due_peer_syncs:
             print(f"- `{peer_id}`")
+    if due_remote_pulls:
+        print("")
+        print("## Due Attached Remote Pulls")
+        print("")
+        for remote_id in due_remote_pulls:
+            print(f"- `{remote_id}`")
     if due_job_subscriptions:
         print("")
         print("## Due Scheduled Jobs")
@@ -2460,6 +2590,32 @@ def build_parser() -> argparse.ArgumentParser:
     share_issue_bundle_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     share_issue_bundle_parser.set_defaults(func=cmd_share_issue_peer_bundle)
 
+    share_attach_remote_parser = share_subparsers.add_parser(
+        "attach-remote-bundle",
+        help="Attach a remote workspace bundle for control-plane pull syncs",
+    )
+    share_attach_remote_parser.add_argument("bundle_file")
+    share_attach_remote_parser.add_argument("--workspace", default=".")
+    share_attach_remote_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_attach_remote_parser.set_defaults(func=cmd_share_attach_remote_bundle)
+
+    share_list_attached_parser = share_subparsers.add_parser(
+        "list-attached-remotes",
+        help="List attached remote workspaces imported from peer bundles",
+    )
+    share_list_attached_parser.add_argument("--workspace", default=".")
+    share_list_attached_parser.add_argument("--status", default=None, choices=["attached", "suspended"])
+    share_list_attached_parser.set_defaults(func=cmd_share_list_attached_remotes)
+
+    share_pull_remote_parser = share_subparsers.add_parser(
+        "pull-remote",
+        help="Pull and import a sync bundle from an attached remote workspace",
+    )
+    share_pull_remote_parser.add_argument("remote_ref")
+    share_pull_remote_parser.add_argument("--workspace", default=".")
+    share_pull_remote_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_pull_remote_parser.set_defaults(func=cmd_share_pull_remote)
+
     share_set_peer_role_parser = share_subparsers.add_parser(
         "set-peer-role",
         help="Update a shared peer role and rebind its workspace access",
@@ -2519,6 +2675,25 @@ def build_parser() -> argparse.ArgumentParser:
     share_unsubscribe_sync_parser.add_argument("--workspace", default=".")
     share_unsubscribe_sync_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     share_unsubscribe_sync_parser.set_defaults(func=cmd_share_unsubscribe_sync)
+
+    share_subscribe_remote_pull_parser = share_subparsers.add_parser(
+        "subscribe-remote-pull",
+        help="Subscribe an attached remote for scheduled pull imports",
+    )
+    share_subscribe_remote_pull_parser.add_argument("remote_ref")
+    share_subscribe_remote_pull_parser.add_argument("--workspace", default=".")
+    share_subscribe_remote_pull_parser.add_argument("--every-hours", type=int, required=True)
+    share_subscribe_remote_pull_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_subscribe_remote_pull_parser.set_defaults(func=cmd_share_subscribe_remote_pull)
+
+    share_unsubscribe_remote_pull_parser = share_subparsers.add_parser(
+        "unsubscribe-remote-pull",
+        help="Disable scheduled pull imports for an attached remote",
+    )
+    share_unsubscribe_remote_pull_parser.add_argument("remote_ref")
+    share_unsubscribe_remote_pull_parser.add_argument("--workspace", default=".")
+    share_unsubscribe_remote_pull_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_unsubscribe_remote_pull_parser.set_defaults(func=cmd_share_unsubscribe_remote_pull)
 
     control_plane_parser = subparsers.add_parser(
         "control-plane",
@@ -2794,6 +2969,15 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_enqueue_sync_export_parser.add_argument("--output-dir", default=None)
     jobs_enqueue_sync_export_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     jobs_enqueue_sync_export_parser.set_defaults(func=cmd_jobs_enqueue_sync_export)
+
+    jobs_enqueue_remote_sync_pull_parser = jobs_enqueue_subparsers.add_parser(
+        "remote-sync-pull",
+        help="Queue a pull/import cycle for an attached remote workspace",
+    )
+    jobs_enqueue_remote_sync_pull_parser.add_argument("remote_ref")
+    jobs_enqueue_remote_sync_pull_parser.add_argument("--workspace", default=".")
+    jobs_enqueue_remote_sync_pull_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    jobs_enqueue_remote_sync_pull_parser.set_defaults(func=cmd_jobs_enqueue_remote_sync_pull)
 
     jobs_enqueue_ingest_url_parser = jobs_enqueue_subparsers.add_parser(
         "ingest-url",

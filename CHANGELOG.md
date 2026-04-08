@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- added `cognisync share attach-remote-bundle|list-attached-remotes|pull-remote|subscribe-remote-pull|unsubscribe-remote-pull`, so peer bundles can now become durable upstream remotes instead of only one-off worker handoffs
+- added queued `remote-sync-pull` jobs plus scheduler support for due attached-remote pulls, so hosted-alpha automation now covers inbound remote workspace syncs as well as outbound peer exports
+- taught peer bundles with `sync.import` capability to receive a narrower `sync.export` control-plane scope, so remote sync pull tokens no longer depend on the broader `jobs.run` permission
+- taught sync import validation to trust attached remotes recorded in `.cognisync/shared-workspace.json`, so remote pull imports can preserve peer provenance without pretending every upstream source is a local accepted peer
 - added a root `AGENTS.md` workspace schema so every Cognisync workspace now carries an explicit agent-facing contract alongside the corpus
 - added a root `log.md` activity ledger so init, ingest, lint, compile, research, and maintenance work leave a readable append-only trail
 - added regenerated wiki navigation catalogs at `wiki/index.md`, `wiki/sources.md`, `wiki/concepts.md`, and `wiki/queries.md`

@@ -199,6 +199,11 @@ Supported paths in this release:
 - `cognisync share subscribe-sync remote-ops --workspace . --every-hours 1`
 - `cognisync share unsubscribe-sync remote-ops --workspace .`
 - `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
+- `cognisync share attach-remote-bundle remote-ops.json --workspace ./mirror`
+- `cognisync share list-attached-remotes --workspace ./mirror`
+- `cognisync share pull-remote remote-ops --workspace ./mirror`
+- `cognisync share subscribe-remote-pull remote-ops --workspace ./mirror --every-hours 1`
+- `cognisync share unsubscribe-remote-pull remote-ops --workspace ./mirror`
 
 The command family:
 
@@ -211,6 +216,8 @@ The command family:
 7. derives bundle scopes from declared peer capabilities like `jobs.remote`, `review.remote`, `scheduler.remote`, `connectors.sync`, `control.admin`, or explicit scope strings, so peer handoffs stay intentionally least-privilege
 8. reuses the same scoped token issuance path as `control-plane issue-token`, so peer bundles inherit the role-aware control-plane contract instead of inventing a second auth model
 9. lets operators re-role, suspend, or remove a peer without hand-editing manifests, and those lifecycle actions revoke shared access plus peer-issued tokens automatically
+10. lets another workspace attach a peer bundle as an upstream remote, then pull and import that remote state over HTTP without manually unpacking sync archives
+11. can subscribe attached remotes to hourly pull imports, so the same manifest now tracks both outbound peer exports and inbound upstream syncs
 
 ### `control-plane`
 
@@ -240,8 +247,8 @@ The command family:
 1. materializes `.cognisync/control-plane.json`
 2. keeps workspace invites and accepted memberships file-native instead of hiding them in process memory
 3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes and optional expiry timestamps
-4. persists recurring research, compile, lint, and maintain subscriptions beside connector and peer-sync schedules, so the scheduler can drive corpus work without a second orchestration store
-5. supports scheduler ticks that enqueue or execute scheduled connector sync work, due peer-scoped sync-export jobs, and recurring corpus jobs against the same queue and connector manifests the local CLI already uses
+4. persists recurring research, compile, lint, and maintain subscriptions beside connector, peer-sync, and attached-remote pull schedules, so the scheduler can drive corpus work without a second orchestration store
+5. supports scheduler ticks that enqueue or execute scheduled connector sync work, due peer-scoped sync-export jobs, due attached-remote pull imports, and recurring corpus jobs against the same queue and connector manifests the local CLI already uses
 6. serves a lightweight HTTP layer for status, shared-workspace state, access roster, collaboration threads, notifications, audit, usage, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
 7. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
 8. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
@@ -253,7 +260,7 @@ This is intentionally a hosted-alpha surface, not a full SaaS backend. The files
 The served API now covers a real remote review surface too:
 
 - `GET /api/share`, `GET /api/access`, `GET /api/collab`, `GET /api/notifications`, `GET /api/audit`, and `GET /api/usage` expose the same file-native state the local CLI renders
-- `GET /api/scheduler` now exposes due recurring job ids alongside due connectors and peer syncs, and `GET /api/scheduler/jobs` exposes the persisted recurring-job manifest itself
+- `GET /api/scheduler` now exposes due recurring job ids alongside due connectors, peer syncs, and attached-remote pulls, and `GET /api/scheduler/jobs` exposes the persisted recurring-job manifest itself
 - `GET /api/review` exposes the live open queue, dismissal ledger, and persisted review-action state over the same token-backed surface
 - `GET /api/runs`, `GET /api/sync`, and `GET /api/change-summaries` expose run history, sync history, and corpus-delta history over the same file-native control-plane surface
 - `GET /api/artifacts/preview?path=...` exposes text artifact previews and manifest inspection over the same hosted layer
@@ -468,6 +475,7 @@ Supported paths in this release:
 - `cognisync jobs enqueue connector-sync-all --actor-id local-operator`
 - `cognisync jobs enqueue connector-sync-all --scheduled-only --actor-id local-operator`
 - `cognisync jobs enqueue sync-export remote-ops --actor-id local-operator`
+- `cognisync jobs enqueue remote-sync-pull remote-ops --actor-id local-operator`
 - `cognisync jobs claim-next --worker-id worker-a`
 - `cognisync jobs claim-next --worker-id workspace-a --capability workspace`
 - `cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900`
@@ -486,7 +494,7 @@ The command family:
 4. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
 5. can renew that lease with `jobs heartbeat`, so long-running workers do not need to drop and reclaim ownership just to stay alive
 6. assigns each queued job a required worker capability like `research`, `ingest`, `workspace`, `connector`, or `sync`, so worker routing is durable in the manifest instead of living only in process arguments
-7. reuses the same `research`, `improve research`, `ingest`, `compile`, `lint`, `maintain`, `connector sync`, `connector sync-all`, and peer-scoped `sync export` runtimes when a worker executes queued jobs
+7. reuses the same `research`, `improve research`, `ingest`, `compile`, `lint`, `maintain`, `connector sync`, `connector sync-all`, peer-scoped `sync export`, and attached-remote `remote sync pull` runtimes when a worker executes queued jobs
 8. lets `run-next` resume the same worker's active claim or claim fresh compatible work when nothing is already held
 9. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
 10. records result paths back into the job manifest instead of dropping that state into terminal-only output
@@ -498,7 +506,7 @@ The command family:
 
 ```mermaid
 flowchart LR
-    A["jobs enqueue research, compile, lint, maintain, connector-sync, connector-sync-all, sync-export, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
+    A["jobs enqueue research, compile, lint, maintain, connector-sync, connector-sync-all, sync-export, remote-sync-pull, or improve-research"] --> B["persist job manifest in .cognisync/jobs/manifests"]
     B --> C["jobs claim-next records worker lease"]
     C --> D["jobs heartbeat can renew the active worker lease"]
     D --> E["jobs run-next or jobs work resumes owned claims or claims fresh work"]

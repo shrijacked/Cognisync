@@ -17,6 +17,7 @@ from cognisync.access import (
 )
 from cognisync.sharing import (
     SharingError,
+    list_attached_remotes,
     list_shared_peers,
     load_shared_workspace_manifest,
     mark_shared_peer_sync_exported,
@@ -169,11 +170,14 @@ def export_sync_bundle(
             file_count += copied
 
     shared_peer_payload = _shared_peer_payload(workspace, peer_ref)
+    shared_workspace_payload = load_shared_workspace_manifest(workspace)
     manifest_payload = {
         "schema_version": 1,
         "generated_at": utc_timestamp(),
         "bundle_type": "workspace-sync-bundle",
         "actor": _serialize_actor(actor),
+        "workspace_id": str(shared_workspace_payload.get("workspace_id", "")),
+        "workspace_name": str(shared_workspace_payload.get("workspace_name", "")),
         "workspace_root": workspace.root.as_posix(),
         "included_paths": copied_paths,
         "file_count": file_count,
@@ -451,8 +455,16 @@ def _validate_peer_sync_import(workspace: Workspace, manifest: Dict[str, object]
     peers = list_shared_peers(workspace, status="accepted")
     peer = next((item for item in peers if str(item.get("peer_id", "")) == effective_peer_id), None)
     if peer is None:
-        raise SyncError(f"Accepted shared peer '{effective_peer_id}' is required for this sync import.")
-    if not peer_has_capability(peer, "sync.import"):
+        attached_remotes = list_attached_remotes(workspace, status="attached")
+        attached_remote = next(
+            (item for item in attached_remotes if str(item.get("principal_id", "")) == effective_peer_id),
+            None,
+        )
+        if attached_remote is None:
+            raise SyncError(
+                f"Accepted shared peer or attached remote '{effective_peer_id}' is required for this sync import."
+            )
+    elif not peer_has_capability(peer, "sync.import"):
         raise SyncError(
             f"Accepted shared peer '{effective_peer_id}' must declare sync.import capability for this sync import."
         )

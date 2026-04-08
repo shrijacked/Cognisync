@@ -11,11 +11,248 @@ from urllib.parse import quote
 from tests import support  # noqa: F401
 
 from cognisync.cli import main
-from cognisync.control_plane import create_control_plane_server
+from cognisync.control_plane import create_control_plane_server, run_scheduler_tick
 from cognisync.workspace import Workspace
 
 
 class SharingAndSchedulerTests(unittest.TestCase):
+    def test_share_can_attach_remote_bundle_and_pull_sync_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            publisher_root = Path(tmp) / "publisher"
+            follower_root = Path(tmp) / "follower"
+            bundle_path = Path(tmp) / "downstream-bundle.json"
+
+            publisher_workspace = Workspace(publisher_root)
+            publisher_workspace.initialize(name="Publisher Workspace")
+            (publisher_root / "raw" / "remote-notes.md").write_text(
+                "# Remote Notes\n\nPulled over the hosted control plane.\n",
+                encoding="utf-8",
+            )
+
+            server = create_control_plane_server(workspace=publisher_workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "bind-control-plane",
+                            f"http://{host}:{port}",
+                            "--workspace",
+                            str(publisher_root),
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "invite-peer",
+                            "downstream",
+                            "operator",
+                            "--workspace",
+                            str(publisher_root),
+                            "--capability",
+                            "sync.import",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["share", "accept-peer", "downstream", "--workspace", str(publisher_root)]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "issue-peer-bundle",
+                            "downstream",
+                            "--workspace",
+                            str(publisher_root),
+                            "--output-file",
+                            str(bundle_path),
+                        ]
+                    ),
+                    0,
+                )
+
+                self.assertEqual(main(["init", str(follower_root), "--name", "Follower Workspace"]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "attach-remote-bundle",
+                            str(bundle_path),
+                            "--workspace",
+                            str(follower_root),
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "pull-remote",
+                            "downstream",
+                            "--workspace",
+                            str(follower_root),
+                        ]
+                    ),
+                    0,
+                )
+
+                self.assertTrue((follower_root / "raw" / "remote-notes.md").exists())
+                self.assertIn(
+                    "Pulled over the hosted control plane.",
+                    (follower_root / "raw" / "remote-notes.md").read_text(encoding="utf-8"),
+                )
+
+                sharing_payload = json.loads((follower_root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+                self.assertEqual(len(sharing_payload["attached_remotes"]), 1)
+                remote = sharing_payload["attached_remotes"][0]
+                self.assertEqual(remote["principal_id"], "downstream")
+                self.assertEqual(remote["status"], "attached")
+                self.assertTrue(remote["last_pull_at"])
+                self.assertEqual(remote["last_pull_status"], "imported")
+                self.assertTrue(remote["last_imported_sync_event_path"])
+
+                sync_history_payload = json.loads((follower_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
+                self.assertEqual(sync_history_payload["events"][0]["source_peer_id"], "downstream")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_scheduler_can_enqueue_due_attached_remote_pulls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            publisher_root = Path(tmp) / "publisher"
+            follower_root = Path(tmp) / "follower"
+            bundle_path = Path(tmp) / "downstream-bundle.json"
+
+            publisher_workspace = Workspace(publisher_root)
+            publisher_workspace.initialize(name="Publisher Workspace")
+            (publisher_root / "raw" / "remote-graph.md").write_text(
+                "# Remote Graph\n\nAttached remotes should be schedulable.\n",
+                encoding="utf-8",
+            )
+
+            server = create_control_plane_server(workspace=publisher_workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "bind-control-plane",
+                            f"http://{host}:{port}",
+                            "--workspace",
+                            str(publisher_root),
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "invite-peer",
+                            "downstream",
+                            "operator",
+                            "--workspace",
+                            str(publisher_root),
+                            "--capability",
+                            "sync.import",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(main(["share", "accept-peer", "downstream", "--workspace", str(publisher_root)]), 0)
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "issue-peer-bundle",
+                            "downstream",
+                            "--workspace",
+                            str(publisher_root),
+                            "--output-file",
+                            str(bundle_path),
+                        ]
+                    ),
+                    0,
+                )
+
+                follower_workspace = Workspace(follower_root)
+                follower_workspace.initialize(name="Follower Workspace")
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "attach-remote-bundle",
+                            str(bundle_path),
+                            "--workspace",
+                            str(follower_root),
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "share",
+                            "subscribe-remote-pull",
+                            "downstream",
+                            "--workspace",
+                            str(follower_root),
+                            "--every-hours",
+                            "1",
+                        ]
+                    ),
+                    0,
+                )
+
+                sharing_path = follower_root / ".cognisync" / "shared-workspace.json"
+                sharing_payload = json.loads(sharing_path.read_text(encoding="utf-8"))
+                sharing_payload["attached_remotes"][0]["pull_subscription"]["next_pull_at"] = "2000-01-01T00:00:00+00:00"
+                sharing_path.write_text(json.dumps(sharing_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+                tick = run_scheduler_tick(follower_workspace, enqueue_only=True)
+                self.assertIn("downstream", tick.due_remote_pull_ids)
+                self.assertTrue(tick.enqueued_job_ids)
+
+                self.assertEqual(
+                    main(
+                        [
+                            "jobs",
+                            "work",
+                            "--workspace",
+                            str(follower_root),
+                            "--max-jobs",
+                            "1",
+                            "--capability",
+                            "sync",
+                        ]
+                    ),
+                    0,
+                )
+
+                self.assertTrue((follower_root / "raw" / "remote-graph.md").exists())
+                queue_payload = json.loads((follower_root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+                self.assertEqual(queue_payload["status_counts"]["completed"], 1)
+
+                updated_payload = json.loads(sharing_path.read_text(encoding="utf-8"))
+                remote = updated_payload["attached_remotes"][0]
+                self.assertEqual(remote["pull_subscription"]["last_tick_status"], "imported")
+                self.assertTrue(remote["pull_subscription"]["last_pull_at"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_share_peer_lifecycle_can_update_suspend_and_remove_peer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

@@ -18,6 +18,7 @@ from cognisync.manifests import write_run_manifest, write_workspace_manifests
 from cognisync.notifications import write_notifications_manifest
 from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, run_research_cycle
 from cognisync.scanner import scan_workspace
+from cognisync.sharing import pull_attached_remote
 from cognisync.sync import export_sync_bundle, import_sync_bundle_archive
 from cognisync.training_loop import improve_research_loop
 from cognisync.utils import slugify, utc_timestamp
@@ -37,6 +38,7 @@ WORKER_CAPABILITY_BY_JOB_TYPE = {
     "connector_sync": "connector",
     "connector_sync_all": "connector",
     "sync_export": "sync",
+    "remote_sync_pull": "sync",
     "ingest_url": "ingest",
     "ingest_repo": "ingest",
     "ingest_sitemap": "ingest",
@@ -203,6 +205,22 @@ def enqueue_sync_export_job(
         {
             "peer_ref": peer_ref,
             "output_dir": output_dir,
+        },
+        requested_by=requested_by,
+    )
+
+
+def enqueue_remote_sync_pull_job(
+    workspace: Workspace,
+    remote_ref: str,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
+    return _enqueue_job(
+        workspace,
+        "remote_sync_pull",
+        remote_ref,
+        {
+            "remote_ref": remote_ref,
         },
         requested_by=requested_by,
     )
@@ -967,6 +985,21 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "history_manifest_path": workspace.relative_path(result.history_manifest_path),
             "file_count": result.file_count,
             "peer_ref": _optional_string(parameters.get("peer_ref")),
+        }
+    if job_type == "remote_sync_pull":
+        requested_by = dict(job.get("requested_by", {})) if isinstance(job.get("requested_by", {}), dict) else None
+        actor_id = str((requested_by or {}).get("principal_id", "")).strip() or "local-operator"
+        result = pull_attached_remote(
+            workspace,
+            remote_ref=str(parameters.get("remote_ref", "")),
+            actor_id=actor_id,
+        )
+        return {
+            "manifest_path": workspace.relative_path(result["manifest_path"]),
+            "event_manifest_path": workspace.relative_path(result["event_manifest_path"]),
+            "history_manifest_path": workspace.relative_path(result["history_manifest_path"]),
+            "file_count": int(result.get("file_count", 0) or 0),
+            "remote_ref": str(parameters.get("remote_ref", "")),
         }
     if job_type == "research":
         result = run_research_cycle(

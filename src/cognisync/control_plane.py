@@ -57,6 +57,7 @@ from cognisync.jobs import (
     fail_dispatched_job,
     enqueue_lint_job,
     enqueue_maintain_job,
+    enqueue_remote_sync_pull_job,
     enqueue_research_job,
     enqueue_sync_export_job,
     heartbeat_job,
@@ -84,9 +85,13 @@ from cognisync.sharing import (
     ensure_shared_workspace_manifest,
     invite_shared_peer,
     issue_shared_peer_bundle,
+    list_attached_remotes,
+    list_due_attached_remote_pulls,
     list_due_shared_peer_syncs,
     load_shared_workspace_manifest,
+    pull_attached_remote,
     remove_shared_peer,
+    record_attached_remote_scheduler_tick,
     record_shared_peer_scheduler_tick,
     set_shared_peer_role,
     set_shared_trust_policy,
@@ -112,6 +117,7 @@ DEFAULT_CONTROL_SCOPES = {
         "jobs.run",
         "review.run",
         "scheduler.run",
+        "sync.export",
     ],
     "reviewer": ["control.read", "review.run"],
     "editor": ["control.read"],
@@ -129,6 +135,7 @@ class SchedulerTickResult:
     due_connector_count: int
     due_connector_ids: List[str]
     due_peer_sync_ids: List[str]
+    due_remote_pull_ids: List[str]
     due_job_subscription_count: int
     due_job_subscription_ids: List[str]
     enqueued_job_ids: List[str]
@@ -165,6 +172,8 @@ def render_control_plane_status(workspace: "Workspace") -> str:
         f"- Published control plane URL: `{sharing.get('published_control_plane_url', '') or 'unbound'}`",
         f"- Accepted peers: `{sharing.get('accepted_peer_count', 0)}`",
         f"- Suspended peers: `{sharing.get('suspended_peer_count', 0)}`",
+        f"- Attached remotes: `{sharing.get('attached_remote_count', 0)}`",
+        f"- Due remote pulls: `{sharing.get('due_remote_pull_count', 0)}`",
         f"- Last scheduler action: `{scheduler.get('last_action', 'never')}`",
     ]
     return "\n".join(lines)
@@ -621,21 +630,25 @@ def run_scheduler_tick(
     actor = require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "run the control-plane scheduler")
     due_connectors = [dict(item) for item in list_due_connectors(workspace)]
     due_peer_syncs = [dict(item) for item in list_due_shared_peer_syncs(workspace)]
+    due_remote_pulls = [dict(item) for item in list_due_attached_remote_pulls(workspace)]
     due_job_subscriptions = [dict(item) for item in list_due_job_subscriptions(workspace)]
     if limit is not None:
         due_connectors = due_connectors[: max(0, int(limit))]
         remaining = max(0, int(limit) - len(due_connectors))
         due_peer_syncs = due_peer_syncs[:remaining] if remaining else []
         remaining = max(0, remaining - len(due_peer_syncs))
+        due_remote_pulls = due_remote_pulls[:remaining] if remaining else []
+        remaining = max(0, remaining - len(due_remote_pulls))
         due_job_subscriptions = due_job_subscriptions[:remaining] if remaining else []
     due_connector_ids = [str(item.get("connector_id", "")) for item in due_connectors]
     due_peer_sync_ids = [str(item.get("peer_id", "")) for item in due_peer_syncs]
+    due_remote_pull_ids = [str(item.get("principal_id", "")) for item in due_remote_pulls]
     due_job_subscription_ids = [str(item.get("subscription_id", "")) for item in due_job_subscriptions]
     executed_run_manifest_path: Optional[Path] = None
     enqueued_job_ids: List[str] = []
     action = "noop"
     tick_at = utc_timestamp()
-    if due_connectors or due_peer_syncs or due_job_subscriptions:
+    if due_connectors or due_peer_syncs or due_remote_pulls or due_job_subscriptions:
         if enqueue_only:
             if due_connectors:
                 manifest_path = enqueue_connector_sync_all_job(
@@ -650,6 +663,13 @@ def run_scheduler_tick(
                 manifest_path = enqueue_sync_export_job(
                     workspace,
                     peer_ref=str(peer_sync.get("peer_id", "")),
+                    requested_by=actor,
+                )
+                enqueued_job_ids.append(manifest_path.stem)
+            for remote_pull in due_remote_pulls:
+                manifest_path = enqueue_remote_sync_pull_job(
+                    workspace,
+                    remote_ref=str(remote_pull.get("principal_id", "")),
                     requested_by=actor,
                 )
                 enqueued_job_ids.append(manifest_path.stem)
@@ -673,6 +693,13 @@ def run_scheduler_tick(
                     requested_by=actor,
                 )
                 enqueued_job_ids.append(manifest_path.stem)
+            for remote_pull in due_remote_pulls:
+                result = pull_attached_remote(
+                    workspace,
+                    remote_ref=str(remote_pull.get("principal_id", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                executed_run_manifest_path = Path(result["event_manifest_path"])
             for scheduled_job in due_job_subscriptions:
                 manifest_path = _enqueue_scheduled_job(workspace, scheduled_job, actor)
                 enqueued_job_ids.append(manifest_path.stem)
@@ -682,6 +709,7 @@ def run_scheduler_tick(
             action = "enqueued"
     _record_scheduler_observations(workspace, due_connector_ids)
     record_shared_peer_scheduler_tick(workspace, due_peer_sync_ids)
+    record_attached_remote_scheduler_tick(workspace, due_remote_pull_ids)
     payload = ensure_control_plane_manifest(workspace)
     scheduler_payload = dict(payload.get("scheduler", {}))
     history = [dict(item) for item in list(scheduler_payload.get("history", []))]
@@ -711,6 +739,7 @@ def run_scheduler_tick(
             "action": action,
             "due_connector_ids": due_connector_ids,
             "due_peer_sync_ids": due_peer_sync_ids,
+            "due_remote_pull_ids": due_remote_pull_ids,
             "due_job_subscription_ids": due_job_subscription_ids,
             "enqueued_job_ids": enqueued_job_ids,
             "executed_run_manifest_path": workspace.relative_path(executed_run_manifest_path) if executed_run_manifest_path else "",
@@ -722,6 +751,7 @@ def run_scheduler_tick(
             "last_action": action,
             "last_due_connector_ids": due_connector_ids,
             "last_due_peer_sync_ids": due_peer_sync_ids,
+            "last_due_remote_pull_ids": due_remote_pull_ids,
             "last_due_job_subscription_ids": due_job_subscription_ids,
             "last_enqueued_job_ids": enqueued_job_ids,
             "last_executed_run_manifest_path": workspace.relative_path(executed_run_manifest_path)
@@ -738,6 +768,7 @@ def run_scheduler_tick(
         due_connector_count=len(due_connectors),
         due_connector_ids=due_connector_ids,
         due_peer_sync_ids=due_peer_sync_ids,
+        due_remote_pull_ids=due_remote_pull_ids,
         due_job_subscription_count=len(due_job_subscriptions),
         due_job_subscription_ids=due_job_subscription_ids,
         enqueued_job_ids=enqueued_job_ids,
@@ -768,6 +799,7 @@ def default_control_plane_manifest() -> Dict[str, object]:
             "last_action": "",
             "last_due_connector_ids": [],
             "last_due_peer_sync_ids": [],
+            "last_due_remote_pull_ids": [],
             "last_due_job_subscription_ids": [],
             "last_enqueued_job_ids": [],
             "last_executed_run_manifest_path": "",
@@ -794,6 +826,7 @@ def _normalize_control_plane_manifest(payload: Dict[str, object]) -> Dict[str, o
             "last_action": str(scheduler.get("last_action", "")),
             "last_due_connector_ids": [str(item) for item in list(scheduler.get("last_due_connector_ids", []))],
             "last_due_peer_sync_ids": [str(item) for item in list(scheduler.get("last_due_peer_sync_ids", []))],
+            "last_due_remote_pull_ids": [str(item) for item in list(scheduler.get("last_due_remote_pull_ids", []))],
             "last_due_job_subscription_ids": [str(item) for item in list(scheduler.get("last_due_job_subscription_ids", []))],
             "last_enqueued_job_ids": [str(item) for item in list(scheduler.get("last_enqueued_job_ids", []))],
             "last_executed_run_manifest_path": str(scheduler.get("last_executed_run_manifest_path", "")),
@@ -810,6 +843,7 @@ def _normalize_control_plane_manifest(payload: Dict[str, object]) -> Dict[str, o
                     "action": str(dict(item).get("action", "")),
                     "due_connector_ids": [str(connector_id) for connector_id in list(dict(item).get("due_connector_ids", []))],
                     "due_peer_sync_ids": [str(peer_id) for peer_id in list(dict(item).get("due_peer_sync_ids", []))],
+                    "due_remote_pull_ids": [str(remote_id) for remote_id in list(dict(item).get("due_remote_pull_ids", []))],
                     "due_job_subscription_ids": [
                         str(subscription_id) for subscription_id in list(dict(item).get("due_job_subscription_ids", []))
                     ],
@@ -851,6 +885,7 @@ def _scheduler_status_payload(workspace: "Workspace") -> Dict[str, object]:
     scheduler = dict(payload.get("scheduler", {}))
     due_connector_ids = [str(item.get("connector_id", "")) for item in list_due_connectors(workspace)]
     due_peer_sync_ids = [str(item.get("peer_id", "")) for item in list_due_shared_peer_syncs(workspace)]
+    due_remote_pull_ids = [str(item.get("principal_id", "")) for item in list_due_attached_remote_pulls(workspace)]
     subscriptions = list_job_subscriptions(workspace)
     due_job_subscription_ids = [str(item.get("subscription_id", "")) for item in list_due_job_subscriptions(workspace)]
     return {
@@ -858,6 +893,8 @@ def _scheduler_status_payload(workspace: "Workspace") -> Dict[str, object]:
         "due_connector_ids": due_connector_ids,
         "due_peer_sync_count": len(due_peer_sync_ids),
         "due_peer_sync_ids": due_peer_sync_ids,
+        "due_remote_pull_count": len(due_remote_pull_ids),
+        "due_remote_pull_ids": due_remote_pull_ids,
         "scheduled_job_count": len(subscriptions),
         "due_job_subscription_count": len(due_job_subscription_ids),
         "due_job_subscription_ids": due_job_subscription_ids,
@@ -1610,7 +1647,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
                 return
             if parsed.path == "/api/sync/export":
-                actor = self._authenticate(["jobs.run"])
+                actor = self._authenticate(["sync.export"])
                 result = export_sync_bundle(
                     self._workspace,
                     actor_id=str(actor.get("principal_id", "")),
@@ -1917,6 +1954,8 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                         "due_connector_ids": result.due_connector_ids,
                         "due_peer_sync_count": len(result.due_peer_sync_ids),
                         "due_peer_sync_ids": result.due_peer_sync_ids,
+                        "due_remote_pull_count": len(result.due_remote_pull_ids),
+                        "due_remote_pull_ids": result.due_remote_pull_ids,
                         "due_job_subscription_count": result.due_job_subscription_count,
                         "due_job_subscription_ids": result.due_job_subscription_ids,
                         "enqueued_job_ids": result.enqueued_job_ids,
