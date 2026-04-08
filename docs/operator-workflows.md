@@ -242,6 +242,7 @@ The command family:
 7. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
 8. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
 9. requires an operator principal for hosted job mutation endpoints even when a token carries matching `jobs.*` scopes, so HTTP queue execution does not bypass the workspace roster
+10. carries worker capability routing through `/api/jobs/run-next`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/workers`, so remote workers can advertise what they handle and the hosted queue can respect that routing
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
 
@@ -262,6 +263,7 @@ The served API now covers a real remote review surface too:
 - `POST /api/jobs/enqueue/research|compile|lint|maintain|ingest-url|ingest-repo|ingest-sitemap|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
 - `POST /api/sync/export` and `POST /api/sync/import` let operator tokens exchange inline sync archives over HTTP while still honoring accepted-peer trust policy on import
 - peer-scoped sync handoffs now require the accepted peer to declare `sync.import`, so `sync export --for-peer`, `sync import --from-peer`, and their HTTP equivalents remain explicit capability-based trust decisions instead of role-only defaults
+- `POST /api/jobs/run-next`, `claim-next`, and `heartbeat` now also accept `worker_capabilities`, and `GET /api/workers` persists those declared capabilities in the derived worker registry
 
 ### `worker remote`
 
@@ -271,6 +273,7 @@ Supported path in this release:
 
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --max-jobs 5`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --poll-interval-seconds 2 --max-idle-polls 30`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id workspace-a --capability workspace --capability connector`
 
 The command:
 
@@ -278,7 +281,8 @@ The command:
 2. reuses the same manifest-backed runtimes as `jobs run-next`
 3. keeps worker identity explicit through `--worker-id`
 4. can keep polling through short idle windows, so a remote worker can stay warm for scheduled jobs instead of exiting on the first empty queue
-5. works with scheduler-enqueued connector jobs and peer-scoped sync-export jobs, so scheduled connector pulls and shared-workspace handoffs can be drained by a remote worker instead of the local shell
+5. can advertise declared capabilities like `workspace`, `research`, `ingest`, `connector`, or `sync`, so the hosted queue only hands it compatible work
+6. works with scheduler-enqueued connector jobs and peer-scoped sync-export jobs, so scheduled connector pulls and shared-workspace handoffs can be drained by a remote worker instead of the local shell
 
 Together, `control-plane serve`, `control-plane scheduler-tick`, and `worker remote` give Cognisync a remote-ready operator loop without breaking the local-first contract.
 
@@ -457,8 +461,10 @@ Supported paths in this release:
 - `cognisync jobs enqueue connector-sync-all --scheduled-only --actor-id local-operator`
 - `cognisync jobs enqueue sync-export remote-ops --actor-id local-operator`
 - `cognisync jobs claim-next --worker-id worker-a`
+- `cognisync jobs claim-next --worker-id workspace-a --capability workspace`
 - `cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900`
 - `cognisync jobs run-next --worker-id worker-a`
+- `cognisync jobs work --worker-id ingest-a --capability ingest --max-jobs 5`
 - `cognisync jobs retry <job-id> --profile codex --actor-id local-operator`
 - `cognisync jobs work --worker-id worker-a --max-jobs 10`
 - `cognisync jobs workers`
@@ -471,14 +477,16 @@ The command family:
 3. requires an operator actor for queue submission and retry mutations, so scheduler-facing actions obey the same workspace role model as sync and the review UI
 4. can claim jobs under an explicit worker id and lease before execution, so ownership is durable in the manifest instead of being implicit in one local process
 5. can renew that lease with `jobs heartbeat`, so long-running workers do not need to drop and reclaim ownership just to stay alive
-6. reuses the same `research`, `improve research`, `ingest`, `compile`, `lint`, `maintain`, `connector sync`, `connector sync-all`, and peer-scoped `sync export` runtimes when a worker executes queued jobs
-7. lets `run-next` resume the same worker's active claim or claim fresh work when nothing is already held
-8. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
-9. records result paths back into the job manifest instead of dropping that state into terminal-only output
-10. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
-11. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
-12. derives `.cognisync/jobs/workers.json` so queue ownership can be inspected as a worker roster instead of only by reading individual job manifests
-13. persists the scheduling principal as `requested_by` in each queued job manifest, so submitted work keeps its actor provenance even when a different worker executes it later
+6. assigns each queued job a required worker capability like `research`, `ingest`, `workspace`, `connector`, or `sync`, so worker routing is durable in the manifest instead of living only in process arguments
+7. reuses the same `research`, `improve research`, `ingest`, `compile`, `lint`, `maintain`, `connector sync`, `connector sync-all`, and peer-scoped `sync export` runtimes when a worker executes queued jobs
+8. lets `run-next` resume the same worker's active claim or claim fresh compatible work when nothing is already held
+9. allows expired leases to be reclaimed by another worker without deleting the original manifest lineage
+10. records result paths back into the job manifest instead of dropping that state into terminal-only output
+11. supports `jobs retry` for terminal jobs, preserving lineage through `retry_of_job_id` when you need another execution attempt
+12. supports `jobs work` when you want the local queue to drain like a small worker instead of stepping one job at a time
+13. derives `.cognisync/jobs/workers.json` so queue ownership can be inspected as a worker roster instead of only by reading individual job manifests
+14. persists each worker's declared capabilities in that same worker registry, so operators can see what a worker is meant to handle instead of inferring it from the current lease alone
+15. persists the scheduling principal as `requested_by` in each queued job manifest, so submitted work keeps its actor provenance even when a different worker executes it later
 
 ```mermaid
 flowchart LR

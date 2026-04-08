@@ -2283,6 +2283,89 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_remote_worker_can_route_jobs_by_declared_capability_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Capability Routed Remote Worker Workspace")
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nAgents can revisit prior notes.\n",
+                encoding="utf-8",
+            )
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_payload = json.loads(token_stdout.read_text(encoding="utf-8"))
+            token_value = token_payload["token"]
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "research",
+                        "how should agent memory be structured",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = run_remote_worker(
+                    server_url=f"http://{host}:{port}",
+                    token=token_value,
+                    worker_id="remote-workspace",
+                    max_jobs=1,
+                    worker_capabilities=["workspace"],
+                )
+
+                self.assertEqual(worker_result.processed_count, 1)
+                self.assertEqual(worker_result.completed_count, 1)
+
+                queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+                queued_jobs = [job for job in queue_payload["jobs"] if job["status"] == "queued"]
+                self.assertEqual(len(queued_jobs), 1)
+                self.assertEqual(queued_jobs[0]["job_type"], "research")
+                completed_job = next(job for job in queue_payload["jobs"] if job["status"] == "completed")
+                self.assertEqual(completed_job["job_type"], "lint")
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/workers", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                workers_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(workers_payload["workers"][0]["worker_id"], "remote-workspace")
+                self.assertEqual(workers_payload["workers"][0]["declared_capabilities"], ["workspace"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_scheduler_can_enqueue_due_peer_sync_exports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

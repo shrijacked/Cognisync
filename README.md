@@ -267,8 +267,10 @@ The operator loop now has a review layer too:
 - `cognisync audit list` derives a readable audit index in `.cognisync/audit.json` from runs, jobs, sync events, connectors, the workspace roster, and collaboration activity
 - `cognisync usage report` derives a workspace usage ledger in `.cognisync/usage.json` with counts for runs, jobs, connectors, sync volume, roles, storage bytes, and collaboration threads
 - `cognisync jobs enqueue ...`, `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs retry`, `jobs work`, `jobs workers`, and `jobs list` provide a persisted local queue plus retry lineage, renewable worker leases, and a file-native worker roster for remote-style research, compile, lint, maintenance, ingest, and scheduled connector execution, and queue submission/retry now accepts `--actor-id` so only operator principals can schedule work
+- queued job manifests now also declare a `worker_capability`, and `jobs claim-next|heartbeat|run-next|work --capability ...` can route workers toward compatible research, ingest, workspace, connector, or sync work instead of treating every worker as interchangeable
 - `cognisync worker remote --server-url ... --token ...` polls the hosted-alpha control plane and executes queued jobs against the same manifest-backed runtime, so another process can drain work without sharing a shell session
 - `cognisync worker remote --poll-interval-seconds 2 --max-idle-polls 30` lets a remote worker stay attached to the control plane long enough to catch future jobs instead of exiting immediately when the queue is briefly empty
+- `cognisync worker remote --capability workspace --capability connector` lets a remote worker advertise its declared capability set over HTTP, and the queue will only hand it matching jobs
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, attribute every export/import event to an explicit workspace actor, and can scope bundle exchange to an accepted shared peer with `--for-peer` and `--from-peer`
 - `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and connector mutations now accept `--actor-id` so only operator principals can register, schedule, or run connector pulls
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
@@ -291,6 +293,7 @@ The operator loop now has a review layer too:
 - the dashboard also surfaces source coverage from `.cognisync/sources.json`, compile health from lint and compile-plan state, a run timeline page, and a static concept-graph map backed by `.cognisync/graph.json`
 - the same dashboard now also surfaces job-queue history from `.cognisync/jobs/` and sync audit history from `.cognisync/sync/`, with static job-detail and sync-detail pages for browser-first control-plane inspection
 - the same dashboard now also surfaces `.cognisync/jobs/workers.json`, so active and idle worker ownership is visible next to the queue instead of only through the CLI
+- that worker registry now also surfaces each worker's declared capabilities, so the UI can show whether a remote worker is meant for research, ingest, workspace maintenance, connectors, or sync handoffs
 - the dashboard now surfaces connector definitions from `.cognisync/connectors.json` too, with static connector-detail pages and live actions for `run next job`, `sync connector`, and `sync all connectors` when the UI is served locally
 - those job, sync, and connector views now also surface actor provenance, so the dashboard shows who queued work, who moved state, and who created or last synced each connector
 - the same dashboard now reads `.cognisync/notifications.json` too, so backlog, validation-failure, and connector-attention signals show up as a durable inbox panel instead of living only in terminal output
@@ -339,6 +342,7 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync control-plane scheduler-tick --workspace . --enqueue-only`
 - `cognisync control-plane serve --workspace .`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id remote-a --max-jobs 5 --poll-interval-seconds 2 --max-idle-polls 30`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id workspace-a --capability workspace --capability connector --max-jobs 5`
 
 That layer keeps the same filesystem-first contract:
 
@@ -351,6 +355,7 @@ That layer keeps the same filesystem-first contract:
 - peer-scoped `sync export --for-peer` and `sync import --from-peer` now also require the accepted peer to declare `sync.import`, so bundle exchange is opt-in at the peer-capability layer instead of inferred from role alone
 - scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, and recurring research, compile, lint, or maintain subscriptions can enqueue regular corpus work without adding a second queue system
 - remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including scheduled peer-sync export work
+- remote workers now report their declared capability set through `.cognisync/jobs/workers.json` and `/api/workers`, and hosted job claims respect that routing data when a worker polls with `--capability`
 - `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely
 - the same served control plane now accepts collaboration actions over HTTP, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through the same token-backed surface
 - the same served control plane now exposes `GET /api/review` plus remote review actions like `/api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed`, so the filesystem-backed review queue is remotely readable and actionable without bypassing workspace roles
@@ -444,10 +449,14 @@ cognisync jobs enqueue maintain --max-concepts 2 --max-backlinks 2
 cognisync jobs enqueue connector-sync repo-remote-sample
 cognisync jobs enqueue connector-sync-all --scheduled-only
 cognisync jobs claim-next --worker-id worker-a
+cognisync jobs claim-next --worker-id workspace-a --capability workspace
 cognisync jobs heartbeat --worker-id worker-a --lease-seconds 900
+cognisync jobs heartbeat --worker-id workspace-a --lease-seconds 900 --capability workspace
 cognisync jobs run-next --worker-id worker-a
+cognisync jobs run-next --worker-id workspace-a --capability workspace
 cognisync jobs retry research-... --profile codex
 cognisync jobs work --worker-id worker-a --max-jobs 10
+cognisync jobs work --worker-id ingest-a --max-jobs 5 --capability ingest
 cognisync jobs workers
 cognisync jobs list
 
@@ -465,11 +474,12 @@ cognisync sync import outputs/reports/sync-bundles/sync-bundle-... --workspace /
 - `jobs enqueue connector-sync <connector-id>` lets connector pulls land through the same worker and audit path
 - `jobs enqueue connector-sync-all --scheduled-only` lets the queue execute only due connector subscriptions instead of re-walking the whole registry
 - `jobs claim-next --worker-id worker-a` records an explicit lease on the oldest claimable job so ownership is durable in the manifest
+- `jobs claim-next --worker-id workspace-a --capability workspace` routes the claim toward jobs that declare the `workspace` worker capability, leaving research or ingest jobs queued for other workers
 - `jobs heartbeat --worker-id worker-a --lease-seconds 900` renews that worker's active lease and records the heartbeat in both the job manifest and queue summary
 - `jobs run-next --worker-id worker-a` resumes that same worker's active claim or claims a fresh job when none is held
 - `jobs retry` re-queues a terminal job with lineage back to the original manifest, and can override the profile for another attempt
 - `jobs work --worker-id worker-a` drains claimable jobs sequentially under the same worker identity and lease settings
-- `jobs workers` renders `.cognisync/jobs/workers.json`, a derived worker registry that shows the last-seen time, active lease, and idle/completed state for every worker that has touched the queue
+- `jobs workers` renders `.cognisync/jobs/workers.json`, a derived worker registry that shows the last-seen time, active lease, declared capabilities, and idle/completed state for every worker that has touched the queue
 - `jobs enqueue ...` and `jobs retry` now accept `--actor-id`, so operators can submit queue work under an explicit principal while workers still claim and execute jobs through `--worker-id`
 - queued job manifests now persist `requested_by`, so scheduled work keeps the submitting principal in `.cognisync/jobs/manifests/`
 - `jobs enqueue sync-export remote-ops` lets the queue carry peer-scoped workspace handoffs through the same leased worker model as research and connector work

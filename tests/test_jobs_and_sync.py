@@ -15,6 +15,63 @@ from cognisync.config import LLMProfile, load_config, save_config
 
 
 class JobsAndSyncTests(unittest.TestCase):
+    def test_workers_can_route_claims_by_declared_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Capability Routed Queue"]), 0)
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nAgents can revisit prior notes.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "research",
+                        "how should agent memory be structured",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "claim-next",
+                        "--workspace",
+                        str(root),
+                        "--worker-id",
+                        "workspace-worker",
+                        "--capability",
+                        "workspace",
+                    ]
+                ),
+                0,
+            )
+
+            queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+            queued_job_ids = [job["job_id"] for job in queue_payload["jobs"] if job["status"] == "queued"]
+            claimed_job = next(job for job in queue_payload["jobs"] if job["status"] == "claimed")
+            self.assertEqual(claimed_job["job_type"], "lint")
+            self.assertEqual(queued_job_ids[0].split("-", 1)[0], "research")
+
+            claimed_manifest = json.loads(
+                (root / ".cognisync" / "jobs" / "manifests" / f"{claimed_job['job_id']}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(claimed_manifest["worker_capability"], "workspace")
+            self.assertEqual(claimed_manifest["lease"]["worker_capabilities"], ["workspace"])
+
+            workers_payload = json.loads((root / ".cognisync" / "jobs" / "workers.json").read_text(encoding="utf-8"))
+            worker = workers_payload["workers"][0]
+            self.assertEqual(worker["worker_id"], "workspace-worker")
+            self.assertEqual(worker["declared_capabilities"], ["workspace"])
+
     def test_jobs_worker_can_execute_remote_style_ingest_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

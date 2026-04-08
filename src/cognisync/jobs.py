@@ -27,6 +27,21 @@ class JobError(RuntimeError):
     pass
 
 
+WORKER_CAPABILITY_BY_JOB_TYPE = {
+    "research": "research",
+    "improve_research": "research",
+    "compile": "workspace",
+    "lint": "workspace",
+    "maintain": "workspace",
+    "connector_sync": "connector",
+    "connector_sync_all": "connector",
+    "sync_export": "sync",
+    "ingest_url": "ingest",
+    "ingest_repo": "ingest",
+    "ingest_sitemap": "ingest",
+}
+
+
 @dataclass(frozen=True)
 class JobRunResult:
     job_manifest_path: Path
@@ -305,12 +320,14 @@ def render_jobs_list(workspace: Workspace) -> str:
     for job in jobs:
         retry_of_job_id = str(job.get("retry_of_job_id", "") or "")
         retry_suffix = f" retry-of:{retry_of_job_id}" if retry_of_job_id else ""
+        capability = str(job.get("worker_capability", "")).strip()
+        capability_suffix = f" capability:{capability}" if capability else ""
         lines.append(
             "- "
             f"`{job['job_id']}` "
             f"`{job['job_type']}` "
             f"`{job['status']}` "
-            f"{job.get('title', '')}{retry_suffix}"
+            f"{job.get('title', '')}{retry_suffix}{capability_suffix}"
         )
     return "\n".join(lines)
 
@@ -331,11 +348,13 @@ def render_worker_registry(workspace: Workspace) -> str:
     for worker in workers:
         current_job_id = str(worker.get("current_job_id", "") or "")
         current_suffix = f" job:{current_job_id}" if current_job_id else ""
+        capabilities = [str(item) for item in list(worker.get("declared_capabilities", []))]
+        capability_suffix = f" capabilities:{json.dumps(capabilities)}" if capabilities else ""
         lines.append(
             "- "
             f"`{worker.get('worker_id', '')}` "
             f"`{worker.get('status', '')}` "
-            f"last-seen:{worker.get('last_seen_at', '')}{current_suffix}"
+            f"last-seen:{worker.get('last_seen_at', '')}{current_suffix}{capability_suffix}"
         )
     return "\n".join(lines)
 
@@ -377,8 +396,10 @@ def claim_next_job(
     workspace: Workspace,
     worker_id: str,
     lease_seconds: int = 300,
+    worker_capabilities: Optional[List[str]] = None,
 ) -> JobClaimResult:
     normalized_worker_id = _normalize_worker_id(worker_id)
+    normalized_worker_capabilities = _normalize_worker_capabilities(worker_capabilities)
     if lease_seconds < 1:
         raise JobError("Lease seconds must be at least 1.")
 
@@ -389,7 +410,7 @@ def claim_next_job(
             f"Worker {normalized_worker_id} already holds job {active_job.get('job_id', '')}."
         )
 
-    job = _select_claimable_job(jobs)
+    job = _select_claimable_job(jobs, worker_capabilities=normalized_worker_capabilities)
     if job is None:
         raise JobError("No claimable jobs found.")
 
@@ -399,6 +420,7 @@ def claim_next_job(
         worker_id=normalized_worker_id,
         lease_seconds=lease_seconds,
         claim_count=claim_count,
+        worker_capabilities=normalized_worker_capabilities,
     )
     job = _update_job_manifest(
         manifest_path,
@@ -427,8 +449,10 @@ def heartbeat_job(
     workspace: Workspace,
     worker_id: str,
     lease_seconds: int = 300,
+    worker_capabilities: Optional[List[str]] = None,
 ) -> JobHeartbeatResult:
     normalized_worker_id = _normalize_worker_id(worker_id)
+    normalized_worker_capabilities = _normalize_worker_capabilities(worker_capabilities)
     if lease_seconds < 1:
         raise JobError("Lease seconds must be at least 1.")
 
@@ -445,6 +469,7 @@ def heartbeat_job(
         claim_count=_existing_claim_count(job) or 1,
         claimed_at=str(current_lease.get("claimed_at", "")) or None,
         last_heartbeat_at=heartbeat_at,
+        worker_capabilities=normalized_worker_capabilities or list(current_lease.get("worker_capabilities", [])),
     )
     job = _update_job_manifest(
         manifest_path,
@@ -470,21 +495,28 @@ def run_job_worker(
     stop_on_error: bool = False,
     worker_id: str = "local-worker",
     lease_seconds: int = 300,
+    worker_capabilities: Optional[List[str]] = None,
 ) -> JobWorkerResult:
     processed_count = 0
     completed_count = 0
     failed_count = 0
+    normalized_worker_capabilities = _normalize_worker_capabilities(worker_capabilities)
 
     while True:
         if max_jobs is not None and processed_count >= max_jobs:
             break
-        if _select_claimable_job(list_jobs(workspace)) is None and _find_active_job_for_worker(
+        if _select_claimable_job(list_jobs(workspace), worker_capabilities=normalized_worker_capabilities) is None and _find_active_job_for_worker(
             list_jobs(workspace),
             _normalize_worker_id(worker_id),
         ) is None:
             break
         try:
-            run_next_job(workspace, worker_id=worker_id, lease_seconds=lease_seconds)
+            run_next_job(
+                workspace,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+                worker_capabilities=normalized_worker_capabilities,
+            )
             completed_count += 1
         except JobError:
             failed_count += 1
@@ -501,15 +533,24 @@ def run_job_worker(
         failed_count=failed_count,
         queue_manifest_path=workspace.job_queue_manifest_path,
     )
+
+
 def run_next_job(
     workspace: Workspace,
     worker_id: str = "local-worker",
     lease_seconds: int = 300,
+    worker_capabilities: Optional[List[str]] = None,
 ) -> JobRunResult:
     normalized_worker_id = _normalize_worker_id(worker_id)
+    normalized_worker_capabilities = _normalize_worker_capabilities(worker_capabilities)
     owned_job = _find_active_job_for_worker(list_jobs(workspace), normalized_worker_id)
     if owned_job is None:
-        claim = claim_next_job(workspace, worker_id=normalized_worker_id, lease_seconds=lease_seconds)
+        claim = claim_next_job(
+            workspace,
+            worker_id=normalized_worker_id,
+            lease_seconds=lease_seconds,
+            worker_capabilities=normalized_worker_capabilities,
+        )
         manifest_path = claim.job_manifest_path
         job = _read_job_by_id(workspace, claim.job_id)
     else:
@@ -522,6 +563,7 @@ def run_next_job(
         lease_seconds=lease_seconds,
         claim_count=claim_count or 1,
         claimed_at=str(dict(job.get("lease", {})).get("claimed_at", "")) or None,
+        worker_capabilities=normalized_worker_capabilities or list(dict(job.get("lease", {})).get("worker_capabilities", [])),
     )
     attempts = int(job.get("attempts", 0) or 0)
     started_at = str(job.get("started_at", "")) or utc_timestamp()
@@ -853,6 +895,7 @@ def _enqueue_job(
         "schema_version": 1,
         "job_id": job_id,
         "job_type": job_type,
+        "worker_capability": _job_worker_capability(job_type),
         "title": title_seed,
         "status": "queued",
         "created_at": utc_timestamp(),
@@ -944,6 +987,7 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
             {
                 "job_id": str(job.get("job_id", "")),
                 "job_type": str(job.get("job_type", "")),
+                "worker_capability": str(job.get("worker_capability", "")),
                 "title": str(job.get("title", "")),
                 "status": str(job.get("status", "")),
                 "created_at": str(job.get("created_at", "")),
@@ -1008,6 +1052,7 @@ def _build_lease_payload(
     claim_count: int,
     claimed_at: Optional[str] = None,
     last_heartbeat_at: Optional[str] = None,
+    worker_capabilities: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     claimed_at = claimed_at or utc_timestamp()
     expires_at = (
@@ -1019,15 +1064,20 @@ def _build_lease_payload(
         "lease_expires_at": expires_at,
         "lease_seconds": lease_seconds,
         "claim_count": claim_count,
+        "worker_capabilities": _normalize_worker_capabilities(worker_capabilities),
     }
     if last_heartbeat_at:
         payload["last_heartbeat_at"] = last_heartbeat_at
     return payload
 
 
-def _select_claimable_job(jobs: List[Dict[str, object]]) -> Optional[Dict[str, object]]:
+def _select_claimable_job(
+    jobs: List[Dict[str, object]],
+    worker_capabilities: Optional[List[str]] = None,
+) -> Optional[Dict[str, object]]:
+    normalized_worker_capabilities = _normalize_worker_capabilities(worker_capabilities)
     for job in jobs:
-        if _job_is_claimable(job):
+        if _job_is_claimable(job) and _job_matches_worker_capabilities(job, normalized_worker_capabilities):
             return job
     return None
 
@@ -1051,6 +1101,17 @@ def _job_is_claimable(job: Dict[str, object]) -> bool:
     if status in {"claimed", "running"} and not _job_has_active_lease(job):
         return True
     return False
+
+
+def _job_matches_worker_capabilities(job: Dict[str, object], worker_capabilities: List[str]) -> bool:
+    if not worker_capabilities:
+        return True
+    required_capability = str(job.get("worker_capability", "")).strip() or _job_worker_capability(
+        str(job.get("job_type", ""))
+    )
+    if not required_capability:
+        return True
+    return required_capability in worker_capabilities
 
 
 def _job_has_active_lease(job: Dict[str, object]) -> bool:
@@ -1086,6 +1147,7 @@ def _write_worker_registry(workspace: Workspace, jobs: Optional[List[Dict[str, o
                 "lease_expires_at": "",
                 "claim_count": 0,
                 "last_seen_at": "",
+                "declared_capabilities": [],
             },
         )
         last_seen_at = (
@@ -1098,6 +1160,9 @@ def _write_worker_registry(workspace: Workspace, jobs: Optional[List[Dict[str, o
         claim_count = int(lease.get("claim_count", job.get("claim_count", 0)) or 0)
         if claim_count > int(worker.get("claim_count", 0) or 0):
             worker["claim_count"] = claim_count
+        declared_capabilities = _normalize_worker_capabilities(list(lease.get("worker_capabilities", [])))
+        if declared_capabilities:
+            worker["declared_capabilities"] = declared_capabilities
         if _job_has_active_lease(job):
             worker["status"] = str(job.get("status", "claimed"))
             worker["current_job_id"] = str(job.get("job_id", ""))
@@ -1134,3 +1199,17 @@ def _read_worker_registry(workspace: Workspace) -> Dict[str, object]:
             "workers": [],
         }
     return json.loads(workspace.worker_registry_path.read_text(encoding="utf-8"))
+
+
+def _normalize_worker_capabilities(worker_capabilities: Optional[List[str]]) -> List[str]:
+    return sorted(
+        {
+            str(capability).strip()
+            for capability in list(worker_capabilities or [])
+            if str(capability).strip()
+        }
+    )
+
+
+def _job_worker_capability(job_type: str) -> str:
+    return WORKER_CAPABILITY_BY_JOB_TYPE.get(str(job_type).strip(), "workspace")

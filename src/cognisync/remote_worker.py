@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import time
-from typing import Optional
+from typing import List, Optional
 from urllib import error, request
 
 
@@ -26,6 +26,7 @@ def run_remote_worker(
     lease_seconds: int = 300,
     poll_interval_seconds: float = 0.0,
     max_idle_polls: int = 0,
+    worker_capabilities: Optional[List[str]] = None,
 ) -> RemoteWorkerResult:
     normalized_server = server_url.rstrip("/")
     normalized_token = token.strip()
@@ -36,6 +37,13 @@ def run_remote_worker(
         raise RemoteWorkerError("A bearer token is required.")
     if not normalized_worker:
         raise RemoteWorkerError("A worker id is required.")
+    normalized_worker_capabilities = sorted(
+        {
+            str(capability).strip()
+            for capability in list(worker_capabilities or [])
+            if str(capability).strip()
+        }
+    )
 
     processed_count = 0
     completed_count = 0
@@ -50,7 +58,11 @@ def run_remote_worker(
             payload = _post_json(
                 f"{normalized_server}/api/jobs/run-next",
                 token=normalized_token,
-                payload={"worker_id": normalized_worker, "lease_seconds": lease_seconds},
+                payload={
+                    "worker_id": normalized_worker,
+                    "lease_seconds": lease_seconds,
+                    "worker_capabilities": normalized_worker_capabilities,
+                },
             )
         except RemoteWorkerError as error_message:
             if "409:" in str(error_message):

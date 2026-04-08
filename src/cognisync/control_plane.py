@@ -1697,6 +1697,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     self._workspace,
                     worker_id=str(payload.get("worker_id", "")),
                     lease_seconds=int(payload.get("lease_seconds", 300) or 300),
+                    worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))],
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), **result.__dict__})
                 return
@@ -1711,6 +1712,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     self._workspace,
                     worker_id=str(payload.get("worker_id", "")),
                     lease_seconds=int(payload.get("lease_seconds", 300) or 300),
+                    worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))],
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), **result.__dict__})
                 return
@@ -1725,6 +1727,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     self._workspace,
                     worker_id=str(payload.get("worker_id", "")),
                     lease_seconds=int(payload.get("lease_seconds", 300) or 300),
+                    worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))],
                 )
                 self._send_json(
                     200,

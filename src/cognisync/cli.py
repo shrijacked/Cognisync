@@ -509,6 +509,7 @@ def cmd_jobs_claim_next(args: argparse.Namespace) -> int:
             workspace,
             worker_id=args.worker_id,
             lease_seconds=args.lease_seconds,
+            worker_capabilities=list(args.capability or []),
         )
     except (JobError, AccessError) as error:
         print(str(error), file=sys.stderr)
@@ -529,6 +530,7 @@ def cmd_jobs_run_next(args: argparse.Namespace) -> int:
             workspace,
             worker_id=args.worker_id,
             lease_seconds=args.lease_seconds,
+            worker_capabilities=list(args.capability or []),
         )
     except JobError as error:
         print(str(error), file=sys.stderr)
@@ -546,6 +548,7 @@ def cmd_jobs_heartbeat(args: argparse.Namespace) -> int:
             workspace,
             worker_id=args.worker_id,
             lease_seconds=args.lease_seconds,
+            worker_capabilities=list(args.capability or []),
         )
     except JobError as error:
         print(str(error), file=sys.stderr)
@@ -586,6 +589,7 @@ def cmd_jobs_work(args: argparse.Namespace) -> int:
         stop_on_error=args.stop_on_error,
         worker_id=args.worker_id,
         lease_seconds=args.lease_seconds,
+        worker_capabilities=list(args.capability or []),
     )
     print(
         "Processed "
@@ -1264,6 +1268,7 @@ def cmd_worker_remote(args: argparse.Namespace) -> int:
             lease_seconds=args.lease_seconds,
             poll_interval_seconds=args.poll_interval_seconds,
             max_idle_polls=args.max_idle_polls,
+            worker_capabilities=list(args.capability or []),
         )
     except RemoteWorkerError as error:
         print(str(error), file=sys.stderr)
@@ -2732,12 +2737,14 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_claim_next_parser.add_argument("--workspace", default=".")
     jobs_claim_next_parser.add_argument("--worker-id", default="local-worker")
     jobs_claim_next_parser.add_argument("--lease-seconds", type=int, default=300)
+    jobs_claim_next_parser.add_argument("--capability", action="append", default=[])
     jobs_claim_next_parser.set_defaults(func=cmd_jobs_claim_next)
 
     jobs_run_next_parser = jobs_subparsers.add_parser("run-next", help="Run the oldest queued job")
     jobs_run_next_parser.add_argument("--workspace", default=".")
     jobs_run_next_parser.add_argument("--worker-id", default="local-worker")
     jobs_run_next_parser.add_argument("--lease-seconds", type=int, default=300)
+    jobs_run_next_parser.add_argument("--capability", action="append", default=[])
     jobs_run_next_parser.set_defaults(func=cmd_jobs_run_next)
 
     jobs_heartbeat_parser = jobs_subparsers.add_parser(
@@ -2747,6 +2754,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_heartbeat_parser.add_argument("--workspace", default=".")
     jobs_heartbeat_parser.add_argument("--worker-id", default="local-worker")
     jobs_heartbeat_parser.add_argument("--lease-seconds", type=int, default=300)
+    jobs_heartbeat_parser.add_argument("--capability", action="append", default=[])
     jobs_heartbeat_parser.set_defaults(func=cmd_jobs_heartbeat)
 
     jobs_retry_parser = jobs_subparsers.add_parser("retry", help="Re-queue a terminal job for another attempt")
@@ -2766,6 +2774,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_work_parser.add_argument("--stop-on-error", action="store_true")
     jobs_work_parser.add_argument("--worker-id", default="local-worker")
     jobs_work_parser.add_argument("--lease-seconds", type=int, default=300)
+    jobs_work_parser.add_argument("--capability", action="append", default=[])
     jobs_work_parser.set_defaults(func=cmd_jobs_work)
 
     worker_parser = subparsers.add_parser(
@@ -2785,6 +2794,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker_remote_parser.add_argument("--lease-seconds", type=int, default=300)
     worker_remote_parser.add_argument("--poll-interval-seconds", type=float, default=0.0)
     worker_remote_parser.add_argument("--max-idle-polls", type=int, default=0)
+    worker_remote_parser.add_argument("--capability", action="append", default=[])
     worker_remote_parser.set_defaults(func=cmd_worker_remote)
 
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")
