@@ -135,9 +135,12 @@ from cognisync.sharing import (
     issue_shared_peer_bundle,
     list_due_shared_peer_syncs,
     list_shared_peers,
+    remove_shared_peer,
     render_shared_workspace_status,
+    set_shared_peer_role,
     set_shared_trust_policy,
     subscribe_shared_peer_sync,
+    suspend_shared_peer,
     unsubscribe_shared_peer_sync,
 )
 from cognisync.synthetic_data import (
@@ -831,6 +834,60 @@ def cmd_share_issue_peer_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_share_set_peer_role(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        peer = set_shared_peer_role(
+            workspace,
+            peer_ref=args.peer_ref,
+            role=args.role,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Updated peer {peer['peer_id']} to role {peer['role']}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    print(f"Access manifest: {workspace.access_manifest_path}")
+    return 0
+
+
+def cmd_share_suspend_peer(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        peer = suspend_shared_peer(
+            workspace,
+            peer_ref=args.peer_ref,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Suspended peer {peer['peer_id']}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    print(f"Access manifest: {workspace.access_manifest_path}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_share_remove_peer(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        peer = remove_shared_peer(
+            workspace,
+            peer_ref=args.peer_ref,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, SharingError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Removed peer {peer['peer_id']}")
+    print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
+    print(f"Access manifest: {workspace.access_manifest_path}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
 def cmd_share_set_policy(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     allow_remote_workers = None
@@ -956,6 +1013,7 @@ def cmd_control_plane_issue_token(args: argparse.Namespace) -> int:
             scopes=list(args.scope or []),
             actor_id=args.actor_id,
             description=args.description,
+            expires_in_hours=args.expires_in_hours,
         )
     except (AccessError, ControlPlaneError) as error:
         print(str(error), file=sys.stderr)
@@ -967,6 +1025,7 @@ def cmd_control_plane_issue_token(args: argparse.Namespace) -> int:
         "principal_id": token_metadata["principal_id"],
         "role": token_metadata["role"],
         "scopes": list(token_metadata.get("scopes", [])),
+        "expires_at": str(token_metadata.get("expires_at", "")),
         "manifest_path": workspace.relative_path(workspace.control_plane_manifest_path),
     }
     if output_file is not None:
@@ -994,6 +1053,9 @@ def cmd_control_plane_list_tokens(args: argparse.Namespace) -> int:
         print(f"prefix: {token.get('token_prefix', '')}")
         if scopes:
             print(f"scopes: {scopes}")
+        expires_at = str(token.get("expires_at", "")).strip()
+        if expires_at:
+            print(f"expires-at: {expires_at}")
         description = str(token.get("description", "")).strip()
         if description:
             print(f"description: {description}")
@@ -2384,7 +2446,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="List persisted shared-workspace peers",
     )
     share_list_parser.add_argument("--workspace", default=".")
-    share_list_parser.add_argument("--status", default=None, choices=["accepted", "pending"])
+    share_list_parser.add_argument("--status", default=None, choices=["accepted", "pending", "suspended"])
     share_list_parser.set_defaults(func=cmd_share_list_peers)
 
     share_issue_bundle_parser = share_subparsers.add_parser(
@@ -2397,6 +2459,34 @@ def build_parser() -> argparse.ArgumentParser:
     share_issue_bundle_parser.add_argument("--scope", action="append", default=[])
     share_issue_bundle_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     share_issue_bundle_parser.set_defaults(func=cmd_share_issue_peer_bundle)
+
+    share_set_peer_role_parser = share_subparsers.add_parser(
+        "set-peer-role",
+        help="Update a shared peer role and rebind its workspace access",
+    )
+    share_set_peer_role_parser.add_argument("peer_ref")
+    share_set_peer_role_parser.add_argument("role", choices=VALID_ACCESS_ROLES)
+    share_set_peer_role_parser.add_argument("--workspace", default=".")
+    share_set_peer_role_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_set_peer_role_parser.set_defaults(func=cmd_share_set_peer_role)
+
+    share_suspend_peer_parser = share_subparsers.add_parser(
+        "suspend-peer",
+        help="Suspend a shared peer and revoke its active access",
+    )
+    share_suspend_peer_parser.add_argument("peer_ref")
+    share_suspend_peer_parser.add_argument("--workspace", default=".")
+    share_suspend_peer_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_suspend_peer_parser.set_defaults(func=cmd_share_suspend_peer)
+
+    share_remove_peer_parser = share_subparsers.add_parser(
+        "remove-peer",
+        help="Remove a shared peer and revoke its active access",
+    )
+    share_remove_peer_parser.add_argument("peer_ref")
+    share_remove_peer_parser.add_argument("--workspace", default=".")
+    share_remove_peer_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    share_remove_peer_parser.set_defaults(func=cmd_share_remove_peer)
 
     share_set_policy_parser = share_subparsers.add_parser(
         "set-policy",
@@ -2484,6 +2574,7 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_issue_token_parser.add_argument("--workspace", default=".")
     control_plane_issue_token_parser.add_argument("--scope", action="append", default=[])
     control_plane_issue_token_parser.add_argument("--description", default="")
+    control_plane_issue_token_parser.add_argument("--expires-in-hours", type=int, default=None)
     control_plane_issue_token_parser.add_argument("--output-file", default=None)
     control_plane_issue_token_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     control_plane_issue_token_parser.set_defaults(func=cmd_control_plane_issue_token)

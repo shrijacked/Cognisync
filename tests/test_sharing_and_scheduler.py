@@ -16,6 +16,106 @@ from cognisync.workspace import Workspace
 
 
 class SharingAndSchedulerTests(unittest.TestCase):
+    def test_share_peer_lifecycle_can_update_suspend_and_remove_peer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            bundle_path = Path(tmp) / "remote-ops-bundle.json"
+            self.assertEqual(main(["init", str(root), "--name", "Peer Lifecycle Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                        "--capability",
+                        "jobs.remote",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["share", "accept-peer", "remote-ops", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "set-peer-role",
+                        "remote-ops",
+                        "reviewer",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "issue-peer-bundle",
+                        "remote-ops",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(bundle_path),
+                    ]
+                ),
+                0,
+            )
+
+            sharing_payload = json.loads((root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+            peer = sharing_payload["peers"][0]
+            self.assertEqual(peer["role"], "reviewer")
+            self.assertEqual(peer["status"], "accepted")
+
+            access_payload = json.loads((root / ".cognisync" / "access.json").read_text(encoding="utf-8"))
+            member = next(item for item in access_payload["members"] if item["principal_id"] == "remote-ops")
+            self.assertEqual(member["role"], "reviewer")
+
+            self.assertEqual(main(["share", "suspend-peer", "remote-ops", "--workspace", str(root)]), 0)
+            suspended_payload = json.loads((root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+            suspended_peer = suspended_payload["peers"][0]
+            self.assertEqual(suspended_peer["status"], "suspended")
+            self.assertFalse(suspended_peer["sync_subscription"]["enabled"])
+
+            access_payload = json.loads((root / ".cognisync" / "access.json").read_text(encoding="utf-8"))
+            member_ids = {item["principal_id"] for item in access_payload["members"]}
+            self.assertNotIn("remote-ops", member_ids)
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "share",
+                        "issue-peer-bundle",
+                        "remote-ops",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(bundle_path),
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("must be accepted", stderr.getvalue())
+
+            self.assertEqual(main(["share", "remove-peer", "remote-ops", "--workspace", str(root)]), 0)
+            final_payload = json.loads((root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+            self.assertEqual(final_payload["peers"], [])
+
     def test_share_policy_can_disable_remote_bundles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -306,6 +406,53 @@ class SharingAndSchedulerTests(unittest.TestCase):
                 control_payload = json.loads((root / ".cognisync" / "control-plane.json").read_text(encoding="utf-8"))
                 self.assertGreaterEqual(len(control_payload["scheduler"]["history"]), 1)
                 self.assertEqual(control_payload["scheduler"]["history"][0]["action"], "enqueued")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_expired_control_plane_tokens_are_rejected_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Expiring Token Workspace")
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--expires-in-hours",
+                        "1",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            control_plane_path = root / ".cognisync" / "control-plane.json"
+            payload = json.loads(control_plane_path.read_text(encoding="utf-8"))
+            payload["tokens"][0]["expires_at"] = "2000-01-01T00:00:00+00:00"
+            control_plane_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/status", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 403)
+                self.assertIn("expired", payload["error"].lower())
+                connection.close()
             finally:
                 server.shutdown()
                 server.server_close()

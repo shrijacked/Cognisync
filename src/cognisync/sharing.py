@@ -4,7 +4,16 @@ import json
 import secrets
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from cognisync.access import DEFAULT_LOCAL_OPERATOR_ID, OPERATOR_ACTION_ROLES, VALID_ACCESS_ROLES, grant_access_member, require_access_role
+from cognisync.access import (
+    AccessError,
+    DEFAULT_LOCAL_OPERATOR_ID,
+    OPERATOR_ACTION_ROLES,
+    VALID_ACCESS_ROLES,
+    find_access_member,
+    grant_access_member,
+    require_access_role,
+    revoke_access_member,
+)
 from cognisync.config import load_config
 from cognisync.utils import slugify, utc_timestamp
 
@@ -51,6 +60,7 @@ def render_shared_workspace_status(workspace: "Workspace") -> str:
         f"- Peer count: `{summary['peer_count']}`",
         f"- Accepted peers: `{summary['accepted_peer_count']}`",
         f"- Pending peers: `{summary['pending_peer_count']}`",
+        f"- Suspended peers: `{summary['suspended_peer_count']}`",
         f"- Issued peer bundles: `{summary['issued_bundle_count']}`",
         f"- Remote workers allowed: `{summary['allow_remote_workers']}`",
         f"- Sync imports from peers allowed: `{summary['allow_sync_imports_from_peers']}`",
@@ -77,6 +87,7 @@ def sharing_summary(workspace: "Workspace") -> Dict[str, object]:
         "peer_count": len(peers),
         "accepted_peer_count": sum(1 for peer in peers if str(peer.get("status", "")) == "accepted"),
         "pending_peer_count": sum(1 for peer in peers if str(peer.get("status", "")) == "pending"),
+        "suspended_peer_count": sum(1 for peer in peers if str(peer.get("status", "")) == "suspended"),
         "peer_ids": [str(peer.get("peer_id", "")) for peer in peers if str(peer.get("status", "")) == "accepted"],
         "issued_bundle_count": sum(1 for peer in peers if str(peer.get("last_token_id", "")).strip()),
         "scheduled_sync_peer_count": sum(
@@ -168,9 +179,97 @@ def accept_shared_peer(
     )
     peer["status"] = "accepted"
     peer["accepted_at"] = utc_timestamp()
+    peer["suspended_at"] = ""
     peer["updated_at"] = peer["accepted_at"]
     payload["peers"] = _sorted_peers(peers)
     payload["updated_at"] = peer["accepted_at"]
+    _write_shared_workspace_manifest(workspace, payload)
+    return peer
+
+
+def set_shared_peer_role(
+    workspace: "Workspace",
+    peer_ref: str,
+    role: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "update shared-workspace peer roles")
+    normalized_role = role.strip().lower()
+    if normalized_role not in VALID_ACCESS_ROLES:
+        raise SharingError(
+            f"Unsupported shared-workspace role '{role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
+        )
+    payload = ensure_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    peer = _find_peer_in_list(peers, peer_ref)
+    peer["role"] = normalized_role
+    peer["updated_at"] = utc_timestamp()
+    if str(peer.get("status", "")) == "accepted":
+        principal_id = str(peer.get("peer_id", ""))
+        grant_access_member(
+            workspace,
+            principal_id=principal_id,
+            role=normalized_role,
+            display_name=str(peer.get("display_name", "")) or principal_id,
+        )
+        _revoke_peer_tokens(workspace, principal_id, reason="peer_role_changed")
+    payload["peers"] = _sorted_peers(peers)
+    payload["updated_at"] = str(peer.get("updated_at", ""))
+    _write_shared_workspace_manifest(workspace, payload)
+    return peer
+
+
+def suspend_shared_peer(
+    workspace: "Workspace",
+    peer_ref: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "suspend shared-workspace peers")
+    payload = ensure_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    peer = _find_peer_in_list(peers, peer_ref)
+    now = utc_timestamp()
+    peer["status"] = "suspended"
+    peer["suspended_at"] = now
+    peer["updated_at"] = now
+    subscription = _normalize_sync_subscription(dict(peer.get("sync_subscription", {})))
+    subscription["enabled"] = False
+    subscription["next_sync_at"] = ""
+    subscription["last_tick_status"] = "suspended"
+    peer["sync_subscription"] = subscription
+    principal_id = str(peer.get("peer_id", ""))
+    if find_access_member(workspace, principal_id) is not None:
+        try:
+            revoke_access_member(workspace, principal_id)
+        except AccessError:
+            pass
+    _revoke_peer_tokens(workspace, principal_id, reason="peer_suspended")
+    payload["peers"] = _sorted_peers(peers)
+    payload["updated_at"] = now
+    _write_shared_workspace_manifest(workspace, payload)
+    return peer
+
+
+def remove_shared_peer(
+    workspace: "Workspace",
+    peer_ref: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "remove shared-workspace peers")
+    payload = ensure_shared_workspace_manifest(workspace)
+    peers = [dict(item) for item in list(payload.get("peers", []))]
+    peer = _find_peer_in_list(peers, peer_ref)
+    principal_id = str(peer.get("peer_id", ""))
+    if find_access_member(workspace, principal_id) is not None:
+        try:
+            revoke_access_member(workspace, principal_id)
+        except AccessError:
+            pass
+    _revoke_peer_tokens(workspace, principal_id, reason="peer_removed")
+    payload["peers"] = _sorted_peers(
+        [item for item in peers if str(item.get("peer_id", "")) != principal_id]
+    )
+    payload["updated_at"] = utc_timestamp()
     _write_shared_workspace_manifest(workspace, payload)
     return peer
 
@@ -474,6 +573,7 @@ def _sorted_peers(peers: List[Dict[str, object]]) -> List[Dict[str, object]]:
                 "capabilities": _sorted_capabilities(list(peer.get("capabilities", []))),
                 "shared_at": str(peer.get("shared_at", "")) or utc_timestamp(),
                 "accepted_at": str(peer.get("accepted_at", "")),
+                "suspended_at": str(peer.get("suspended_at", "")),
                 "last_bundle_issued_at": str(peer.get("last_bundle_issued_at", "")),
                 "last_token_id": str(peer.get("last_token_id", "")),
                 "last_bundle_scopes": [str(item) for item in list(peer.get("last_bundle_scopes", []))],
@@ -481,7 +581,8 @@ def _sorted_peers(peers: List[Dict[str, object]]) -> List[Dict[str, object]]:
                 "updated_at": str(peer.get("updated_at", "")) or utc_timestamp(),
             }
         )
-    normalized.sort(key=lambda item: (item["status"] != "accepted", item["peer_id"]))
+    status_rank = {"accepted": 0, "pending": 1, "suspended": 2}
+    normalized.sort(key=lambda item: (status_rank.get(item["status"], 9), item["peer_id"]))
     return normalized
 
 
@@ -513,6 +614,12 @@ def _normalize_sync_subscription(payload: Dict[str, object]) -> Dict[str, object
         "last_scheduler_tick_at": str(payload.get("last_scheduler_tick_at", "")),
         "last_tick_status": str(payload.get("last_tick_status", "")),
     }
+
+
+def _revoke_peer_tokens(workspace: "Workspace", principal_id: str, reason: str) -> None:
+    from cognisync.control_plane import revoke_control_plane_tokens_for_principal
+
+    revoke_control_plane_tokens_for_principal(workspace, principal_id, reason=reason)
 
 
 def _next_interval_timestamp(hours: int) -> str:

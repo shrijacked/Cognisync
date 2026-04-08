@@ -26,6 +26,11 @@
 - added `GET /api/review` plus remote review actions over the hosted control plane, so concept acceptance, merge resolution, backlink promotion, conflict filing, and dismissal management can all happen over token-backed HTTP
 - added `GET /api/runs`, `GET /api/sync`, and `GET /api/change-summaries` over the hosted control plane, so remote operators can inspect execution history and corpus deltas without local shell access
 - added remote access, invite, and token administration endpoints over the hosted control plane, so roster updates and scoped bearer-token lifecycle no longer require local CLI access
+- added `cognisync share set-peer-role|suspend-peer|remove-peer` so accepted peers now have a real lifecycle instead of only grant-style flows
+- added hosted peer lifecycle endpoints over `/api/share/peers/role|suspend|remove`, so shared-workspace trust can be tightened remotely instead of only granted
+- taught shared peer lifecycle changes to revoke active access members and peer-issued control-plane tokens automatically
+- added `--expires-in-hours` to `cognisync control-plane issue-token`, so hosted-alpha bearer tokens can expire on an explicit hourly TTL
+- taught control-plane validation to mark expired tokens as `expired` and reject them at request time instead of treating bearer auth as permanent by default
 - taught default reviewer and operator control-plane tokens to include `review.run`, while still keeping review mutations gated by the workspace role roster
 - taught default operator control-plane tokens to include `control.admin`, so remote auth administration can use explicit scope checks instead of overloading read tokens
 - added `cognisync audit list` plus `.cognisync/audit.json` so runs, jobs, sync events, connectors, and access state now materialize into a readable audit index

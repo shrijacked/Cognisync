@@ -86,10 +86,13 @@ from cognisync.sharing import (
     issue_shared_peer_bundle,
     list_due_shared_peer_syncs,
     load_shared_workspace_manifest,
+    remove_shared_peer,
     record_shared_peer_scheduler_tick,
+    set_shared_peer_role,
     set_shared_trust_policy,
     sharing_summary,
     subscribe_shared_peer_sync,
+    suspend_shared_peer,
     unsubscribe_shared_peer_sync,
 )
 from cognisync.sync import encode_sync_bundle_archive, export_sync_bundle, import_sync_bundle_archive, list_sync_events
@@ -156,10 +159,12 @@ def render_control_plane_status(workspace: "Workspace") -> str:
         "",
         f"- Workspace id: `{payload.get('workspace_id', '')}`",
         f"- Active tokens: `{summary.get('active_token_count', 0)}`",
+        f"- Expired tokens: `{summary.get('expired_token_count', 0)}`",
         f"- Pending invites: `{summary.get('pending_invite_count', 0)}`",
         f"- Accepted invites: `{summary.get('accepted_invite_count', 0)}`",
         f"- Published control plane URL: `{sharing.get('published_control_plane_url', '') or 'unbound'}`",
         f"- Accepted peers: `{sharing.get('accepted_peer_count', 0)}`",
+        f"- Suspended peers: `{sharing.get('suspended_peer_count', 0)}`",
         f"- Last scheduler action: `{scheduler.get('last_action', 'never')}`",
     ]
     return "\n".join(lines)
@@ -268,21 +273,29 @@ def issue_control_plane_token(
     scopes: Optional[List[str]] = None,
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
     description: str = "",
+    expires_in_hours: Optional[int] = None,
 ) -> tuple[Dict[str, object], str]:
     actor = require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "issue control-plane tokens")
     principal = require_access_role(workspace, principal_id, ("viewer", "editor", "reviewer", "operator"), "receive control-plane tokens")
+    if expires_in_hours is not None and int(expires_in_hours) < 1:
+        raise ControlPlaneError("Control-plane token expiry must be at least 1 hour.")
     raw_token = f"cp_{secrets.token_hex(24)}"
     token_hash = _hash_token(raw_token)
     normalized_scopes = sorted(set(scopes or DEFAULT_CONTROL_SCOPES.get(str(principal.get("role", "")), ["control.read"])))
+    created_at = utc_timestamp()
+    expires_at = ""
+    if expires_in_hours is not None:
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=int(expires_in_hours))).isoformat(timespec="seconds")
     token = {
         "token_id": f"token-{slugify(principal_id)[:24] or 'principal'}-{utc_timestamp().replace(':', '').replace('-', '')}",
         "principal_id": str(principal.get("principal_id", "")),
         "role": str(principal.get("role", "")),
         "status": "active",
         "description": description.strip(),
-        "created_at": utc_timestamp(),
+        "created_at": created_at,
         "issued_by": _serialize_actor(actor),
         "last_used_at": "",
+        "expires_at": expires_at,
         "token_prefix": raw_token[:10],
         "token_hash": token_hash,
         "scopes": normalized_scopes,
@@ -318,6 +331,37 @@ def revoke_control_plane_token(
     return safe_token
 
 
+def revoke_control_plane_tokens_for_principal(
+    workspace: "Workspace",
+    principal_id: str,
+    reason: str = "",
+) -> List[Dict[str, object]]:
+    normalized_principal = principal_id.strip()
+    if not normalized_principal:
+        return []
+    payload = ensure_control_plane_manifest(workspace)
+    tokens = [dict(item) for item in list(payload.get("tokens", []))]
+    revoked: List[Dict[str, object]] = []
+    changed = False
+    for token in tokens:
+        if str(token.get("principal_id", "")) != normalized_principal:
+            continue
+        if str(token.get("status", "")) != "active":
+            continue
+        token["status"] = "revoked"
+        token["revoked_at"] = utc_timestamp()
+        if reason:
+            token["revocation_reason"] = reason
+        revoked.append(dict(token))
+        changed = True
+    if changed:
+        payload["tokens"] = _sorted_tokens(tokens)
+        _write_control_plane_manifest(workspace, payload)
+    for token in revoked:
+        token.pop("token_hash", None)
+    return revoked
+
+
 def validate_control_plane_token(
     workspace: "Workspace",
     token_value: str,
@@ -339,6 +383,12 @@ def validate_control_plane_token(
     )
     if token is None:
         raise ControlPlaneError("Invalid or revoked control-plane token.")
+    if _token_is_expired(token):
+        token["status"] = "expired"
+        token["expired_at"] = utc_timestamp()
+        payload["tokens"] = _sorted_tokens(tokens)
+        _write_control_plane_manifest(workspace, payload)
+        raise ControlPlaneError("Expired control-plane token.")
     scopes = {str(item) for item in list(token.get("scopes", []))}
     missing_scopes = [scope for scope in required_scopes if scope not in scopes]
     if missing_scopes:
@@ -782,6 +832,7 @@ def _build_summary(invites: List[Dict[str, object]], tokens: List[Dict[str, obje
         "token_count": len(tokens),
         "active_token_count": sum(1 for item in tokens if str(item.get("status", "")) == "active"),
         "revoked_token_count": sum(1 for item in tokens if str(item.get("status", "")) == "revoked"),
+        "expired_token_count": sum(1 for item in tokens if str(item.get("status", "")) == "expired"),
     }
 
 
@@ -1050,6 +1101,16 @@ def _sorted_tokens(tokens: List[Dict[str, object]]) -> List[Dict[str, object]]:
     return tokens
 
 
+def _token_is_expired(token: Dict[str, object]) -> bool:
+    expires_at = str(token.get("expires_at", "")).strip()
+    if not expires_at:
+        return False
+    try:
+        return datetime.fromisoformat(expires_at) <= datetime.now(timezone.utc)
+    except ValueError:
+        return False
+
+
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -1197,6 +1258,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                         "total_count": len(tokens),
                         "active_count": sum(1 for item in tokens if str(item.get("status", "")) == "active"),
                         "revoked_count": sum(1 for item in tokens if str(item.get("status", "")) == "revoked"),
+                        "expired_count": sum(1 for item in tokens if str(item.get("status", "")) == "expired"),
                     },
                 },
             )
@@ -1357,6 +1419,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     scopes=[str(item) for item in list(payload.get("scopes", []))] or None,
                     actor_id=str(actor.get("principal_id", "")),
                     description=str(payload.get("description", "")),
+                    expires_in_hours=int(payload["expires_in_hours"]) if payload.get("expires_in_hours") is not None else None,
                 )
                 self._send_json(
                     200,
@@ -2071,6 +2134,47 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     actor_id=str(actor.get("principal_id", "")),
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), "peer": peer})
+                return
+            if parsed.path == "/api/share/peers/role":
+                actor = self._authenticate(["control.read"])
+                peer = set_shared_peer_role(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_id", "")),
+                    role=str(payload.get("role", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "peer": peer, "sharing": sharing_summary(self._workspace)},
+                )
+                return
+            if parsed.path == "/api/share/peers/suspend":
+                actor = self._authenticate(["control.read"])
+                peer = suspend_shared_peer(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_id", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "peer": peer, "sharing": sharing_summary(self._workspace)},
+                )
+                return
+            if parsed.path == "/api/share/peers/remove":
+                actor = self._authenticate(["control.read"])
+                removed = remove_shared_peer(
+                    self._workspace,
+                    peer_ref=str(payload.get("peer_id", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "removed_peer_id": str(removed.get("peer_id", "")),
+                        "sharing": sharing_summary(self._workspace),
+                    },
+                )
                 return
             if parsed.path == "/api/share/issue-peer-bundle":
                 actor = self._authenticate(["control.read"])

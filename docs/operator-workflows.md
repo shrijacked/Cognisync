@@ -192,6 +192,9 @@ Supported paths in this release:
 - `cognisync share invite-peer remote-ops operator --workspace . --base-url https://remote.example.test/cognisync --capability jobs.remote`
 - `cognisync share accept-peer remote-ops --workspace .`
 - `cognisync share list-peers`
+- `cognisync share set-peer-role remote-ops reviewer --workspace .`
+- `cognisync share suspend-peer remote-ops --workspace .`
+- `cognisync share remove-peer remote-ops --workspace .`
 - `cognisync share set-policy --workspace . --allow-remote-workers --allow-sync-imports`
 - `cognisync share subscribe-sync remote-ops --workspace . --every-hours 1`
 - `cognisync share unsubscribe-sync remote-ops --workspace .`
@@ -207,6 +210,7 @@ The command family:
 6. issues peer bundles only for accepted peers and only after a control-plane URL is bound, so remote workers receive a coherent package
 7. derives bundle scopes from declared peer capabilities like `jobs.remote`, `review.remote`, `scheduler.remote`, `connectors.sync`, `control.admin`, or explicit scope strings, so peer handoffs stay intentionally least-privilege
 8. reuses the same scoped token issuance path as `control-plane issue-token`, so peer bundles inherit the role-aware control-plane contract instead of inventing a second auth model
+9. lets operators re-role, suspend, or remove a peer without hand-editing manifests, and those lifecycle actions revoke shared access plus peer-issued tokens automatically
 
 ### `control-plane`
 
@@ -217,7 +221,7 @@ Supported paths in this release:
 - `cognisync control-plane status`
 - `cognisync control-plane invite reviewer-2 reviewer --workspace .`
 - `cognisync control-plane accept-invite reviewer-2 --workspace .`
-- `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --output-file token.json`
+- `cognisync control-plane issue-token local-operator --scope control.read --scope jobs.run --expires-in-hours 12 --output-file token.json`
 - `cognisync control-plane list-tokens`
 - `cognisync control-plane revoke-token <token-id>`
 - `cognisync control-plane schedule-research "map contradictions in deployment notes" --every-hours 6`
@@ -235,7 +239,7 @@ The command family:
 
 1. materializes `.cognisync/control-plane.json`
 2. keeps workspace invites and accepted memberships file-native instead of hiding them in process memory
-3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes
+3. issues scoped bearer tokens whose raw value is only emitted once, while the manifest stores only token hashes plus prefixes and optional expiry timestamps
 4. persists recurring research, compile, lint, and maintain subscriptions beside connector and peer-sync schedules, so the scheduler can drive corpus work without a second orchestration store
 5. supports scheduler ticks that enqueue or execute scheduled connector sync work, due peer-scoped sync-export jobs, and recurring corpus jobs against the same queue and connector manifests the local CLI already uses
 6. serves a lightweight HTTP layer for status, shared-workspace state, access roster, collaboration threads, notifications, audit, usage, queue inspection, worker inspection, scheduler ticks, lease-aware job execution, and lease renewal
@@ -258,7 +262,7 @@ The served API now covers a real remote review surface too:
 - `POST /api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed` let reviewer or operator tokens mutate the review loop remotely while still resolving back through `.cognisync/access.json`
 - `POST /api/collab/request-review`, `comment`, `approve`, `request-changes`, and `resolve` let editors and reviewers mutate artifact-review state over HTTP while still enforcing the workspace role model
 - `POST /api/share/set-policy`, `subscribe-sync`, and `unsubscribe-sync` let operator tokens manage shared-workspace trust policy and scheduled peer exports remotely
-- `POST /api/share/invite-peer`, `accept-peer`, and `issue-peer-bundle` let operator tokens prepare remote peer handoffs over HTTP too
+- `POST /api/share/invite-peer`, `accept-peer`, `issue-peer-bundle`, `peers/role`, `peers/suspend`, and `peers/remove` let operator tokens prepare or tighten remote peer handoffs over HTTP too
 - `GET /api/connectors` plus `POST /api/connectors/add`, `subscribe`, `unsubscribe`, `sync`, and `sync-all` let the hosted-alpha layer inspect and execute connector work without falling back to a local shell
 - `POST /api/jobs/enqueue/research|compile|lint|maintain|ingest-url|ingest-repo|ingest-sitemap|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
 - `POST /api/sync/export` and `POST /api/sync/import` let operator tokens exchange inline sync archives over HTTP while still honoring accepted-peer trust policy on import
