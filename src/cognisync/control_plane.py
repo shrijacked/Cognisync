@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
@@ -73,6 +74,7 @@ from cognisync.maintenance import (
 from cognisync.notifications import write_notifications_manifest
 from cognisync.review_queue import build_review_queue
 from cognisync.review_state import read_review_actions
+from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE
 from cognisync.scanner import scan_workspace
 from cognisync.sharing import (
     accept_shared_peer,
@@ -121,6 +123,8 @@ class SchedulerTickResult:
     due_connector_count: int
     due_connector_ids: List[str]
     due_peer_sync_ids: List[str]
+    due_job_subscription_count: int
+    due_job_subscription_ids: List[str]
     enqueued_job_ids: List[str]
     executed_run_manifest_path: Optional[Path]
 
@@ -348,6 +352,212 @@ def validate_control_plane_token(
     )
 
 
+def schedule_job_subscription(
+    workspace: "Workspace",
+    job_type: str,
+    every_hours: int,
+    parameters: Optional[Dict[str, object]] = None,
+    label: Optional[str] = None,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    actor = require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "manage scheduled control-plane jobs")
+    normalized_type = str(job_type).strip().lower()
+    if normalized_type not in {"research", "compile", "lint", "maintain"}:
+        raise ControlPlaneError("Scheduled jobs currently support research, compile, lint, and maintain.")
+    if int(every_hours) < 1:
+        raise ControlPlaneError("Scheduled job intervals must be at least 1 hour.")
+
+    payload = ensure_control_plane_manifest(workspace)
+    subscriptions = [
+        _normalize_job_subscription(item)
+        for item in list(dict(payload.get("scheduler", {})).get("job_subscriptions", []))
+    ]
+    subscribed_at = utc_timestamp()
+    normalized_parameters = dict(parameters or {})
+    if normalized_type == "research" and not str(normalized_parameters.get("question", "")).strip():
+        raise ControlPlaneError("Scheduled research jobs require a question.")
+    subscription_id = (
+        f"scheduled-{normalized_type}-"
+        f"{slugify(label or normalized_parameters.get('question') or normalized_type)[:40] or normalized_type}-"
+        f"{subscribed_at.replace(':', '').replace('-', '')}"
+    )
+    subscription = _normalize_job_subscription(
+        {
+            "subscription_id": subscription_id,
+            "job_type": normalized_type,
+            "label": label or normalized_parameters.get("question") or normalized_type,
+            "parameters": normalized_parameters,
+            "enabled": True,
+            "interval_hours": int(every_hours),
+            "subscribed_at": subscribed_at,
+            "next_run_at": subscribed_at,
+            "last_enqueued_at": "",
+            "last_scheduler_tick_at": "",
+            "last_due_at": "",
+            "last_tick_status": "",
+            "created_by": _serialize_actor(actor),
+            "updated_by": _serialize_actor(actor),
+        }
+    )
+    subscriptions.append(subscription)
+    scheduler = dict(payload.get("scheduler", {}))
+    scheduler["job_subscriptions"] = _sorted_job_subscriptions(subscriptions)
+    payload["scheduler"] = scheduler
+    _write_control_plane_manifest(workspace, payload)
+    return subscription
+
+
+def disable_job_subscription(
+    workspace: "Workspace",
+    subscription_id: str,
+    actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
+) -> Dict[str, object]:
+    actor = require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "manage scheduled control-plane jobs")
+    normalized_id = str(subscription_id).strip()
+    if not normalized_id:
+        raise ControlPlaneError("A scheduled job subscription id is required.")
+    payload = ensure_control_plane_manifest(workspace)
+    subscriptions = [
+        _normalize_job_subscription(item)
+        for item in list(dict(payload.get("scheduler", {})).get("job_subscriptions", []))
+    ]
+    subscription = next((item for item in subscriptions if str(item.get("subscription_id", "")) == normalized_id), None)
+    if subscription is None:
+        raise ControlPlaneError(f"Could not find scheduled job '{normalized_id}'.")
+    subscription["enabled"] = False
+    subscription["next_run_at"] = ""
+    subscription["updated_by"] = _serialize_actor(actor)
+    scheduler = dict(payload.get("scheduler", {}))
+    scheduler["job_subscriptions"] = _sorted_job_subscriptions(subscriptions)
+    payload["scheduler"] = scheduler
+    _write_control_plane_manifest(workspace, payload)
+    return subscription
+
+
+def list_job_subscriptions(workspace: "Workspace") -> List[Dict[str, object]]:
+    payload = ensure_control_plane_manifest(workspace)
+    return _sorted_job_subscriptions(
+        [
+            _normalize_job_subscription(item)
+            for item in list(dict(payload.get("scheduler", {})).get("job_subscriptions", []))
+        ]
+    )
+
+
+def list_due_job_subscriptions(workspace: "Workspace") -> List[Dict[str, object]]:
+    due: List[Dict[str, object]] = []
+    for subscription in list_job_subscriptions(workspace):
+        if _job_subscription_is_due(subscription):
+            due.append(subscription)
+    return due
+
+
+def _normalize_job_subscription(subscription: object) -> Dict[str, object]:
+    payload = dict(subscription) if isinstance(subscription, dict) else {}
+    interval_hours = payload.get("interval_hours")
+    try:
+        normalized_interval = int(interval_hours) if interval_hours is not None and str(interval_hours) != "" else None
+    except (TypeError, ValueError):
+        normalized_interval = None
+    return {
+        "subscription_id": str(payload.get("subscription_id", "")),
+        "job_type": str(payload.get("job_type", "")),
+        "label": str(payload.get("label", "")),
+        "parameters": dict(payload.get("parameters", {})) if isinstance(payload.get("parameters", {}), dict) else {},
+        "enabled": bool(payload.get("enabled", False)),
+        "interval_hours": normalized_interval,
+        "subscribed_at": str(payload.get("subscribed_at", "")) or "",
+        "next_run_at": str(payload.get("next_run_at", "")) or "",
+        "last_enqueued_at": str(payload.get("last_enqueued_at", "")) or "",
+        "last_scheduler_tick_at": str(payload.get("last_scheduler_tick_at", "")) or "",
+        "last_due_at": str(payload.get("last_due_at", "")) or "",
+        "last_tick_status": str(payload.get("last_tick_status", "")) or "",
+        "created_by": _serialize_actor(payload.get("created_by")),
+        "updated_by": _serialize_actor(payload.get("updated_by")),
+    }
+
+
+def _sorted_job_subscriptions(subscriptions: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    subscriptions.sort(
+        key=lambda item: (
+            str(item.get("job_type", "")),
+            str(item.get("label", "")),
+            str(item.get("subscription_id", "")),
+        )
+    )
+    return subscriptions
+
+
+def _job_subscription_is_due(subscription: Dict[str, object]) -> bool:
+    normalized = _normalize_job_subscription(subscription)
+    if not bool(normalized.get("enabled", False)):
+        return False
+    next_run_at = str(normalized.get("next_run_at", "")).strip()
+    if not next_run_at:
+        return True
+    try:
+        return datetime.fromisoformat(next_run_at) <= datetime.now(timezone.utc)
+    except ValueError:
+        return True
+
+
+def _advance_job_subscription(subscription: Dict[str, object], scheduled_at: str) -> Dict[str, object]:
+    normalized = _normalize_job_subscription(subscription)
+    normalized["last_enqueued_at"] = scheduled_at
+    interval_hours = normalized.get("interval_hours")
+    if interval_hours:
+        try:
+            base_time = datetime.fromisoformat(scheduled_at)
+        except ValueError:
+            base_time = datetime.now(timezone.utc)
+        normalized["next_run_at"] = (
+            base_time + timedelta(hours=int(interval_hours))
+        ).replace(microsecond=0).isoformat()
+    return normalized
+
+
+def _enqueue_scheduled_job(
+    workspace: "Workspace",
+    scheduled_job: Dict[str, object],
+    actor: Dict[str, object],
+) -> Path:
+    normalized = _normalize_job_subscription(scheduled_job)
+    job_type = str(normalized.get("job_type", ""))
+    parameters = dict(normalized.get("parameters", {}))
+    if job_type == "research":
+        question = str(parameters.get("question", "")).strip()
+        if not question:
+            raise ControlPlaneError("Scheduled research jobs require a question.")
+        return enqueue_research_job(
+            workspace,
+            question=question,
+            profile_name=str(parameters.get("profile_name", "")) or None,
+            limit=int(parameters.get("limit", 5) or 5),
+            mode=str(parameters.get("mode", "wiki") or "wiki"),
+            slides=bool(parameters.get("slides", False)),
+            job_profile=str(parameters.get("job_profile", "")) or DEFAULT_RESEARCH_JOB_PROFILE,
+            requested_by=actor,
+        )
+    if job_type == "compile":
+        return enqueue_compile_job(
+            workspace,
+            profile_name=str(parameters.get("profile_name", "")) or None,
+            requested_by=actor,
+        )
+    if job_type == "lint":
+        return enqueue_lint_job(workspace, requested_by=actor)
+    if job_type == "maintain":
+        return enqueue_maintain_job(
+            workspace,
+            max_concepts=int(parameters.get("max_concepts", 10) or 10),
+            max_merges=int(parameters.get("max_merges", 10) or 10),
+            max_backlinks=int(parameters.get("max_backlinks", 10) or 10),
+            max_conflicts=int(parameters.get("max_conflicts", 10) or 10),
+            requested_by=actor,
+        )
+    raise ControlPlaneError(f"Unsupported scheduled job type '{job_type}'.")
+
+
 def run_scheduler_tick(
     workspace: "Workspace",
     actor_id: str = DEFAULT_LOCAL_OPERATOR_ID,
@@ -358,16 +568,21 @@ def run_scheduler_tick(
     actor = require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "run the control-plane scheduler")
     due_connectors = [dict(item) for item in list_due_connectors(workspace)]
     due_peer_syncs = [dict(item) for item in list_due_shared_peer_syncs(workspace)]
+    due_job_subscriptions = [dict(item) for item in list_due_job_subscriptions(workspace)]
     if limit is not None:
         due_connectors = due_connectors[: max(0, int(limit))]
         remaining = max(0, int(limit) - len(due_connectors))
         due_peer_syncs = due_peer_syncs[:remaining] if remaining else []
+        remaining = max(0, remaining - len(due_peer_syncs))
+        due_job_subscriptions = due_job_subscriptions[:remaining] if remaining else []
     due_connector_ids = [str(item.get("connector_id", "")) for item in due_connectors]
     due_peer_sync_ids = [str(item.get("peer_id", "")) for item in due_peer_syncs]
+    due_job_subscription_ids = [str(item.get("subscription_id", "")) for item in due_job_subscriptions]
     executed_run_manifest_path: Optional[Path] = None
     enqueued_job_ids: List[str] = []
     action = "noop"
-    if due_connectors or due_peer_syncs:
+    tick_at = utc_timestamp()
+    if due_connectors or due_peer_syncs or due_job_subscriptions:
         if enqueue_only:
             if due_connectors:
                 manifest_path = enqueue_connector_sync_all_job(
@@ -385,7 +600,9 @@ def run_scheduler_tick(
                     requested_by=actor,
                 )
                 enqueued_job_ids.append(manifest_path.stem)
-            action = "enqueued"
+            for scheduled_job in due_job_subscriptions:
+                manifest_path = _enqueue_scheduled_job(workspace, scheduled_job, actor)
+                enqueued_job_ids.append(manifest_path.stem)
         else:
             if due_connectors:
                 result = sync_all_connectors(
@@ -397,42 +614,79 @@ def run_scheduler_tick(
                 )
                 executed_run_manifest_path = result.run_manifest_path
             for peer_sync in due_peer_syncs:
-                enqueue_sync_export_job(
+                manifest_path = enqueue_sync_export_job(
                     workspace,
                     peer_ref=str(peer_sync.get("peer_id", "")),
                     requested_by=actor,
                 )
+                enqueued_job_ids.append(manifest_path.stem)
+            for scheduled_job in due_job_subscriptions:
+                manifest_path = _enqueue_scheduled_job(workspace, scheduled_job, actor)
+                enqueued_job_ids.append(manifest_path.stem)
+        if executed_run_manifest_path is not None:
             action = "executed"
+        elif enqueued_job_ids:
+            action = "enqueued"
     _record_scheduler_observations(workspace, due_connector_ids)
     record_shared_peer_scheduler_tick(workspace, due_peer_sync_ids)
     payload = ensure_control_plane_manifest(workspace)
-    history = [dict(item) for item in list(dict(payload.get("scheduler", {})).get("history", []))]
+    scheduler_payload = dict(payload.get("scheduler", {}))
+    history = [dict(item) for item in list(scheduler_payload.get("history", []))]
+    subscriptions = [
+        _normalize_job_subscription(item)
+        for item in list(scheduler_payload.get("job_subscriptions", []))
+    ]
+    due_ids = {subscription_id for subscription_id in due_job_subscription_ids if subscription_id}
+    updated_subscriptions: List[Dict[str, object]] = []
+    for subscription in subscriptions:
+        updated = _normalize_job_subscription(subscription)
+        if not bool(updated.get("enabled", False)):
+            updated_subscriptions.append(updated)
+            continue
+        updated["last_scheduler_tick_at"] = tick_at
+        if str(updated.get("subscription_id", "")) in due_ids:
+            updated["last_due_at"] = tick_at
+            updated["last_tick_status"] = "enqueued" if enqueued_job_ids else "due"
+            updated = _advance_job_subscription(updated, tick_at)
+        else:
+            updated["last_tick_status"] = "waiting"
+        updated_subscriptions.append(updated)
     history.insert(
         0,
         {
-            "tick_at": utc_timestamp(),
+            "tick_at": tick_at,
             "action": action,
             "due_connector_ids": due_connector_ids,
             "due_peer_sync_ids": due_peer_sync_ids,
+            "due_job_subscription_ids": due_job_subscription_ids,
             "enqueued_job_ids": enqueued_job_ids,
             "executed_run_manifest_path": workspace.relative_path(executed_run_manifest_path) if executed_run_manifest_path else "",
         },
     )
-    payload["scheduler"] = {
-        "last_tick_at": utc_timestamp(),
-        "last_action": action,
-        "last_due_connector_ids": due_connector_ids,
-        "last_due_peer_sync_ids": due_peer_sync_ids,
-        "last_enqueued_job_ids": enqueued_job_ids,
-        "last_executed_run_manifest_path": workspace.relative_path(executed_run_manifest_path) if executed_run_manifest_path else "",
-        "history": history[:50],
-    }
+    scheduler_payload.update(
+        {
+            "last_tick_at": tick_at,
+            "last_action": action,
+            "last_due_connector_ids": due_connector_ids,
+            "last_due_peer_sync_ids": due_peer_sync_ids,
+            "last_due_job_subscription_ids": due_job_subscription_ids,
+            "last_enqueued_job_ids": enqueued_job_ids,
+            "last_executed_run_manifest_path": workspace.relative_path(executed_run_manifest_path)
+            if executed_run_manifest_path
+            else "",
+            "job_subscriptions": _sorted_job_subscriptions(updated_subscriptions),
+            "history": history[:50],
+        }
+    )
+    payload["scheduler"] = scheduler_payload
     _write_control_plane_manifest(workspace, payload)
     return SchedulerTickResult(
         action=action,
         due_connector_count=len(due_connectors),
         due_connector_ids=due_connector_ids,
         due_peer_sync_ids=due_peer_sync_ids,
+        due_job_subscription_count=len(due_job_subscriptions),
+        due_job_subscription_ids=due_job_subscription_ids,
         enqueued_job_ids=enqueued_job_ids,
         executed_run_manifest_path=executed_run_manifest_path,
     )
@@ -461,8 +715,10 @@ def default_control_plane_manifest() -> Dict[str, object]:
             "last_action": "",
             "last_due_connector_ids": [],
             "last_due_peer_sync_ids": [],
+            "last_due_job_subscription_ids": [],
             "last_enqueued_job_ids": [],
             "last_executed_run_manifest_path": "",
+            "job_subscriptions": [],
             "history": [],
         },
         "summary": _build_summary([], []),
@@ -485,14 +741,25 @@ def _normalize_control_plane_manifest(payload: Dict[str, object]) -> Dict[str, o
             "last_action": str(scheduler.get("last_action", "")),
             "last_due_connector_ids": [str(item) for item in list(scheduler.get("last_due_connector_ids", []))],
             "last_due_peer_sync_ids": [str(item) for item in list(scheduler.get("last_due_peer_sync_ids", []))],
+            "last_due_job_subscription_ids": [str(item) for item in list(scheduler.get("last_due_job_subscription_ids", []))],
             "last_enqueued_job_ids": [str(item) for item in list(scheduler.get("last_enqueued_job_ids", []))],
             "last_executed_run_manifest_path": str(scheduler.get("last_executed_run_manifest_path", "")),
+            "job_subscriptions": _sorted_job_subscriptions(
+                [
+                    _normalize_job_subscription(item)
+                    for item in list(scheduler.get("job_subscriptions", []))
+                    if isinstance(item, dict)
+                ]
+            ),
             "history": [
                 {
                     "tick_at": str(dict(item).get("tick_at", "")),
                     "action": str(dict(item).get("action", "")),
                     "due_connector_ids": [str(connector_id) for connector_id in list(dict(item).get("due_connector_ids", []))],
                     "due_peer_sync_ids": [str(peer_id) for peer_id in list(dict(item).get("due_peer_sync_ids", []))],
+                    "due_job_subscription_ids": [
+                        str(subscription_id) for subscription_id in list(dict(item).get("due_job_subscription_ids", []))
+                    ],
                     "enqueued_job_ids": [str(job_id) for job_id in list(dict(item).get("enqueued_job_ids", []))],
                     "executed_run_manifest_path": str(dict(item).get("executed_run_manifest_path", "")),
                 }
@@ -530,15 +797,35 @@ def _scheduler_status_payload(workspace: "Workspace") -> Dict[str, object]:
     scheduler = dict(payload.get("scheduler", {}))
     due_connector_ids = [str(item.get("connector_id", "")) for item in list_due_connectors(workspace)]
     due_peer_sync_ids = [str(item.get("peer_id", "")) for item in list_due_shared_peer_syncs(workspace)]
+    subscriptions = list_job_subscriptions(workspace)
+    due_job_subscription_ids = [str(item.get("subscription_id", "")) for item in list_due_job_subscriptions(workspace)]
     return {
         "due_connector_count": len(due_connector_ids),
         "due_connector_ids": due_connector_ids,
         "due_peer_sync_count": len(due_peer_sync_ids),
         "due_peer_sync_ids": due_peer_sync_ids,
+        "scheduled_job_count": len(subscriptions),
+        "due_job_subscription_count": len(due_job_subscription_ids),
+        "due_job_subscription_ids": due_job_subscription_ids,
         "last_tick_at": str(scheduler.get("last_tick_at", "")),
         "last_action": str(scheduler.get("last_action", "")),
         "last_enqueued_job_ids": [str(item) for item in list(scheduler.get("last_enqueued_job_ids", []))],
         "history": [dict(item) for item in list(scheduler.get("history", []))],
+    }
+
+
+def _scheduler_jobs_payload(workspace: "Workspace") -> Dict[str, object]:
+    items = list_job_subscriptions(workspace)
+    return {
+        "items": items,
+        "summary": {
+            "subscription_count": len(items),
+            "enabled_count": sum(1 for item in items if bool(item.get("enabled", False))),
+            "due_count": sum(1 for item in items if _job_subscription_is_due(item)),
+        },
+        "state_paths": {
+            "control_plane_manifest_path": workspace.relative_path(workspace.control_plane_manifest_path),
+        },
     }
 
 
@@ -971,6 +1258,16 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
             self._send_json(200, _scheduler_status_payload(self._workspace))
             return
 
+        if parsed.path == "/api/scheduler/jobs":
+            self._send_json(
+                200,
+                {
+                    "actor": _serialize_actor(actor),
+                    **_scheduler_jobs_payload(self._workspace),
+                },
+            )
+            return
+
         if parsed.path == "/api/jobs":
             queue_payload = {}
             if self._workspace.job_queue_manifest_path.exists():
@@ -1393,12 +1690,110 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                         "due_connector_ids": result.due_connector_ids,
                         "due_peer_sync_count": len(result.due_peer_sync_ids),
                         "due_peer_sync_ids": result.due_peer_sync_ids,
+                        "due_job_subscription_count": result.due_job_subscription_count,
+                        "due_job_subscription_ids": result.due_job_subscription_ids,
                         "enqueued_job_ids": result.enqueued_job_ids,
                         "executed_run_manifest_path": self._workspace.relative_path(result.executed_run_manifest_path)
                         if result.executed_run_manifest_path
                         else "",
                     },
                 )
+                return
+            if parsed.path == "/api/scheduler/jobs/research":
+                actor = self._authenticate(["scheduler.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "manage scheduled jobs over the control plane",
+                )
+                subscription = schedule_job_subscription(
+                    self._workspace,
+                    job_type="research",
+                    every_hours=int(payload.get("every_hours", 0) or 0),
+                    parameters={
+                        "question": str(payload.get("question", "")),
+                        "profile_name": str(payload.get("profile_name", "")) or None,
+                        "limit": int(payload.get("limit", 5) or 5),
+                        "mode": str(payload.get("mode", "wiki") or "wiki"),
+                        "slides": bool(payload.get("slides", False)),
+                        "job_profile": str(payload.get("job_profile", "")) or DEFAULT_RESEARCH_JOB_PROFILE,
+                    },
+                    label=str(payload.get("label", "")) or None,
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "subscription": subscription})
+                return
+            if parsed.path == "/api/scheduler/jobs/compile":
+                actor = self._authenticate(["scheduler.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "manage scheduled jobs over the control plane",
+                )
+                subscription = schedule_job_subscription(
+                    self._workspace,
+                    job_type="compile",
+                    every_hours=int(payload.get("every_hours", 0) or 0),
+                    parameters={
+                        "profile_name": str(payload.get("profile_name", "")) or None,
+                    },
+                    label=str(payload.get("label", "")) or None,
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "subscription": subscription})
+                return
+            if parsed.path == "/api/scheduler/jobs/lint":
+                actor = self._authenticate(["scheduler.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "manage scheduled jobs over the control plane",
+                )
+                subscription = schedule_job_subscription(
+                    self._workspace,
+                    job_type="lint",
+                    every_hours=int(payload.get("every_hours", 0) or 0),
+                    parameters={},
+                    label=str(payload.get("label", "")) or None,
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "subscription": subscription})
+                return
+            if parsed.path == "/api/scheduler/jobs/maintain":
+                actor = self._authenticate(["scheduler.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "manage scheduled jobs over the control plane",
+                )
+                subscription = schedule_job_subscription(
+                    self._workspace,
+                    job_type="maintain",
+                    every_hours=int(payload.get("every_hours", 0) or 0),
+                    parameters={
+                        "max_concepts": int(payload.get("max_concepts", 10) or 10),
+                        "max_merges": int(payload.get("max_merges", 10) or 10),
+                        "max_backlinks": int(payload.get("max_backlinks", 10) or 10),
+                        "max_conflicts": int(payload.get("max_conflicts", 10) or 10),
+                    },
+                    label=str(payload.get("label", "")) or None,
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "subscription": subscription})
+                return
+            if parsed.path == "/api/scheduler/jobs/remove":
+                actor = self._authenticate(["scheduler.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "manage scheduled jobs over the control plane",
+                )
+                subscription = disable_job_subscription(
+                    self._workspace,
+                    subscription_id=str(payload.get("subscription_id", "")),
+                    actor_id=str(actor.get("principal_id", "")),
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "subscription": subscription})
                 return
             if parsed.path == "/api/collab/request-review":
                 actor = self._authenticate(["control.read"])

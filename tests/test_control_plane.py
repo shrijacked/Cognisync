@@ -2286,6 +2286,149 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_scheduler_can_enqueue_due_scheduled_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Scheduled Jobs Workspace")
+            (root / "raw" / "memory.md").write_text("# Memory\n\nAgents keep notes.\n", encoding="utf-8")
+
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "schedule-research",
+                        "map the open questions in memory systems",
+                        "--workspace",
+                        str(root),
+                        "--every-hours",
+                        "1",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "schedule-maintain",
+                        "--workspace",
+                        str(root),
+                        "--every-hours",
+                        "1",
+                        "--max-concepts",
+                        "2",
+                        "--max-backlinks",
+                        "2",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "scheduler-tick",
+                        "--workspace",
+                        str(root),
+                        "--enqueue-only",
+                    ]
+                ),
+                0,
+            )
+
+            queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+            queued_job_types = [job["job_type"] for job in queue_payload["jobs"]]
+            self.assertEqual(queue_payload["queued_count"], 2)
+            self.assertIn("research", queued_job_types)
+            self.assertIn("maintain", queued_job_types)
+
+            control_payload = json.loads((root / ".cognisync" / "control-plane.json").read_text(encoding="utf-8"))
+            scheduler = control_payload["scheduler"]
+            self.assertEqual(scheduler["last_action"], "enqueued")
+            self.assertEqual(len(scheduler["last_due_job_subscription_ids"]), 2)
+
+    def test_control_plane_can_manage_scheduled_jobs_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Scheduled Jobs Workspace")
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/scheduler/jobs/research",
+                    body=json.dumps(
+                        {
+                            "question": "track contradictions in deployment notes",
+                            "every_hours": 1,
+                            "mode": "memo",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                subscription_id = payload["subscription"]["subscription_id"]
+                self.assertEqual(payload["subscription"]["job_type"], "research")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/scheduler/jobs", headers={"Authorization": f"Bearer {operator_token}"})
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["summary"]["subscription_count"], 1)
+                self.assertEqual(payload["items"][0]["subscription_id"], subscription_id)
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/scheduler/jobs/remove",
+                    body=json.dumps({"subscription_id": subscription_id}),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["subscription"]["enabled"], False)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
 
 if __name__ == "__main__":
     unittest.main()

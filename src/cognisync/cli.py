@@ -37,12 +37,16 @@ from cognisync.control_plane import (
     accept_control_plane_invite,
     create_control_plane_invite,
     create_control_plane_server,
+    disable_job_subscription,
+    list_due_job_subscriptions,
     issue_control_plane_token,
+    list_job_subscriptions,
     list_control_plane_tokens,
     render_control_plane_status,
     render_control_plane_workers,
     revoke_control_plane_token,
     run_scheduler_tick,
+    schedule_job_subscription,
 )
 from cognisync.connectors import (
     ConnectorError,
@@ -1005,16 +1009,155 @@ def cmd_control_plane_revoke_token(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_control_plane_schedule_research(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        subscription = schedule_job_subscription(
+            workspace,
+            job_type="research",
+            every_hours=args.every_hours,
+            parameters={
+                "question": args.question,
+                "profile_name": args.profile_name,
+                "limit": args.limit,
+                "mode": args.mode,
+                "slides": args.slides,
+                "job_profile": args.job_profile,
+            },
+            label=args.label,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Scheduled research job {subscription['subscription_id']}")
+    print(f"Question: {subscription['parameters']['question']}")
+    print(f"Every hours: {subscription['interval_hours']}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_schedule_compile(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        subscription = schedule_job_subscription(
+            workspace,
+            job_type="compile",
+            every_hours=args.every_hours,
+            parameters={"profile_name": args.profile_name},
+            label=args.label,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Scheduled compile job {subscription['subscription_id']}")
+    print(f"Every hours: {subscription['interval_hours']}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_schedule_lint(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        subscription = schedule_job_subscription(
+            workspace,
+            job_type="lint",
+            every_hours=args.every_hours,
+            parameters={},
+            label=args.label,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Scheduled lint job {subscription['subscription_id']}")
+    print(f"Every hours: {subscription['interval_hours']}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_schedule_maintain(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        subscription = schedule_job_subscription(
+            workspace,
+            job_type="maintain",
+            every_hours=args.every_hours,
+            parameters={
+                "max_concepts": args.max_concepts,
+                "max_merges": args.max_merges,
+                "max_backlinks": args.max_backlinks,
+                "max_conflicts": args.max_conflicts,
+            },
+            label=args.label,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Scheduled maintain job {subscription['subscription_id']}")
+    print(f"Every hours: {subscription['interval_hours']}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_list_scheduled_jobs(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    subscriptions = list_job_subscriptions(workspace)
+    if not subscriptions:
+        print("No scheduled jobs found.")
+        print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+        return 0
+    print(f"Scheduled jobs: {len(subscriptions)}")
+    print("")
+    for subscription in subscriptions:
+        status = "enabled" if subscription.get("enabled", False) else "disabled"
+        print(
+            f"{subscription['subscription_id']} "
+            f"[{status}] "
+            f"{subscription['job_type']} "
+            f"every:{subscription.get('interval_hours', '')}h"
+        )
+        label = str(subscription.get("label", "")).strip()
+        if label:
+            print(f"label: {label}")
+        next_run_at = str(subscription.get("next_run_at", "")).strip()
+        if next_run_at:
+            print(f"next-run: {next_run_at}")
+        print("")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_remove_scheduled_job(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        subscription = disable_job_subscription(
+            workspace,
+            subscription_id=args.subscription_id,
+            actor_id=args.actor_id,
+        )
+    except (AccessError, ControlPlaneError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Disabled scheduled job {subscription['subscription_id']}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
 def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     payload = json.loads(workspace.control_plane_manifest_path.read_text(encoding="utf-8")) if workspace.control_plane_manifest_path.exists() else {}
     scheduler = dict(payload.get("scheduler", {}))
     due_connectors = [connector["connector_id"] for connector in list_due_connectors(workspace)]
     due_peer_syncs = [peer["peer_id"] for peer in list_due_shared_peer_syncs(workspace)]
+    due_job_subscriptions = [subscription["subscription_id"] for subscription in list_due_job_subscriptions(workspace)]
     print("# Scheduler Status")
     print("")
     print(f"- Due connectors: `{len(due_connectors)}`")
     print(f"- Due peer sync exports: `{len(due_peer_syncs)}`")
+    print(f"- Due scheduled jobs: `{len(due_job_subscriptions)}`")
     print(f"- Last tick at: `{scheduler.get('last_tick_at', '')}`")
     print(f"- Last action: `{scheduler.get('last_action', '')}`")
     if due_connectors:
@@ -1029,6 +1172,12 @@ def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
         print("")
         for peer_id in due_peer_syncs:
             print(f"- `{peer_id}`")
+    if due_job_subscriptions:
+        print("")
+        print("## Due Scheduled Jobs")
+        print("")
+        for subscription_id in due_job_subscriptions:
+            print(f"- `{subscription_id}`")
     history = list(scheduler.get("history", []))
     if history:
         print("")
@@ -1037,11 +1186,13 @@ def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
         for entry in history[:10]:
             due_connectors_label = ",".join(str(item) for item in list(entry.get("due_connector_ids", []))) or "none"
             due_peers_label = ",".join(str(item) for item in list(entry.get("due_peer_sync_ids", []))) or "none"
+            due_jobs_label = ",".join(str(item) for item in list(entry.get("due_job_subscription_ids", []))) or "none"
             print(
                 f"- `{entry.get('tick_at', '')}` "
                 f"`{entry.get('action', '')}` "
                 f"connectors:{due_connectors_label} "
-                f"peers:{due_peers_label}"
+                f"peers:{due_peers_label} "
+                f"scheduled:{due_jobs_label}"
             )
     print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
     return 0
@@ -1070,10 +1221,15 @@ def cmd_control_plane_scheduler_tick(args: argparse.Namespace) -> int:
         return 2
     print(f"Scheduler action: {result.action}")
     print(f"Due connectors: {result.due_connector_count}")
+    print(f"Due scheduled jobs: {result.due_job_subscription_count}")
     if result.due_connector_ids:
         print("Connector ids:")
         for connector_id in result.due_connector_ids:
             print(f"- {connector_id}")
+    if result.due_job_subscription_ids:
+        print("Scheduled job ids:")
+        for subscription_id in result.due_job_subscription_ids:
+            print(f"- {subscription_id}")
     if result.enqueued_job_ids:
         print("Enqueued jobs:")
         for job_id in result.enqueued_job_ids:
@@ -2304,6 +2460,73 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_revoke_token_parser.add_argument("--workspace", default=".")
     control_plane_revoke_token_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     control_plane_revoke_token_parser.set_defaults(func=cmd_control_plane_revoke_token)
+
+    control_plane_schedule_research_parser = control_plane_subparsers.add_parser(
+        "schedule-research",
+        help="Schedule a recurring research job in the control-plane manifest",
+    )
+    control_plane_schedule_research_parser.add_argument("question")
+    control_plane_schedule_research_parser.add_argument("--workspace", default=".")
+    control_plane_schedule_research_parser.add_argument("--every-hours", type=int, required=True)
+    control_plane_schedule_research_parser.add_argument("--profile-name", default=None)
+    control_plane_schedule_research_parser.add_argument("--limit", type=int, default=5)
+    control_plane_schedule_research_parser.add_argument("--mode", default="wiki")
+    control_plane_schedule_research_parser.add_argument("--slides", action="store_true")
+    control_plane_schedule_research_parser.add_argument("--job-profile", default=DEFAULT_RESEARCH_JOB_PROFILE)
+    control_plane_schedule_research_parser.add_argument("--label", default=None)
+    control_plane_schedule_research_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_schedule_research_parser.set_defaults(func=cmd_control_plane_schedule_research)
+
+    control_plane_schedule_compile_parser = control_plane_subparsers.add_parser(
+        "schedule-compile",
+        help="Schedule a recurring compile job in the control-plane manifest",
+    )
+    control_plane_schedule_compile_parser.add_argument("--workspace", default=".")
+    control_plane_schedule_compile_parser.add_argument("--every-hours", type=int, required=True)
+    control_plane_schedule_compile_parser.add_argument("--profile-name", default=None)
+    control_plane_schedule_compile_parser.add_argument("--label", default=None)
+    control_plane_schedule_compile_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_schedule_compile_parser.set_defaults(func=cmd_control_plane_schedule_compile)
+
+    control_plane_schedule_lint_parser = control_plane_subparsers.add_parser(
+        "schedule-lint",
+        help="Schedule a recurring lint job in the control-plane manifest",
+    )
+    control_plane_schedule_lint_parser.add_argument("--workspace", default=".")
+    control_plane_schedule_lint_parser.add_argument("--every-hours", type=int, required=True)
+    control_plane_schedule_lint_parser.add_argument("--label", default=None)
+    control_plane_schedule_lint_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_schedule_lint_parser.set_defaults(func=cmd_control_plane_schedule_lint)
+
+    control_plane_schedule_maintain_parser = control_plane_subparsers.add_parser(
+        "schedule-maintain",
+        help="Schedule a recurring maintenance job in the control-plane manifest",
+    )
+    control_plane_schedule_maintain_parser.add_argument("--workspace", default=".")
+    control_plane_schedule_maintain_parser.add_argument("--every-hours", type=int, required=True)
+    control_plane_schedule_maintain_parser.add_argument("--max-concepts", type=int, default=10)
+    control_plane_schedule_maintain_parser.add_argument("--max-merges", type=int, default=10)
+    control_plane_schedule_maintain_parser.add_argument("--max-backlinks", type=int, default=10)
+    control_plane_schedule_maintain_parser.add_argument("--max-conflicts", type=int, default=10)
+    control_plane_schedule_maintain_parser.add_argument("--label", default=None)
+    control_plane_schedule_maintain_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_schedule_maintain_parser.set_defaults(func=cmd_control_plane_schedule_maintain)
+
+    control_plane_list_scheduled_jobs_parser = control_plane_subparsers.add_parser(
+        "list-scheduled-jobs",
+        help="List recurring scheduled jobs in the control-plane manifest",
+    )
+    control_plane_list_scheduled_jobs_parser.add_argument("--workspace", default=".")
+    control_plane_list_scheduled_jobs_parser.set_defaults(func=cmd_control_plane_list_scheduled_jobs)
+
+    control_plane_remove_scheduled_job_parser = control_plane_subparsers.add_parser(
+        "remove-scheduled-job",
+        help="Disable a recurring scheduled job in the control-plane manifest",
+    )
+    control_plane_remove_scheduled_job_parser.add_argument("subscription_id")
+    control_plane_remove_scheduled_job_parser.add_argument("--workspace", default=".")
+    control_plane_remove_scheduled_job_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
+    control_plane_remove_scheduled_job_parser.set_defaults(func=cmd_control_plane_remove_scheduled_job)
 
     control_plane_scheduler_parser = control_plane_subparsers.add_parser(
         "scheduler-tick",
