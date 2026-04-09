@@ -96,6 +96,7 @@ from cognisync.jobs import (
     enqueue_research_job,
     enqueue_sync_export_job,
     heartbeat_job,
+    release_worker,
     retry_job,
     render_jobs_list,
     render_worker_registry,
@@ -1478,7 +1479,30 @@ def cmd_control_plane_scheduler_status(args: argparse.Namespace) -> int:
 def cmd_control_plane_workers(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     print(render_control_plane_workers(workspace))
-    print(f"Worker registry: {workspace.workers_registry_path}")
+    print(f"Worker registry: {workspace.worker_registry_path}")
+    print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
+    return 0
+
+
+def cmd_control_plane_release_worker(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = release_worker(
+            workspace,
+            worker_id=args.worker_id,
+            reason=args.reason,
+            requeue_active_jobs=bool(args.requeue_active_jobs),
+        )
+    except JobError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(f"Released worker {result.worker_id}")
+    if result.requeued_job_ids:
+        print("Requeued jobs:")
+        for job_id in result.requeued_job_ids:
+            print(f"- {job_id}")
+    print(f"Worker registry: {workspace.worker_registry_path}")
+    print(f"Queue summary: {result.queue_manifest_path}")
     print(f"Control-plane manifest: {workspace.control_plane_manifest_path}")
     return 0
 
@@ -2831,6 +2855,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     control_plane_workers_parser.add_argument("--workspace", default=".")
     control_plane_workers_parser.set_defaults(func=cmd_control_plane_workers)
+
+    control_plane_release_worker_parser = control_plane_subparsers.add_parser(
+        "release-worker",
+        help="Release a hosted worker and optionally requeue its active job",
+    )
+    control_plane_release_worker_parser.add_argument("worker_id")
+    control_plane_release_worker_parser.add_argument("--workspace", default=".")
+    control_plane_release_worker_parser.add_argument("--reason", default="operator_recovery")
+    control_plane_release_worker_parser.add_argument("--requeue-active-jobs", action="store_true")
+    control_plane_release_worker_parser.set_defaults(func=cmd_control_plane_release_worker)
 
     control_plane_invite_parser = control_plane_subparsers.add_parser(
         "invite",

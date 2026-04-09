@@ -98,6 +98,14 @@ class JobDispatchResult:
     worker_capability: str
 
 
+@dataclass(frozen=True)
+class WorkerReleaseResult:
+    worker_id: str
+    session: Optional[Dict[str, object]]
+    requeued_job_ids: List[str]
+    queue_manifest_path: Path
+
+
 def enqueue_research_job(
     workspace: Workspace,
     question: str,
@@ -510,6 +518,43 @@ def release_worker_session(
     _write_worker_sessions(workspace, {"sessions": list(sessions.values())})
     _write_worker_registry(workspace)
     return existing
+
+
+def release_worker(
+    workspace: Workspace,
+    worker_id: str,
+    reason: str = "stopped",
+    requeue_active_jobs: bool = False,
+) -> WorkerReleaseResult:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    session: Optional[Dict[str, object]]
+    try:
+        session = release_worker_session(
+            workspace,
+            worker_id=normalized_worker_id,
+            reason=reason,
+        )
+    except JobError:
+        session = None
+
+    requeued_job_ids: List[str] = []
+    if requeue_active_jobs:
+        requeued_job_ids = _requeue_active_jobs_for_worker(
+            workspace,
+            worker_id=normalized_worker_id,
+            reason=reason,
+        )
+
+    if session is None and not requeued_job_ids:
+        raise JobError(f"Worker session {normalized_worker_id} does not exist.")
+
+    queue_manifest_path = _write_queue_manifest(workspace)
+    return WorkerReleaseResult(
+        worker_id=normalized_worker_id,
+        session=session,
+        requeued_job_ids=requeued_job_ids,
+        queue_manifest_path=queue_manifest_path,
+    )
 
 
 def retry_job(
@@ -1368,6 +1413,36 @@ def _build_lease_payload(
     if last_heartbeat_at:
         payload["last_heartbeat_at"] = last_heartbeat_at
     return payload
+
+
+def _requeue_active_jobs_for_worker(
+    workspace: Workspace,
+    worker_id: str,
+    reason: str,
+) -> List[str]:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    requeued_job_ids: List[str] = []
+    for job in list_jobs(workspace):
+        lease = dict(job.get("lease", {}))
+        if str(lease.get("worker_id", "")).strip() != normalized_worker_id:
+            continue
+        if not _job_has_active_lease(job):
+            continue
+        manifest_path = workspace.job_manifests_dir / f"{job['job_id']}.json"
+        _update_job_manifest(
+            manifest_path,
+            status="queued",
+            lease={},
+            finished_at="",
+            started_at="",
+            result={},
+            error=None,
+            audit_entry=(
+                f"Worker {normalized_worker_id} was released ({reason}) and its active lease was re-queued."
+            ),
+        )
+        requeued_job_ids.append(str(job.get("job_id", "")))
+    return requeued_job_ids
 
 
 def _select_claimable_job(

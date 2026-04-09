@@ -64,7 +64,7 @@ from cognisync.jobs import (
     heartbeat_worker_session,
     read_worker_registry,
     register_worker_session,
-    release_worker_session,
+    release_worker,
     run_next_job,
 )
 from cognisync.maintenance import (
@@ -1810,7 +1810,19 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     lease_seconds=int(payload.get("lease_seconds", 300) or 300),
                     worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))],
                 )
-                self._send_json(200, {"actor": _serialize_actor(actor), **result.__dict__})
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "job_manifest_path": self._workspace.relative_path(result.job_manifest_path),
+                        "queue_manifest_path": self._workspace.relative_path(result.queue_manifest_path),
+                        "job_id": result.job_id,
+                        "job_type": result.job_type,
+                        "worker_id": result.worker_id,
+                        "lease_expires_at": result.lease_expires_at,
+                        "status": result.status,
+                    },
+                )
                 return
             if parsed.path == "/api/workers/register":
                 actor = self._authenticate(["control.read"])
@@ -1865,14 +1877,21 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     actor,
                     "release worker sessions over the control plane",
                 )
-                session = release_worker_session(
+                result = release_worker(
                     self._workspace,
                     worker_id=str(payload.get("worker_id", "")),
                     reason=str(payload.get("reason", "")) or "stopped",
+                    requeue_active_jobs=bool(payload.get("requeue_active_jobs", False)),
                 )
                 self._send_json(
                     200,
-                    {"actor": _serialize_actor(actor), "session": session, **read_worker_registry(self._workspace)},
+                    {
+                        "actor": _serialize_actor(actor),
+                        "session": result.session,
+                        "requeued_job_ids": result.requeued_job_ids,
+                        "queue_manifest_path": self._workspace.relative_path(result.queue_manifest_path),
+                        **read_worker_registry(self._workspace),
+                    },
                 )
                 return
             if parsed.path == "/api/jobs/dispatch-next":
@@ -1920,7 +1939,19 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     lease_seconds=int(payload.get("lease_seconds", 300) or 300),
                     worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))],
                 )
-                self._send_json(200, {"actor": _serialize_actor(actor), **result.__dict__})
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "job_manifest_path": self._workspace.relative_path(result.job_manifest_path),
+                        "queue_manifest_path": self._workspace.relative_path(result.queue_manifest_path),
+                        "job_id": result.job_id,
+                        "job_type": result.job_type,
+                        "worker_id": result.worker_id,
+                        "lease_expires_at": result.lease_expires_at,
+                        "status": result.status,
+                    },
+                )
                 return
             if parsed.path == "/api/jobs/run-next":
                 actor = self._authenticate(["jobs.run"])

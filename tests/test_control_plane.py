@@ -2676,6 +2676,105 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_can_release_workers_and_requeue_active_jobs_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Worker Recovery Workspace")
+
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.claim",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/claim-next",
+                    body=json.dumps({"worker_id": "stalled-worker", "lease_seconds": 600}),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                claim_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200, claim_payload)
+                claimed_job_id = claim_payload["job_id"]
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/workers/release",
+                    body=json.dumps(
+                        {
+                            "worker_id": "stalled-worker",
+                            "reason": "operator_recovery",
+                            "requeue_active_jobs": True,
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                release_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200, release_payload)
+                self.assertEqual(release_payload["requeued_job_ids"], [claimed_job_id])
+                self.assertEqual(release_payload["session"], None)
+                connection.close()
+
+                queue_payload = json.loads((root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+                requeued_job = next(job for job in queue_payload["jobs"] if job["job_id"] == claimed_job_id)
+                self.assertEqual(requeued_job["status"], "queued")
+                self.assertEqual(requeued_job["worker_id"], "")
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/claim-next",
+                    body=json.dumps({"worker_id": "replacement-worker", "lease_seconds": 300}),
+                    headers={
+                        "Authorization": f"Bearer {token_value}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                reclaim_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(reclaim_payload["job_id"], claimed_job_id)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_remote_worker_can_route_jobs_by_declared_capability_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
