@@ -103,10 +103,12 @@
 - added hosted-alpha scheduler job endpoints plus CLI surfaces for listing and removing recurring subscriptions, so recurring job orchestration is remotely manageable too
 - tightened shared peer bundles so issued control-plane scopes now derive from declared peer capabilities instead of silently inheriting the full role default
 - tightened peer-scoped `sync export --for-peer`, `sync import --from-peer`, and HTTP sync handoffs so accepted peers must explicitly declare `sync.import` before workspace bundles can target them
+- tightened shared-workspace trust policy again so operators can cap peer roles, require secure control-plane URLs, allowlist control-plane hosts, and allowlist peer capabilities before peers or attached remotes are accepted
 - tightened hosted-alpha job execution endpoints so `/api/jobs/enqueue/...`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/jobs/run-next` now require an operator principal in addition to matching token scopes
 - added worker capability routing for queued jobs, so job manifests now declare a required worker capability and workers can claim or execute only compatible work
 - added `--capability` support to `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs work`, and `worker remote`, so remote orchestration can target research, ingest, workspace, connector, or sync workers without inventing another queue
 - taught `.cognisync/jobs/workers.json` and `/api/workers` to persist each worker's declared capabilities, so hosted dashboards can distinguish what a worker can handle from the job it happens to own
+- added durable worker-session presence for hosted polling workers, so `/api/workers` can surface remote workers before they claim a lease and keep mirroring their current job while they execute against a detached workspace
 
 ## v0.1.4 - 2026-04-03
 

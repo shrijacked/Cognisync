@@ -332,7 +332,7 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync share set-peer-role remote-ops reviewer --workspace .`
 - `cognisync share suspend-peer remote-ops --workspace .`
 - `cognisync share remove-peer remote-ops --workspace .`
-- `cognisync share set-policy --workspace . --allow-remote-workers --allow-sync-imports`
+- `cognisync share set-policy --workspace . --allow-remote-workers --allow-sync-imports --max-peer-role reviewer --require-secure-control-plane --allow-control-plane-host control.example.test --allow-peer-capability review.remote --allow-peer-capability sync.import`
 - `cognisync share subscribe-sync remote-ops --workspace . --every-hours 1`
 - `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
 - `cognisync share attach-remote-bundle remote-ops.json --workspace ./mirror`
@@ -364,12 +364,12 @@ That layer keeps the same filesystem-first contract:
 - peer bundle scopes now derive from declared peer capabilities like `jobs.remote`, `review.remote`, `scheduler.remote`, `connectors.sync`, `control.admin`, or explicit scope strings, so remote handoffs do not silently overgrant the full role default
 - attached remotes can now be created directly from a peer bundle, then pulled over the hosted control plane into another workspace without manually exporting and unpacking bundle directories
 - attached remotes can now also be refreshed from a rotated peer bundle, suspended without deleting local provenance, or detached entirely when the upstream relationship is no longer trusted
-- shared-workspace trust policy can disable remote worker bundles or sync imports from peers without editing manifests by hand
+- shared-workspace trust policy can now also cap peer roles, require secure published control-plane URLs, restrict allowed control-plane hosts, and restrict allowed peer capabilities without editing manifests by hand
 - shared peers can now be re-roled, suspended, or removed through the same file-native workflow, and those lifecycle changes revoke live access plus peer-issued control-plane tokens automatically
 - control-plane tokens can now carry an hourly expiry and are marked invalid as soon as that TTL passes, so hosted-alpha bearer auth no longer defaults to effectively permanent credentials
 - peer-scoped `sync export --for-peer` and `sync import --from-peer` now also require the accepted peer to declare `sync.import`, so bundle exchange is opt-in at the peer-capability layer instead of inferred from role alone
 - scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, attached remotes can enqueue `remote-sync-pull` work, and recurring research, compile, lint, or maintain subscriptions can enqueue regular corpus work without adding a second queue system
-- remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including scheduled peer-sync export work
+- remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including polling sessions before a job is claimed and running mirrored workers with their current job ids
 - remote workers now report their declared capability set through `.cognisync/jobs/workers.json` and `/api/workers`, and hosted job claims respect that routing data when a worker polls with `--capability`
 - mirrored remote workers can now use `/api/jobs/dispatch-next`, `/api/jobs/complete`, and `/api/jobs/fail` to claim work, execute it against a synced local mirror, and push back only the result artifacts through a targeted sync bundle instead of asking the server process to do the execution itself
 - `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely

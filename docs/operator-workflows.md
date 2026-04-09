@@ -195,7 +195,7 @@ Supported paths in this release:
 - `cognisync share set-peer-role remote-ops reviewer --workspace .`
 - `cognisync share suspend-peer remote-ops --workspace .`
 - `cognisync share remove-peer remote-ops --workspace .`
-- `cognisync share set-policy --workspace . --allow-remote-workers --allow-sync-imports`
+- `cognisync share set-policy --workspace . --allow-remote-workers --allow-sync-imports --max-peer-role reviewer --require-secure-control-plane --allow-control-plane-host control.example.test --allow-peer-capability review.remote --allow-peer-capability sync.import`
 - `cognisync share subscribe-sync remote-ops --workspace . --every-hours 1`
 - `cognisync share unsubscribe-sync remote-ops --workspace .`
 - `cognisync share issue-peer-bundle remote-ops --workspace . --output-file remote-ops.json`
@@ -213,7 +213,7 @@ The command family:
 1. materializes `.cognisync/shared-workspace.json`
 2. keeps accepted peer state, peer capabilities, and the published control-plane URL file-native instead of hiding them in shell history
 3. records the last issued peer bundle timestamp and token id on each accepted peer so remote handoffs are inspectable later
-4. persists a shared-workspace trust policy so remote worker bundles and peer-originated sync imports can be enabled or disabled without editing JSON by hand
+4. persists a shared-workspace trust policy so remote worker bundles and peer-originated sync imports can be enabled or disabled, peer roles can be capped, control-plane hosts can be allowlisted, and peer capabilities can be restricted without editing JSON by hand
 5. can subscribe accepted peers to scheduled sync exports on an hourly interval, keeping that schedule beside the rest of the shared-workspace state
 6. issues peer bundles only for accepted peers and only after a control-plane URL is bound, so remote workers receive a coherent package
 7. derives bundle scopes from declared peer capabilities like `jobs.remote`, `review.remote`, `scheduler.remote`, `connectors.sync`, `control.admin`, or explicit scope strings, so peer handoffs stay intentionally least-privilege
@@ -257,7 +257,7 @@ The command family:
 7. keeps actor checks aligned with `.cognisync/access.json`, so tokens still resolve back to explicit workspace principals
 8. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
 9. requires an operator principal for hosted job mutation endpoints even when a token carries matching `jobs.*` scopes, so HTTP queue execution does not bypass the workspace roster
-10. carries worker capability routing through `/api/jobs/run-next`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/workers`, so remote workers can advertise what they handle and the hosted queue can respect that routing
+10. carries worker capability routing through `/api/jobs/run-next`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/workers`, so remote workers can advertise what they handle, stay visible while polling, and expose their current job while the hosted queue respects that routing
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
 
