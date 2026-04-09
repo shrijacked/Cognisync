@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import base64
 import json
 from pathlib import Path
+import threading
 import time
 from typing import List, Optional
 from urllib import error, request
@@ -22,6 +23,34 @@ class RemoteWorkerResult:
     processed_count: int
     completed_count: int
     stopped_reason: str
+
+
+def _running_job_heartbeat_interval_seconds(lease_seconds: int) -> float:
+    return max(0.25, min(float(max(int(lease_seconds), 1)) / 2.0, 5.0))
+
+
+def _running_worker_presence_interval_seconds(lease_seconds: int) -> float:
+    ttl_seconds = max(int(lease_seconds), 120)
+    return max(10.0, min(float(ttl_seconds) / 2.0, 60.0))
+
+
+def _running_worker_heartbeat_payload(
+    worker_id: str,
+    lease_seconds: int,
+    worker_capabilities: List[str],
+    workspace_root: Path,
+    job_id: str,
+    job_type: str,
+) -> dict:
+    return {
+        "worker_id": worker_id,
+        "status": "running",
+        "ttl_seconds": max(int(lease_seconds), 120),
+        "worker_capabilities": worker_capabilities,
+        "workspace_root": str(workspace_root),
+        "current_job_id": job_id,
+        "current_job_type": job_type,
+    }
 
 
 def run_remote_worker(
@@ -165,13 +194,86 @@ def _run_mirrored_remote_job(
     )
     job_payload = dict(dispatch_payload.get("job", {}))
     workspace = Workspace(workspace_root)
+    job_id = str(job_payload.get("job_id", ""))
+    job_type = str(job_payload.get("job_type", ""))
+    _post_json(
+        f"{server_url}/api/jobs/heartbeat",
+        token=token,
+        payload={
+            "worker_id": worker_id,
+            "lease_seconds": lease_seconds,
+            "worker_capabilities": worker_capabilities,
+        },
+    )
+    _post_json_best_effort(
+        f"{server_url}/api/workers/heartbeat",
+        token=token,
+        payload=_running_worker_heartbeat_payload(
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            worker_capabilities=worker_capabilities,
+            workspace_root=workspace_root,
+            job_id=job_id,
+            job_type=job_type,
+        ),
+    )
+    last_worker_presence_at = time.monotonic()
+    execution_state: dict = {}
+    finished = threading.Event()
+
+    def _execute_job() -> None:
+        try:
+            execution_state["result"] = execute_job_payload(
+                workspace,
+                job_type=job_type,
+                parameters=dict(job_payload.get("parameters", {})),
+                requested_by=dict(job_payload.get("requested_by", {}))
+                if isinstance(job_payload.get("requested_by", {}), dict)
+                else None,
+            )
+        except Exception as error:  # pragma: no cover - exercised through integration assertions
+            execution_state["error"] = error
+        finally:
+            finished.set()
+
+    execution_thread = threading.Thread(target=_execute_job, daemon=True)
+    execution_thread.start()
+    heartbeat_error = ""
+    while not finished.wait(_running_job_heartbeat_interval_seconds(lease_seconds)):
+        try:
+            _post_json(
+                f"{server_url}/api/jobs/heartbeat",
+                token=token,
+                payload={
+                    "worker_id": worker_id,
+                    "lease_seconds": lease_seconds,
+                    "worker_capabilities": worker_capabilities,
+                },
+            )
+        except RemoteWorkerError as error:
+            heartbeat_error = str(error)
+            break
+        if time.monotonic() - last_worker_presence_at >= _running_worker_presence_interval_seconds(lease_seconds):
+            _post_json_best_effort(
+                f"{server_url}/api/workers/heartbeat",
+                token=token,
+                payload=_running_worker_heartbeat_payload(
+                    worker_id=worker_id,
+                    lease_seconds=lease_seconds,
+                    worker_capabilities=worker_capabilities,
+                    workspace_root=workspace_root,
+                    job_id=job_id,
+                    job_type=job_type,
+                ),
+            )
+            last_worker_presence_at = time.monotonic()
+    execution_thread.join()
     try:
-        result_payload = execute_job_payload(
-            workspace,
-            job_type=str(job_payload.get("job_type", "")),
-            parameters=dict(job_payload.get("parameters", {})),
-            requested_by=dict(job_payload.get("requested_by", {})) if isinstance(job_payload.get("requested_by", {}), dict) else None,
-        )
+        if heartbeat_error:
+            raise RemoteWorkerError(heartbeat_error)
+        if "error" in execution_state:
+            raise execution_state["error"]
+        result_payload = dict(execution_state["result"])
         bundle = export_sync_bundle(
             workspace,
             actor_id="local-operator",
@@ -182,7 +284,7 @@ def _run_mirrored_remote_job(
             f"{server_url}/api/jobs/complete",
             token=token,
             payload={
-                "job_id": str(job_payload.get("job_id", "")),
+                "job_id": job_id,
                 "worker_id": worker_id,
                 "result": result_payload,
                 "sync_archive_base64": archive_base64,
@@ -194,7 +296,7 @@ def _run_mirrored_remote_job(
                 f"{server_url}/api/jobs/fail",
                 token=token,
                 payload={
-                    "job_id": str(job_payload.get("job_id", "")),
+                    "job_id": job_id,
                     "worker_id": worker_id,
                     "error": str(error),
                 },

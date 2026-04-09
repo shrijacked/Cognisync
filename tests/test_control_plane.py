@@ -13,6 +13,7 @@ from unittest import mock
 
 from tests import support  # noqa: F401
 
+import cognisync.remote_worker as remote_worker_module
 from cognisync.cli import main
 from cognisync.config import LLMProfile, load_config, save_config
 from cognisync.control_plane import create_control_plane_server
@@ -3059,6 +3060,159 @@ class ControlPlaneTests(unittest.TestCase):
                 self.assertEqual(worker_result["result"].processed_count, 1)
                 self.assertEqual(worker_result["result"].completed_count, 1)
                 self.assertTrue((server_root / "raw" / "urls" / "running-worker.md").exists())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_remote_worker_renews_mirrored_job_leases_while_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server_root = Path(tmp) / "server-workspace"
+            mirror_root = Path(tmp) / "mirror-workspace"
+            workspace = Workspace(server_root)
+            workspace.initialize(name="Mirrored Lease Renewal Workspace")
+            (server_root / "raw" / "seed.md").write_text(
+                "# Seed\n\nLong-running mirrored jobs should renew their lease.\n",
+                encoding="utf-8",
+            )
+
+            initial_bundle = export_sync_bundle(workspace)
+            mirror_workspace = Workspace(mirror_root)
+            mirror_workspace.initialize(name="Mirrored Lease Renewal Mirror")
+            import_sync_bundle_archive(
+                mirror_workspace,
+                encode_sync_bundle_archive(initial_bundle.directory),
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "ingest-url",
+                        "data:text/html;charset=utf-8,<html><head><title>Lease Renewal</title></head><body><p>Renew while running.</p></body></html>",
+                        "--workspace",
+                        str(server_root),
+                        "--name",
+                        "lease-renewal",
+                    ]
+                ),
+                0,
+            )
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(server_root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.claim",
+                        "--scope",
+                        "jobs.heartbeat",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = {}
+                started = threading.Event()
+                release = threading.Event()
+                post_urls = []
+                real_post_json = remote_worker_module._post_json
+
+                def _slow_execute_job_payload(*args, **kwargs):
+                    started.set()
+                    self.assertTrue(release.wait(timeout=5), "timed out waiting to release the slow mirrored job")
+                    from cognisync.jobs import execute_job_payload as real_execute_job_payload
+
+                    return real_execute_job_payload(*args, **kwargs)
+
+                def _recording_post_json(*args, **kwargs):
+                    post_urls.append(str(args[0]))
+                    return real_post_json(*args, **kwargs)
+
+                def _run_worker() -> None:
+                    try:
+                        worker_result["result"] = run_remote_worker(
+                            server_url=f"http://{host}:{port}",
+                            token=token_value,
+                            worker_id="remote-renewer",
+                            max_jobs=1,
+                            lease_seconds=3,
+                            worker_capabilities=["ingest"],
+                            workspace_root=mirror_root,
+                        )
+                    except Exception as error:  # pragma: no cover - exercised through assertions
+                        worker_result["error"] = str(error)
+
+                with mock.patch("cognisync.remote_worker.execute_job_payload", side_effect=_slow_execute_job_payload), mock.patch(
+                    "cognisync.remote_worker._post_json",
+                    side_effect=_recording_post_json,
+                ):
+                    worker_thread = threading.Thread(target=_run_worker, daemon=True)
+                    worker_thread.start()
+                    self.assertTrue(started.wait(timeout=5), "remote worker never reached the mirrored job")
+
+                    queue_path = server_root / ".cognisync" / "jobs" / "queue.json"
+                    initial_payload = json.loads(queue_path.read_text(encoding="utf-8"))
+                    claimed_job = next(job for job in initial_payload["jobs"] if job["worker_id"] == "remote-renewer")
+                    initial_expiry = str(claimed_job["lease_expires_at"])
+                    initial_heartbeat = str(claimed_job["last_heartbeat_at"])
+                    self.assertTrue(initial_heartbeat)
+
+                    renewed_job = None
+                    last_seen_job = claimed_job
+                    deadline = time.time() + 5
+                    while time.time() < deadline:
+                        current_payload = json.loads(queue_path.read_text(encoding="utf-8"))
+                        current_job = next(job for job in current_payload["jobs"] if job["job_id"] == claimed_job["job_id"])
+                        last_seen_job = current_job
+                        if (
+                            current_job["last_heartbeat_at"] != initial_heartbeat
+                            or current_job["lease_expires_at"] != initial_expiry
+                        ):
+                            renewed_job = current_job
+                            break
+                        time.sleep(0.1)
+
+                    release.set()
+                    worker_thread.join(timeout=5)
+                    self.assertFalse(worker_thread.is_alive(), "remote worker did not finish after lease renewal")
+                    self.assertNotIn("error", worker_result, worker_result.get("error"))
+                    heartbeat_calls = [url for url in post_urls if url.endswith("/api/jobs/heartbeat")]
+                    self.assertGreaterEqual(
+                        len(heartbeat_calls),
+                        2,
+                        f"expected multiple heartbeat calls while mirrored work was running, got: {heartbeat_calls}",
+                    )
+                    self.assertIsNotNone(
+                        renewed_job,
+                        (
+                            "mirrored worker never renewed its active lease while running: "
+                            f"{last_seen_job}; heartbeat_calls={heartbeat_calls}"
+                        ),
+                    )
+                    self.assertEqual(renewed_job["worker_id"], "remote-renewer")
+                    self.assertNotEqual(renewed_job["lease_expires_at"], initial_expiry)
+
+                self.assertEqual(worker_result["result"].processed_count, 1)
+                self.assertEqual(worker_result["result"].completed_count, 1)
             finally:
                 server.shutdown()
                 server.server_close()
