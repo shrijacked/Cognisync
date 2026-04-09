@@ -523,6 +523,167 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertIn(str(manifest["source_packet_path"]), matrix_packet_text)
             self.assertIn(str(manifest["packet_path"]), matrix_packet_text)
 
+    def test_research_step_commands_execute_and_review_execution_packets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Step Execution Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["stepper"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sys; sys.stdin.read(); "
+                        "print('# Paper Matrix\\n\\n- memory helps agent loops persist findings [S1]')"
+                    ),
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            list_stdout = io.StringIO()
+            with redirect_stdout(list_stdout):
+                exit_code = main(
+                    [
+                        "research-step",
+                        "list",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("build-paper-matrix", list_stdout.getvalue())
+            self.assertIn("execution=not_run", list_stdout.getvalue())
+            self.assertIn("review=unreviewed", list_stdout.getvalue())
+
+            run_stdout = io.StringIO()
+            with redirect_stdout(run_stdout):
+                exit_code = main(
+                    [
+                        "research-step",
+                        "run",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--step",
+                        "build-paper-matrix",
+                        "--profile",
+                        "stepper",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Executed research step build-paper-matrix", run_stdout.getvalue())
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            matrix_checkpoint = next(item for item in checkpoint_payload["steps"] if item["step_id"] == "build-paper-matrix")
+            matrix_output_path = workspace.root / matrix_checkpoint["execution_output_path"]
+            self.assertEqual(matrix_checkpoint["execution_profile"], "stepper")
+            self.assertEqual(matrix_checkpoint["execution_status"], "completed")
+            self.assertEqual(matrix_checkpoint["review_status"], "pending_review")
+            self.assertTrue(matrix_checkpoint["executed_at"])
+            self.assertTrue(matrix_output_path.exists())
+            self.assertIn("Paper Matrix", matrix_output_path.read_text(encoding="utf-8"))
+
+            review_stdout = io.StringIO()
+            with redirect_stdout(review_stdout):
+                exit_code = main(
+                    [
+                        "research-step",
+                        "review",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--step",
+                        "build-paper-matrix",
+                        "--status",
+                        "approved",
+                        "--reviewer",
+                        "operator-1",
+                        "--note",
+                        "grounded and ready to reuse",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Reviewed research step build-paper-matrix as approved", review_stdout.getvalue())
+
+            reviewed_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            reviewed_checkpoint = next(item for item in reviewed_payload["steps"] if item["step_id"] == "build-paper-matrix")
+            self.assertEqual(reviewed_checkpoint["review_status"], "approved")
+            self.assertEqual(reviewed_checkpoint["reviewed_by"], "operator-1")
+            self.assertEqual(reviewed_checkpoint["review_note"], "grounded and ready to reuse")
+            self.assertTrue(reviewed_checkpoint["reviewed_at"])
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["answerer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sys; sys.stdin.read(); "
+                        "print('# Research Memo\\n\\nAgent loops use memory to retain findings over time. [S1]')"
+                    ),
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--resume",
+                        "latest",
+                        "--profile",
+                        "answerer",
+                    ]
+                ),
+                0,
+            )
+
+            resumed_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            resumed_checkpoint = next(item for item in resumed_payload["steps"] if item["step_id"] == "build-paper-matrix")
+            self.assertEqual(resumed_checkpoint["execution_profile"], "stepper")
+            self.assertEqual(resumed_checkpoint["review_status"], "approved")
+            self.assertEqual(resumed_checkpoint["reviewed_by"], "operator-1")
+            self.assertEqual(resumed_checkpoint["review_note"], "grounded and ready to reuse")
+
     def test_research_resume_latest_preserves_job_profile_notes_and_validation_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

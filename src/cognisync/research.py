@@ -159,6 +159,9 @@ RESEARCH_JOB_PROFILES = {
 }
 DEFAULT_RESEARCH_JOB_PROFILE = "synthesis-report"
 CONFLICT_ACK_MARKERS = {"conflict", "disagree", "however", "contradict", "tension", "different", "vs"}
+VALID_RESEARCH_STEP_REVIEW_STATUSES = {"approved", "changes_requested", "needs_follow_up"}
+DEFAULT_RESEARCH_STEP_EXECUTION_STATUS = "not_run"
+DEFAULT_RESEARCH_STEP_REVIEW_STATUS = "unreviewed"
 
 
 @dataclass(frozen=True)
@@ -188,6 +191,27 @@ class ResearchJobArtifacts:
     source_packet_path: Path
     checkpoints_path: Path
     validation_report_path: Path
+
+
+@dataclass(frozen=True)
+class ResearchStepExecutionResult:
+    run_manifest_path: Path
+    checkpoints_path: Path
+    step_id: str
+    profile_name: str
+    output_path: Path
+    stdout: str
+    stderr: str
+    returncode: int
+
+
+@dataclass(frozen=True)
+class ResearchStepReviewResult:
+    run_manifest_path: Path
+    checkpoints_path: Path
+    step_id: str
+    review_status: str
+    reviewer: str
 
 
 def run_research_cycle(
@@ -1262,6 +1286,16 @@ def _write_research_checkpoints(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     packet_paths = execution_packet_paths or {}
+    existing_payload: Dict[str, object] = {}
+    existing_steps: Dict[str, Dict[str, object]] = {}
+    if path.exists():
+        try:
+            existing_payload = read_json_manifest(path)
+        except json.JSONDecodeError:
+            existing_payload = {}
+    for item in list(existing_payload.get("steps", [])):
+        if isinstance(item, dict) and item.get("step_id") is not None:
+            existing_steps[str(item["step_id"])] = item
     statuses = [step.status for step in plan.steps]
     if any(status == "failed" for status in statuses):
         overall_status = "failed"
@@ -1273,27 +1307,50 @@ def _write_research_checkpoints(
         overall_status = "in_progress"
     payload = {
         "schema_version": 1,
-        "generated_at": utc_timestamp(),
+        "generated_at": _optional_text(existing_payload.get("generated_at")) or utc_timestamp(),
+        "updated_at": utc_timestamp(),
         "question": plan.question,
         "job_profile": plan.job_profile,
         "status": overall_status,
         "steps": [
-            {
-                "step_id": step.step_id,
-                "kind": step.kind,
-                "title": step.title,
-                "status": step.status,
-                "owner": step.owner,
-                "output_path": step.output_path,
-                "execution_packet_path": (
-                    workspace.relative_path(packet_paths[step.step_id]) if step.step_id in packet_paths else None
-                ),
-                "depends_on": step.depends_on,
-            }
+            _build_research_checkpoint_step_payload(
+                workspace=workspace,
+                step=step,
+                execution_packet_path=packet_paths.get(step.step_id),
+                existing_step=existing_steps.get(step.step_id),
+            )
             for step in plan.steps
         ],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _build_research_checkpoint_step_payload(
+    workspace: Workspace,
+    step: ResearchPlanStep,
+    execution_packet_path: Optional[Path],
+    existing_step: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    existing = existing_step or {}
+    return {
+        "step_id": step.step_id,
+        "kind": step.kind,
+        "title": step.title,
+        "status": step.status,
+        "owner": step.owner,
+        "output_path": step.output_path,
+        "execution_packet_path": workspace.relative_path(execution_packet_path) if execution_packet_path else None,
+        "depends_on": step.depends_on,
+        "execution_status": _optional_text(existing.get("execution_status")) or DEFAULT_RESEARCH_STEP_EXECUTION_STATUS,
+        "execution_profile": _optional_text(existing.get("execution_profile")),
+        "execution_output_path": _optional_text(existing.get("execution_output_path")),
+        "executed_at": _optional_text(existing.get("executed_at")),
+        "execution_return_code": _optional_int(existing.get("execution_return_code")),
+        "review_status": _optional_text(existing.get("review_status")) or DEFAULT_RESEARCH_STEP_REVIEW_STATUS,
+        "reviewed_at": _optional_text(existing.get("reviewed_at")),
+        "reviewed_by": _optional_text(existing.get("reviewed_by")),
+        "review_note": _optional_text(existing.get("review_note")),
+    }
 
 
 def _default_answer_path(workspace: Workspace, question: str, mode: str) -> Path:
@@ -1499,6 +1556,155 @@ def _failed_validation_payload(available_citations: Sequence[str], errors: List[
     return payload
 
 
+def render_research_step_status(workspace: Workspace, resume: str = "latest") -> str:
+    run_manifest_path, manifest, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    lines = [
+        "# Research Step Queue",
+        "",
+        f"Run manifest: `{workspace.relative_path(run_manifest_path)}`",
+        f"Question: {manifest.get('question', '')}",
+        f"Job profile: `{manifest.get('job_profile', DEFAULT_RESEARCH_JOB_PROFILE)}`",
+        f"Checkpoints: `{workspace.relative_path(checkpoints_path)}`",
+        "",
+        "## Steps",
+        "",
+    ]
+    for step in list(checkpoint_payload.get("steps", [])):
+        output_path = _optional_text(step.get("execution_output_path")) or _optional_text(step.get("output_path")) or "-"
+        packet_path = _optional_text(step.get("execution_packet_path")) or "-"
+        lines.append(
+            f"- {step['step_id']} | {step['title']} | owner={step['owner']} | planned={step['status']} "
+            f"| execution={_research_step_execution_status(step)} | review={_research_step_review_status(step)} "
+            f"| output=`{output_path}` | packet=`{packet_path}`"
+        )
+    return "\n".join(lines)
+
+
+def run_research_step(
+    workspace: Workspace,
+    resume: str,
+    step_id: str,
+    profile_name: str,
+    output_file: Optional[Path] = None,
+) -> ResearchStepExecutionResult:
+    run_manifest_path, _, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    step = _resolve_research_step_payload(checkpoint_payload, step_id)
+    packet_path = _resolve_research_step_packet_path(workspace, step)
+
+    config = workspace.load_config()
+    try:
+        adapter = adapter_from_config(config, profile_name)
+    except AdapterError as error:
+        raise ResearchError(str(error)) from error
+
+    resolved_output_path = output_file
+    if resolved_output_path is not None and not resolved_output_path.is_absolute():
+        resolved_output_path = (workspace.root / resolved_output_path).resolve()
+    if resolved_output_path is None:
+        resolved_output_path = _workspace_path(workspace, step.get("output_path"))
+    if resolved_output_path is None:
+        raise ResearchError(
+            f"Research step '{step_id}' does not declare an output path. Pass --output-file to capture the result."
+        )
+
+    resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result = adapter.run(prompt_file=packet_path, workspace_root=workspace.root, output_file=resolved_output_path)
+    except OSError as error:
+        raise ResearchError(f"Failed to execute adapter profile '{profile_name}': {error}") from error
+
+    if not adapter.output_file_flag and result.stdout and result.returncode == 0:
+        resolved_output_path.write_text(result.stdout, encoding="utf-8")
+
+    step["execution_profile"] = profile_name
+    step["execution_status"] = "completed" if result.returncode == 0 else "failed"
+    step["execution_output_path"] = workspace.relative_path(resolved_output_path)
+    step["executed_at"] = utc_timestamp()
+    step["execution_return_code"] = result.returncode
+    step["review_status"] = "pending_review" if result.returncode == 0 else DEFAULT_RESEARCH_STEP_REVIEW_STATUS
+    step["reviewed_at"] = None
+    step["reviewed_by"] = None
+    step["review_note"] = None
+    _write_research_checkpoint_payload(checkpoints_path, checkpoint_payload)
+
+    append_workspace_log(
+        workspace,
+        operation="research-step-run",
+        title=f"Executed research step {step_id}",
+        details=[
+            f"Profile `{profile_name}` returned code {result.returncode}.",
+            f"Execution status: `{step['execution_status']}`.",
+            f"Review status: `{step['review_status']}`.",
+        ],
+        related_paths=[
+            workspace.relative_path(packet_path),
+            workspace.relative_path(resolved_output_path),
+            workspace.relative_path(checkpoints_path),
+        ],
+    )
+    return ResearchStepExecutionResult(
+        run_manifest_path=run_manifest_path,
+        checkpoints_path=checkpoints_path,
+        step_id=step_id,
+        profile_name=profile_name,
+        output_path=resolved_output_path,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        returncode=result.returncode,
+    )
+
+
+def review_research_step(
+    workspace: Workspace,
+    resume: str,
+    step_id: str,
+    review_status: str,
+    reviewer: str,
+    note: Optional[str] = None,
+) -> ResearchStepReviewResult:
+    if review_status not in VALID_RESEARCH_STEP_REVIEW_STATUSES:
+        raise ResearchError(
+            f"Unsupported review status '{review_status}'. Expected one of: "
+            f"{', '.join(sorted(VALID_RESEARCH_STEP_REVIEW_STATUSES))}."
+        )
+    run_manifest_path, _, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    step = _resolve_research_step_payload(checkpoint_payload, step_id)
+    if _research_step_execution_status(step) == DEFAULT_RESEARCH_STEP_EXECUTION_STATUS:
+        raise ResearchError(f"Research step '{step_id}' must be executed before it can be reviewed.")
+
+    step["review_status"] = review_status
+    step["reviewed_at"] = utc_timestamp()
+    step["reviewed_by"] = reviewer
+    step["review_note"] = note.strip() if note and note.strip() else None
+    _write_research_checkpoint_payload(checkpoints_path, checkpoint_payload)
+
+    related_paths = [workspace.relative_path(checkpoints_path)]
+    packet_path = _workspace_path(workspace, step.get("execution_packet_path"))
+    if packet_path is not None:
+        related_paths.append(workspace.relative_path(packet_path))
+    output_path = _workspace_path(workspace, step.get("execution_output_path") or step.get("output_path"))
+    if output_path is not None:
+        related_paths.append(workspace.relative_path(output_path))
+    append_workspace_log(
+        workspace,
+        operation="research-step-review",
+        title=f"Reviewed research step {step_id}",
+        details=[
+            f"Reviewer: `{reviewer}`.",
+            f"Status: `{review_status}`.",
+            f"Note: {step['review_note'] or 'none'}",
+        ],
+        related_paths=related_paths,
+    )
+    return ResearchStepReviewResult(
+        run_manifest_path=run_manifest_path,
+        checkpoints_path=checkpoints_path,
+        step_id=step_id,
+        review_status=review_status,
+        reviewer=reviewer,
+    )
+
+
 def _resolve_research_manifest_path(workspace: Workspace, resume: str) -> Path:
     if resume == "latest":
         manifests = sorted(workspace.runs_dir.glob("research-*.json"))
@@ -1528,6 +1734,60 @@ def _optional_text(value: object) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _research_step_execution_status(step: Dict[str, object]) -> str:
+    return _optional_text(step.get("execution_status")) or DEFAULT_RESEARCH_STEP_EXECUTION_STATUS
+
+
+def _research_step_review_status(step: Dict[str, object]) -> str:
+    return _optional_text(step.get("review_status")) or DEFAULT_RESEARCH_STEP_REVIEW_STATUS
+
+
+def _load_research_checkpoint_context(
+    workspace: Workspace,
+    resume: str,
+) -> tuple[Path, Dict[str, object], Path, Dict[str, object]]:
+    run_manifest_path = _resolve_research_manifest_path(workspace, resume)
+    manifest = read_json_manifest(run_manifest_path)
+    if manifest.get("run_kind") != "research":
+        raise ResearchError(f"Run manifest is not a research run: {run_manifest_path}")
+
+    checkpoints_path = _workspace_path(workspace, manifest.get("checkpoints_path"))
+    if checkpoints_path is None or not checkpoints_path.exists():
+        raise ResearchError(f"Research checkpoints are missing for run manifest: {run_manifest_path}")
+    checkpoint_payload = read_json_manifest(checkpoints_path)
+    if not isinstance(checkpoint_payload.get("steps"), list):
+        raise ResearchError(f"Research checkpoints are malformed: {checkpoints_path}")
+    return run_manifest_path, manifest, checkpoints_path, checkpoint_payload
+
+
+def _resolve_research_step_payload(checkpoint_payload: Dict[str, object], step_id: str) -> Dict[str, object]:
+    for step in list(checkpoint_payload.get("steps", [])):
+        if isinstance(step, dict) and str(step.get("step_id")) == step_id:
+            return step
+    raise ResearchError(f"Research step '{step_id}' does not exist in this run.")
+
+
+def _resolve_research_step_packet_path(workspace: Workspace, step: Dict[str, object]) -> Path:
+    packet_path = _workspace_path(workspace, step.get("execution_packet_path"))
+    if packet_path is None or not packet_path.exists():
+        raise ResearchError(f"Execution packet is missing for research step '{step.get('step_id', '')}'.")
+    return packet_path
+
+
+def _write_research_checkpoint_payload(path: Path, payload: Dict[str, object]) -> None:
+    payload["updated_at"] = utc_timestamp()
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _strip_frontmatter(text: str) -> str:

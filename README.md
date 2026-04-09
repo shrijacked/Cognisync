@@ -208,8 +208,23 @@ Every research run now also writes:
 - a run manifest in `.cognisync/runs/`
 - a research job workspace in `outputs/reports/research-jobs/`
 - per-step execution packets in `outputs/reports/research-jobs/<run>/execution-packets/`
+- step execution and review state in `outputs/reports/research-jobs/<run>/checkpoints.json`
 - a research change summary in `outputs/reports/change-summaries/`
 - enough state to resume execution later without rebuilding the packet
+
+That run-scoped workspace is now directly operable too:
+
+```bash
+cognisync research-step list --run latest
+cognisync research-step run --run latest --step build-paper-matrix --profile codex
+cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1
+```
+
+`research-step` turns the packet scaffold into a file-native operator loop:
+
+- `list` shows every step with planned, execution, and review status
+- `run` executes one step packet through any configured adapter profile and writes the step artifact back into the research-job workspace
+- `review` records approval or change-request state on the same checkpoint manifest so later resumes or exports can see which intermediate artifacts were trusted
 
 Research now supports orchestration profiles too:
 

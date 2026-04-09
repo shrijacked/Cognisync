@@ -677,8 +677,34 @@ Research and scan now persist:
 
 Research now also writes a dedicated plan in `.cognisync/plans/`, a run-scoped job workspace in `outputs/reports/research-jobs/`, and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
 Each research job workspace contains deterministic intermediate notes plus a source packet, per-step execution packets, a checkpoints manifest, and a validation report, and the scanner ignores `outputs/reports/research-jobs/` so those orchestration artifacts do not pollute retrieval.
-Checkpoint steps include the matching `execution_packet_path`, so a future orchestrator or human operator can run one profile step without reverse-engineering the main prompt packet.
+Checkpoint steps include the matching `execution_packet_path`, plus execution and review state, so a future orchestrator or human operator can run one profile step without reverse-engineering the main prompt packet.
 Every planned, resumed, or completed research run also writes a research-scoped change summary so operators can see what the question actually changed in the corpus.
+
+### `research-step`
+
+Use `research-step` when you want to operate on the deterministic sub-tasks inside a research job instead of rerunning the whole question.
+
+Supported paths in this release:
+
+- `cognisync research-step list --run latest`
+- `cognisync research-step run --run latest --step build-paper-matrix --profile codex`
+- `cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1`
+
+The command family:
+
+1. reads the existing research run manifest from `.cognisync/runs/`
+2. resolves per-step execution packets from `outputs/reports/research-jobs/<run>/execution-packets/`
+3. writes step-level execution state, output paths, and review decisions back into `checkpoints.json`
+4. leaves the filesystem canonical, so remote workers, humans, and later automation all see the same operator history
+
+```mermaid
+flowchart LR
+    A["research writes plan, notes, packets, and checkpoints"] --> B["research-step list shows per-step execution and review state"]
+    B --> C["research-step run executes one packet through an adapter profile"]
+    C --> D["checkpoint stores execution profile, output path, and executed_at"]
+    D --> E["research-step review records approved or changes_requested"]
+    E --> F["resume, export, and future orchestrators reuse the same checkpoint state"]
+```
 
 Before a research run is considered complete, Cognisync now checks:
 

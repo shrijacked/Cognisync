@@ -121,7 +121,16 @@ from cognisync.notifications import render_notifications, write_notifications_ma
 from cognisync.observability import render_audit_history, render_usage_report, write_audit_manifest, write_usage_manifest
 from cognisync.planner import build_compile_plan, render_compile_plan
 from cognisync.remediation import RemediationError, remediate_research_runs
-from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, RESEARCH_JOB_PROFILES, ResearchError, run_research_cycle
+from cognisync.research import (
+    DEFAULT_RESEARCH_JOB_PROFILE,
+    RESEARCH_JOB_PROFILES,
+    VALID_RESEARCH_STEP_REVIEW_STATUSES,
+    ResearchError,
+    render_research_step_status,
+    review_research_step,
+    run_research_cycle,
+    run_research_step,
+)
 from cognisync.remote_worker import RemoteWorkerError, run_remote_worker
 from cognisync.review_exports import write_review_export
 from cognisync.review_queue import build_review_queue, render_review_queue
@@ -167,6 +176,13 @@ from cognisync.workspace import Workspace
 
 def _workspace_from_arg(path_arg: str) -> Workspace:
     return Workspace(Path(path_arg))
+
+
+def _resolve_workspace_path_arg(workspace: Workspace, path_arg: str) -> Path:
+    path = Path(path_arg).expanduser()
+    if not path.is_absolute():
+        path = workspace.root / path
+    return path.resolve()
 
 
 def _ensure_snapshot(workspace: Workspace):
@@ -2440,7 +2456,7 @@ def cmd_query(args: argparse.Namespace) -> int:
 
 def cmd_research(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
-    output_file = Path(args.output_file).resolve() if args.output_file else None
+    output_file = _resolve_workspace_path_arg(workspace, args.output_file) if args.output_file else None
     if args.resume and args.question:
         print("Pass either a new question or --resume, not both.", file=sys.stderr)
         return 2
@@ -2482,6 +2498,62 @@ def cmd_research(args: argparse.Namespace) -> int:
         print("No profile provided. Research report and prompt packet generated but not executed.")
     if result.warning_count:
         print(f"Research verification reported {result.warning_count} warning(s).")
+    return 0
+
+
+def cmd_research_step_list(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        print(render_research_step_status(workspace, resume=args.run))
+    except ResearchError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_research_step_run(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    output_file = _resolve_workspace_path_arg(workspace, args.output_file) if args.output_file else None
+    try:
+        result = run_research_step(
+            workspace,
+            resume=args.run,
+            step_id=args.step,
+            profile_name=args.profile,
+            output_file=output_file,
+        )
+    except ResearchError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    print(f"Executed research step {result.step_id} using profile {result.profile_name}")
+    print(f"Updated checkpoints at {result.checkpoints_path}")
+    if result.output_path.exists():
+        print(f"Wrote step artifact to {result.output_path}")
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print(result.stderr.rstrip(), file=sys.stderr)
+    return result.returncode
+
+
+def cmd_research_step_review(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = review_research_step(
+            workspace,
+            resume=args.run,
+            step_id=args.step,
+            review_status=args.status,
+            reviewer=args.reviewer,
+            note=args.note,
+        )
+    except ResearchError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    print(f"Reviewed research step {result.step_id} as {result.review_status}")
+    print(f"Updated checkpoints at {result.checkpoints_path}")
     return 0
 
 
@@ -3499,6 +3571,40 @@ def build_parser() -> argparse.ArgumentParser:
     research_parser.add_argument("--output-file", default=None)
     research_parser.add_argument("question", nargs="?")
     research_parser.set_defaults(func=cmd_research)
+
+    research_step_parser = subparsers.add_parser(
+        "research-step",
+        help="List, execute, and review per-step research execution packets",
+    )
+    research_step_subparsers = research_step_parser.add_subparsers(dest="research_step_command", required=True)
+
+    research_step_list_parser = research_step_subparsers.add_parser("list", help="List execution-packet steps for a run")
+    research_step_list_parser.add_argument("--workspace", default=".")
+    research_step_list_parser.add_argument("--run", default="latest")
+    research_step_list_parser.set_defaults(func=cmd_research_step_list)
+
+    research_step_run_parser = research_step_subparsers.add_parser(
+        "run",
+        help="Execute one research execution packet through a configured adapter profile",
+    )
+    research_step_run_parser.add_argument("--workspace", default=".")
+    research_step_run_parser.add_argument("--run", default="latest")
+    research_step_run_parser.add_argument("--step", required=True)
+    research_step_run_parser.add_argument("--profile", required=True)
+    research_step_run_parser.add_argument("--output-file", default=None)
+    research_step_run_parser.set_defaults(func=cmd_research_step_run)
+
+    research_step_review_parser = research_step_subparsers.add_parser(
+        "review",
+        help="Persist a review decision for a research execution step",
+    )
+    research_step_review_parser.add_argument("--workspace", default=".")
+    research_step_review_parser.add_argument("--run", default="latest")
+    research_step_review_parser.add_argument("--step", required=True)
+    research_step_review_parser.add_argument("--status", required=True, choices=sorted(VALID_RESEARCH_STEP_REVIEW_STATUSES))
+    research_step_review_parser.add_argument("--reviewer", required=True)
+    research_step_review_parser.add_argument("--note", default=None)
+    research_step_review_parser.set_defaults(func=cmd_research_step_review)
 
     run_parser = subparsers.add_parser("run-packet", help="Execute a prompt packet through a configured LLM profile")
     run_parser.add_argument("prompt_file")

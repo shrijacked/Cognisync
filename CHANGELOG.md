@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- added `cognisync research-step list|run|review`, so per-step research execution packets can now be listed, executed through any configured adapter profile, and reviewed without rerunning the full research job
+- taught research-job checkpoints to persist step execution and review state, and to preserve that state across later checkpoint rewrites
 - added `cognisync share attach-remote-bundle|list-attached-remotes|pull-remote|subscribe-remote-pull|unsubscribe-remote-pull`, so peer bundles can now become durable upstream remotes instead of only one-off worker handoffs
 - added `cognisync share refresh-remote-bundle|suspend-remote|detach-remote` plus hosted `/api/share/remotes/attach|refresh|suspend|remove`, so attached remotes now have a real lifecycle through both the local CLI and the hosted-alpha control plane
 - added queued `remote-sync-pull` jobs plus scheduler support for due attached-remote pulls, so hosted-alpha automation now covers inbound remote workspace syncs as well as outbound peer exports
