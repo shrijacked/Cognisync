@@ -294,6 +294,7 @@ Supported path in this release:
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id remote-a --poll-interval-seconds 2 --max-idle-polls 30`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id workspace-a --capability workspace --capability connector`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id ingest-a --workspace /tmp/cognisync-mirror --capability ingest`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token <token> --worker-id mirror-a --workspace /tmp/cognisync-mirror --refresh-workspace-before-jobs`
 
 The command:
 
@@ -306,6 +307,7 @@ The command:
 7. works with scheduler-enqueued connector jobs and peer-scoped sync-export jobs, so scheduled connector pulls and shared-workspace handoffs can be drained by a remote worker instead of the local shell
 8. keeps renewing the active lease while mirrored work is still executing, so detached runs do not silently outlive the hosted job ownership that dispatched them
 9. syncs back only the touched result artifacts from the mirrored workspace, which keeps remote execution file-native without copying the whole mirror state on every job
+10. can opt into `--refresh-workspace-before-jobs` when the worker token carries `sync.export`, importing the served workspace snapshot into the mirror before each hosted dispatch attempt
 
 Together, `control-plane serve`, `control-plane scheduler-tick`, and `worker remote` give Cognisync a remote-ready operator loop without breaking the local-first contract.
 

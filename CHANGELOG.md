@@ -112,6 +112,7 @@
 - fixed hosted `claim-next` and `heartbeat` payloads to serialize manifest paths correctly over HTTP instead of leaking raw `Path` objects
 - added `cognisync control-plane release-worker` plus hosted worker-release requeue support, so operators can recover stale leased jobs immediately instead of waiting for the original lease timeout
 - taught mirrored `worker remote --workspace ...` execution to keep renewing the active hosted lease while detached work is still running, so long mirror jobs do not outlive the queue ownership that dispatched them
+- added `cognisync worker remote --workspace ... --refresh-workspace-before-jobs`, so detached mirrored workers can opt into pulling a fresh inline sync bundle from the served control plane before claiming hosted work
 
 ## v0.1.4 - 2026-04-03
 

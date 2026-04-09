@@ -1567,6 +1567,7 @@ def cmd_worker_remote(args: argparse.Namespace) -> int:
             max_idle_polls=args.max_idle_polls,
             worker_capabilities=list(args.capability or []),
             workspace_root=Path(args.workspace).expanduser().resolve() if args.workspace else None,
+            refresh_workspace_before_jobs=args.refresh_workspace_before_jobs,
         )
     except RemoteWorkerError as error:
         print(str(error), file=sys.stderr)
@@ -3253,6 +3254,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker_remote_parser.add_argument("--max-idle-polls", type=int, default=0)
     worker_remote_parser.add_argument("--capability", action="append", default=[])
     worker_remote_parser.add_argument("--workspace", default=None)
+    worker_remote_parser.add_argument("--refresh-workspace-before-jobs", action="store_true")
     worker_remote_parser.set_defaults(func=cmd_worker_remote)
 
     sync_parser = subparsers.add_parser("sync", help="Export or import portable workspace sync bundles")

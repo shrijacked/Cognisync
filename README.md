@@ -272,6 +272,7 @@ The operator loop now has a review layer too:
 - `cognisync worker remote --poll-interval-seconds 2 --max-idle-polls 30` lets a remote worker stay attached to the control plane long enough to catch future jobs instead of exiting immediately when the queue is briefly empty
 - `cognisync worker remote --capability workspace --capability connector` lets a remote worker advertise its declared capability set over HTTP, and the queue will only hand it matching jobs
 - `cognisync worker remote --workspace /path/to/mirror` now claims detached jobs over HTTP, executes them inside a mirrored workspace, and syncs only the resulting artifacts back to the served workspace, so remote execution no longer depends on the server process doing the actual work locally
+- `cognisync worker remote --workspace /path/to/mirror --refresh-workspace-before-jobs` first imports an inline `sync export` snapshot from the served control plane, so an opted-in mirrored worker can catch raw/wiki/manifest changes before claiming the next detached job
 - `cognisync sync export`, `sync import`, and `sync history` move portable workspace bundles between machines or operators, keep an audit trail in `.cognisync/sync/`, record a `state_manifests` map in each bundle manifest, attribute every export/import event to an explicit workspace actor, and can scope bundle exchange to an accepted shared peer with `--for-peer` and `--from-peer`
 - `cognisync connector add|list|subscribe|unsubscribe|sync|sync-all` adds a file-native connector registry for repos, single URLs, URL lists, and sitemaps, and connector mutations now accept `--actor-id` so only operator principals can register, schedule, or run connector pulls
 - `cognisync export presentations` bundles generated slide decks plus companion reports and answers into a shareable export directory
@@ -355,6 +356,7 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id remote-a --max-jobs 5 --poll-interval-seconds 2 --max-idle-polls 30`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id workspace-a --capability workspace --capability connector --max-jobs 5`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id ingest-a --workspace /tmp/cognisync-mirror --capability ingest --max-jobs 5`
+- `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id mirror-a --workspace /tmp/cognisync-mirror --refresh-workspace-before-jobs --max-jobs 5`
 
 That layer keeps the same filesystem-first contract:
 
@@ -375,6 +377,7 @@ That layer keeps the same filesystem-first contract:
 - remote workers now report their declared capability set through `.cognisync/jobs/workers.json` and `/api/workers`, and hosted job claims respect that routing data when a worker polls with `--capability`
 - mirrored remote workers can now use `/api/jobs/dispatch-next`, `/api/jobs/complete`, and `/api/jobs/fail` to claim work, execute it against a synced local mirror, and push back only the result artifacts through a targeted sync bundle instead of asking the server process to do the execution itself
 - mirrored remote workers now also keep renewing the active job lease while detached work is still running, so long-running mirror execution does not quietly outlive the hosted lease that owns it
+- mirrored remote workers can now opt into `--refresh-workspace-before-jobs` when their bearer token has `sync.export`, pulling the latest served workspace snapshot into the local mirror before each hosted dispatch attempt
 - `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely
 - the same served control plane now accepts collaboration actions over HTTP, so editors and reviewers can request review, comment, approve, request changes, and resolve artifact threads through the same token-backed surface
 - the same served control plane now exposes `GET /api/review` plus remote review actions like `/api/review/accept-concept`, `resolve-merge`, `apply-backlink`, `file-conflict`, `dismiss`, `reopen`, and `clear-dismissed`, so the filesystem-backed review queue is remotely readable and actionable without bypassing workspace roles

@@ -10,7 +10,7 @@ from typing import List, Optional
 from urllib import error, request
 
 from cognisync.jobs import execute_job_payload
-from cognisync.sync import encode_sync_bundle_archive, export_sync_bundle
+from cognisync.sync import encode_sync_bundle_archive, export_sync_bundle, import_sync_bundle_archive
 from cognisync.workspace import Workspace
 
 
@@ -63,6 +63,7 @@ def run_remote_worker(
     max_idle_polls: int = 0,
     worker_capabilities: Optional[List[str]] = None,
     workspace_root: Optional[Path] = None,
+    refresh_workspace_before_jobs: bool = False,
 ) -> RemoteWorkerResult:
     normalized_server = server_url.rstrip("/")
     normalized_token = token.strip()
@@ -126,6 +127,12 @@ def run_remote_worker(
                     },
                 )
             else:
+                if refresh_workspace_before_jobs:
+                    _refresh_workspace_from_control_plane(
+                        server_url=normalized_server,
+                        token=normalized_token,
+                        workspace_root=resolved_workspace_root,
+                    )
                 payload = _run_mirrored_remote_job(
                     server_url=normalized_server,
                     token=normalized_token,
@@ -173,6 +180,29 @@ def run_remote_worker(
         completed_count=completed_count,
         stopped_reason=stopped_reason,
     )
+
+
+def _refresh_workspace_from_control_plane(server_url: str, token: str, workspace_root: Path) -> None:
+    payload = _post_json(
+        f"{server_url}/api/sync/export",
+        token=token,
+        payload={"inline_archive": True},
+    )
+    encoded_archive = str(payload.get("archive_base64", "")).strip()
+    if not encoded_archive:
+        raise RemoteWorkerError("Control-plane sync export did not include an inline archive.")
+    try:
+        archive_bytes = base64.b64decode(encoded_archive.encode("ascii"), validate=True)
+    except (ValueError, UnicodeEncodeError) as error:
+        raise RemoteWorkerError("Control-plane sync export returned an invalid archive payload.") from error
+    try:
+        import_sync_bundle_archive(
+            Workspace(workspace_root),
+            archive_bytes,
+            actor_id="local-operator",
+        )
+    except Exception as error:
+        raise RemoteWorkerError(f"Could not refresh mirrored workspace from control plane: {error}") from error
 
 
 def _run_mirrored_remote_job(

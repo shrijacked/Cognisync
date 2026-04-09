@@ -3218,6 +3218,85 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_remote_worker_can_refresh_mirrored_workspace_before_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server_root = Path(tmp) / "server-workspace"
+            mirror_root = Path(tmp) / "mirror-workspace"
+            workspace = Workspace(server_root)
+            workspace.initialize(name="Refreshable Remote Worker Server Workspace")
+            (server_root / "raw" / "seed.md").write_text(
+                "# Seed\n\nThe initial mirror receives only this seed note.\n",
+                encoding="utf-8",
+            )
+
+            initial_bundle = export_sync_bundle(workspace)
+            mirror_workspace = Workspace(mirror_root)
+            mirror_workspace.initialize(name="Refreshable Remote Worker Mirror")
+            import_sync_bundle_archive(
+                mirror_workspace,
+                encode_sync_bundle_archive(initial_bundle.directory),
+            )
+
+            (server_root / "raw" / "fresh-server-note.md").write_text(
+                "# Fresh Server Note\n\nThis note appeared on the hosted workspace after the mirror was created.\n",
+                encoding="utf-8",
+            )
+            self.assertFalse((mirror_root / "raw" / "fresh-server-note.md").exists())
+            self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(server_root)]), 0)
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(server_root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.claim",
+                        "--scope",
+                        "jobs.heartbeat",
+                        "--scope",
+                        "jobs.run",
+                        "--scope",
+                        "sync.export",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = run_remote_worker(
+                    server_url=f"http://{host}:{port}",
+                    token=token_value,
+                    worker_id="remote-refresh",
+                    max_jobs=1,
+                    worker_capabilities=["workspace"],
+                    workspace_root=mirror_root,
+                    refresh_workspace_before_jobs=True,
+                )
+
+                self.assertEqual(worker_result.processed_count, 1)
+                self.assertEqual(worker_result.completed_count, 1)
+                self.assertEqual(
+                    (mirror_root / "raw" / "fresh-server-note.md").read_text(encoding="utf-8"),
+                    (server_root / "raw" / "fresh-server-note.md").read_text(encoding="utf-8"),
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_scheduler_can_enqueue_due_peer_sync_exports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
