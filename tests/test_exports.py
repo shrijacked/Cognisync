@@ -266,6 +266,8 @@ class ExportTests(unittest.TestCase):
             self.assertIn("source blocks", records[0]["report_text"].lower())
             self.assertIn("slide_path", records[0])
             self.assertIn("note_paths", records[0])
+            self.assertIn("execution_packet_paths", records[0])
+            self.assertTrue(records[0]["execution_packet_paths"])
             self.assertIn("source_packet_path", records[0])
             self.assertIn("checkpoints_path", records[0])
             self.assertIn("Wrote JSONL export to", stdout.getvalue())

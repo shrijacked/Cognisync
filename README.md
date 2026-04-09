@@ -207,6 +207,7 @@ Every research run now also writes:
 - a research plan in `.cognisync/plans/`
 - a run manifest in `.cognisync/runs/`
 - a research job workspace in `outputs/reports/research-jobs/`
+- per-step execution packets in `outputs/reports/research-jobs/<run>/execution-packets/`
 - a research change summary in `outputs/reports/change-summaries/`
 - enough state to resume execution later without rebuilding the packet
 
@@ -441,7 +442,7 @@ cognisync synth contrastive
 ```
 
 - `export jsonl` writes one JSONL row per research run with the question, run metadata, cited report text, prompt packet text, filed answer text, slide path, and validation state
-- exported JSONL rows now also include the research job profile, note paths, source-packet path, checkpoints path, and validation report path
+- exported JSONL rows now also include the research job profile, note paths, execution-packet paths, source-packet path, checkpoints path, and validation report path
 - `export training-bundle` writes `dataset.jsonl` plus `manifest.json` with validation-derived labels like citation failures, unsupported-claim failures, and conflict gates
 - `export finetune-bundle` writes `supervised.jsonl`, `retrieval.jsonl`, and `manifest.json` so downstream trainers get research-run SFT pairs, validated remediation-correction examples, synthetic QA examples, and contrastive retrieval pairs in one timestamped export
 - `export finetune-bundle --provider-format openai-chat` also writes `supervised.openai-chat.jsonl` with `messages` arrays for direct OpenAI chat-finetuning pipelines
@@ -614,7 +615,7 @@ The implementation is documented in:
 
 ## Roadmap
 
-- Multi-agent orchestration profiles
+- Multi-agent dispatch and review on top of the existing research execution-packet artifacts
 - Native repository and dataset ingestion adapters
 - Richer semantic extraction, merge resolution, and entity graphs
 - Continuous health checks and auto-remediation loops

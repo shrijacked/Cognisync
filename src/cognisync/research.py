@@ -296,7 +296,8 @@ def run_research_cycle(
         filing_status=filing_status,
     )
     plan_path, plan_json_path = _write_research_plan(workspace, question, plan)
-    _write_research_checkpoints(workspace, job_artifacts.checkpoints_path, plan)
+    execution_packet_paths = _write_research_execution_packets(workspace, plan, job_artifacts.notes_dir)
+    _write_research_checkpoints(workspace, job_artifacts.checkpoints_path, plan, execution_packet_paths)
 
     if not profile_name:
         change_summary_path = _write_research_change_summary(workspace, previous_state)
@@ -315,6 +316,7 @@ def run_research_cycle(
             slide_path=slide_path,
             notes_dir=job_artifacts.notes_dir,
             note_paths=job_artifacts.note_paths,
+            execution_packet_paths=list(execution_packet_paths.values()),
             source_packet_path=job_artifacts.source_packet_path,
             checkpoints_path=job_artifacts.checkpoints_path,
             validation_report_path=job_artifacts.validation_report_path,
@@ -526,6 +528,8 @@ def _execute_research_run(
             filing_status="pending",
         )
         _persist_existing_research_plan(workspace, plan_path, plan_json_path, failed_plan)
+        execution_packet_paths = _write_research_execution_packets(workspace, failed_plan, notes_dir)
+        _write_research_checkpoints(workspace, checkpoints_path, failed_plan, execution_packet_paths)
         _write_research_run_state(
             workspace=workspace,
             run_id=run_id,
@@ -541,6 +545,7 @@ def _execute_research_run(
             slide_path=slide_path,
             notes_dir=notes_dir,
             note_paths=note_paths,
+            execution_packet_paths=list(execution_packet_paths.values()),
             source_packet_path=source_packet_path,
             checkpoints_path=checkpoints_path,
             validation_report_path=validation_report_path,
@@ -573,7 +578,8 @@ def _execute_research_run(
         filing_status="pending",
     )
     _persist_existing_research_plan(workspace, plan_path, plan_json_path, running_plan)
-    _write_research_checkpoints(workspace, checkpoints_path, running_plan)
+    execution_packet_paths = _write_research_execution_packets(workspace, running_plan, notes_dir)
+    _write_research_checkpoints(workspace, checkpoints_path, running_plan, execution_packet_paths)
     _write_research_run_state(
         workspace=workspace,
         run_id=run_id,
@@ -589,6 +595,7 @@ def _execute_research_run(
         slide_path=slide_path,
         notes_dir=notes_dir,
         note_paths=note_paths,
+        execution_packet_paths=list(execution_packet_paths.values()),
         source_packet_path=source_packet_path,
         checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
@@ -621,6 +628,8 @@ def _execute_research_run(
             filing_status="pending",
         )
         _persist_existing_research_plan(workspace, plan_path, plan_json_path, failed_plan)
+        execution_packet_paths = _write_research_execution_packets(workspace, failed_plan, notes_dir)
+        _write_research_checkpoints(workspace, checkpoints_path, failed_plan, execution_packet_paths)
         _write_research_run_state(
             workspace=workspace,
             run_id=run_id,
@@ -636,6 +645,7 @@ def _execute_research_run(
             slide_path=slide_path,
             notes_dir=notes_dir,
             note_paths=note_paths,
+            execution_packet_paths=list(execution_packet_paths.values()),
             source_packet_path=source_packet_path,
             checkpoints_path=checkpoints_path,
             validation_report_path=validation_report_path,
@@ -687,7 +697,8 @@ def _execute_research_run(
         filing_status="completed" if output_file.exists() else "pending",
     )
     _persist_existing_research_plan(workspace, plan_path, plan_json_path, final_plan)
-    _write_research_checkpoints(workspace, checkpoints_path, final_plan)
+    execution_packet_paths = _write_research_execution_packets(workspace, final_plan, notes_dir)
+    _write_research_checkpoints(workspace, checkpoints_path, final_plan, execution_packet_paths)
     _write_research_run_state(
         workspace=workspace,
         run_id=run_id,
@@ -703,6 +714,7 @@ def _execute_research_run(
         slide_path=slide_path,
         notes_dir=notes_dir,
         note_paths=note_paths,
+        execution_packet_paths=list(execution_packet_paths.values()),
         source_packet_path=source_packet_path,
         checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
@@ -763,6 +775,7 @@ def _write_research_run_state(
     slide_path: Optional[Path],
     notes_dir: Path,
     note_paths: List[Path],
+    execution_packet_paths: List[Path],
     source_packet_path: Path,
     checkpoints_path: Path,
     validation_report_path: Path,
@@ -790,6 +803,7 @@ def _write_research_run_state(
             "slide_path": workspace.relative_path(slide_path) if slide_path else None,
             "notes_dir": workspace.relative_path(notes_dir),
             "note_paths": [workspace.relative_path(path) for path in note_paths],
+            "execution_packet_paths": [workspace.relative_path(path) for path in execution_packet_paths],
             "source_packet_path": workspace.relative_path(source_packet_path),
             "checkpoints_path": workspace.relative_path(checkpoints_path),
             "validation_report_path": workspace.relative_path(validation_report_path),
@@ -1179,8 +1193,75 @@ def _write_source_packet(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _write_research_checkpoints(workspace: Workspace, path: Path, plan: ResearchPlan) -> None:
+def _write_research_execution_packets(workspace: Workspace, plan: ResearchPlan, notes_dir: Path) -> Dict[str, Path]:
+    packet_dir = notes_dir / "execution-packets"
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    packet_paths: Dict[str, Path] = {}
+    for step in plan.steps:
+        packet_path = packet_dir / f"{step.step_id}.md"
+        packet_path.write_text(_render_research_execution_packet(plan, step), encoding="utf-8")
+        packet_paths[step.step_id] = packet_path
+    return packet_paths
+
+
+def _render_research_execution_packet(plan: ResearchPlan, step: ResearchPlanStep) -> str:
+    lines = [
+        "# Research Execution Packet",
+        "",
+        f"Question: {plan.question}",
+        f"Mode: {plan.mode}",
+        f"Job profile: {plan.job_profile}",
+        f"Step: {step.title}",
+        f"Step id: `{step.step_id}`",
+        f"Kind: `{step.kind}`",
+        f"Owner: `{step.owner}`",
+        f"Status: `{step.status}`",
+        "",
+        "## Instruction",
+        "",
+        step.detail,
+        "",
+        "## Inputs",
+        "",
+        f"- Primary prompt packet: `{plan.packet_path}`",
+        f"- Source packet: `{plan.source_packet_path}`",
+        f"- Report draft: `{plan.report_path}`",
+        f"- Checkpoints: `{plan.checkpoints_path}`",
+        f"- Validation report: `{plan.validation_report_path}`",
+    ]
+    if step.depends_on:
+        lines.append(f"- Depends on: {', '.join(f'`{step_id}`' for step_id in step.depends_on)}")
+    lines.extend(["", "## Expected Output", ""])
+    if step.output_path:
+        lines.append(f"Write or revise the step artifact at `{step.output_path}`.")
+    else:
+        lines.append("Return a concise status update and preserve any durable artifact named in the primary plan.")
+    lines.extend(["", "## Retrieved Sources", ""])
+    if not plan.sources:
+        lines.append("No sources were selected for this run.")
+    else:
+        for source in plan.sources:
+            lines.append(f"- [{source['citation']}] {source['title']} -> `{source['path']}`")
+    lines.extend(
+        [
+            "",
+            "## Grounding Rule",
+            "",
+            "Use only the source packet, the primary prompt packet, and the referenced workspace artifacts as evidence. Preserve inline citations like `[S1]` when drafting answer text.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _write_research_checkpoints(
+    workspace: Workspace,
+    path: Path,
+    plan: ResearchPlan,
+    execution_packet_paths: Optional[Dict[str, Path]] = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    packet_paths = execution_packet_paths or {}
     statuses = [step.status for step in plan.steps]
     if any(status == "failed" for status in statuses):
         overall_status = "failed"
@@ -1204,6 +1285,9 @@ def _write_research_checkpoints(workspace: Workspace, path: Path, plan: Research
                 "status": step.status,
                 "owner": step.owner,
                 "output_path": step.output_path,
+                "execution_packet_path": (
+                    workspace.relative_path(packet_paths[step.step_id]) if step.step_id in packet_paths else None
+                ),
                 "depends_on": step.depends_on,
             }
             for step in plan.steps

@@ -557,6 +557,7 @@ def _build_research_export_record(
         "change_summary_path": workspace.relative_path(change_summary_path) if change_summary_path else None,
         "notes_dir": str(manifest.get("notes_dir", "")) or None,
         "note_paths": list(manifest.get("note_paths", [])),
+        "execution_packet_paths": list(manifest.get("execution_packet_paths", [])),
         "source_packet_path": str(manifest.get("source_packet_path", "")) or None,
         "checkpoints_path": str(manifest.get("checkpoints_path", "")) or None,
         "validation_report_path": str(manifest.get("validation_report_path", "")) or None,

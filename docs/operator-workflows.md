@@ -676,7 +676,8 @@ Research and scan now persist:
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
 Research now also writes a dedicated plan in `.cognisync/plans/`, a run-scoped job workspace in `outputs/reports/research-jobs/`, and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
-Each research job workspace contains deterministic intermediate notes plus a source packet, a checkpoints manifest, and a validation report, and the scanner ignores `outputs/reports/research-jobs/` so those orchestration artifacts do not pollute retrieval.
+Each research job workspace contains deterministic intermediate notes plus a source packet, per-step execution packets, a checkpoints manifest, and a validation report, and the scanner ignores `outputs/reports/research-jobs/` so those orchestration artifacts do not pollute retrieval.
+Checkpoint steps include the matching `execution_packet_path`, so a future orchestrator or human operator can run one profile step without reverse-engineering the main prompt packet.
 Every planned, resumed, or completed research run also writes a research-scoped change summary so operators can see what the question actually changed in the corpus.
 
 Before a research run is considered complete, Cognisync now checks:

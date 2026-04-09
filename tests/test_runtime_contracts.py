@@ -499,20 +499,29 @@ class RuntimeContractsTests(unittest.TestCase):
             checkpoints_path = workspace.root / manifest["checkpoints_path"]
             self.assertTrue(source_packet_path.exists())
             self.assertTrue(checkpoints_path.exists())
+            execution_packet_paths = [workspace.root / path for path in manifest["execution_packet_paths"]]
             note_paths = [workspace.root / path for path in manifest["note_paths"]]
             self.assertGreaterEqual(len(note_paths), 4)
             self.assertTrue(any(path.name == "paper-matrix.md" for path in note_paths))
             self.assertTrue(all(path.exists() for path in note_paths))
+            self.assertGreaterEqual(len(execution_packet_paths), 4)
+            self.assertTrue(all(path.exists() for path in execution_packet_paths))
 
             plan_text = (workspace.root / manifest["plan_path"]).read_text(encoding="utf-8")
             packet_text = (workspace.root / manifest["packet_path"]).read_text(encoding="utf-8")
             source_packet_text = source_packet_path.read_text(encoding="utf-8")
             checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            matrix_checkpoint = next(item for item in checkpoint_payload["steps"] if item["step_id"] == "build-paper-matrix")
+            matrix_packet_path = workspace.root / matrix_checkpoint["execution_packet_path"]
+            matrix_packet_text = matrix_packet_path.read_text(encoding="utf-8")
             self.assertIn("Job profile: literature-review", plan_text)
             self.assertIn("Build paper matrix", plan_text)
             self.assertIn("Research job profile: literature-review", packet_text)
             self.assertIn("# Research Source Packet", source_packet_text)
-            self.assertTrue(any(item["step_id"] == "build-paper-matrix" for item in checkpoint_payload["steps"]))
+            self.assertIn("# Research Execution Packet", matrix_packet_text)
+            self.assertIn("Step: Build paper matrix", matrix_packet_text)
+            self.assertIn(str(manifest["source_packet_path"]), matrix_packet_text)
+            self.assertIn(str(manifest["packet_path"]), matrix_packet_text)
 
     def test_research_resume_latest_preserves_job_profile_notes_and_validation_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
