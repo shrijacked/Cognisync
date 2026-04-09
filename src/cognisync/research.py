@@ -214,6 +214,17 @@ class ResearchStepReviewResult:
     reviewer: str
 
 
+@dataclass(frozen=True)
+class ResearchStepDispatchResult:
+    run_manifest_path: Path
+    checkpoints_path: Path
+    dispatch_manifest_path: Path
+    executed_steps: List[str]
+    skipped_steps: List[str]
+    failed_step: Optional[str]
+    status: str
+
+
 def run_research_cycle(
     workspace: Workspace,
     question: Optional[str] = None,
@@ -1312,6 +1323,7 @@ def _write_research_checkpoints(
         "question": plan.question,
         "job_profile": plan.job_profile,
         "status": overall_status,
+        "dispatch_history": [str(item) for item in list(existing_payload.get("dispatch_history", [])) if str(item).strip()],
         "steps": [
             _build_research_checkpoint_step_payload(
                 workspace=workspace,
@@ -1705,6 +1717,122 @@ def review_research_step(
     )
 
 
+def dispatch_research_steps(
+    workspace: Workspace,
+    resume: str,
+    default_profile: str,
+    profile_routes: Optional[Dict[str, str]] = None,
+    retry_failed: bool = False,
+) -> ResearchStepDispatchResult:
+    routes = dict(profile_routes or {})
+    run_manifest_path, manifest, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    steps = _dispatchable_research_steps(checkpoint_payload)
+    step_ids = {str(step["step_id"]) for step in steps}
+    unknown_routes = sorted(set(routes) - step_ids)
+    if unknown_routes:
+        raise ResearchError(
+            f"Unknown dispatch step route(s): {', '.join(unknown_routes)}."
+        )
+
+    steps_by_id = {
+        str(step["step_id"]): step
+        for step in list(checkpoint_payload.get("steps", []))
+        if isinstance(step, dict) and step.get("step_id") is not None
+    }
+    executed_steps: List[str] = []
+    skipped_steps: List[str] = []
+    records: List[Dict[str, object]] = []
+    failed_step: Optional[str] = None
+
+    for step in steps:
+        step_id = str(step["step_id"])
+        skip_reason = _research_step_dispatch_skip_reason(step, steps_by_id, retry_failed=retry_failed)
+        if skip_reason is not None:
+            skipped_steps.append(step_id)
+            records.append(
+                {
+                    "step_id": step_id,
+                    "title": step.get("title", ""),
+                    "status": "skipped",
+                    "reason": skip_reason,
+                    "profile": routes.get(step_id, default_profile),
+                }
+            )
+            continue
+
+        profile_name = routes.get(step_id, default_profile)
+        result = run_research_step(
+            workspace,
+            resume=resume,
+            step_id=step_id,
+            profile_name=profile_name,
+        )
+        executed_steps.append(step_id)
+        step["execution_status"] = "completed" if result.returncode == 0 else "failed"
+        records.append(
+            {
+                "step_id": step_id,
+                "title": step.get("title", ""),
+                "status": "completed" if result.returncode == 0 else "failed",
+                "profile": profile_name,
+                "output_path": workspace.relative_path(result.output_path),
+                "returncode": result.returncode,
+            }
+        )
+        if result.returncode != 0:
+            failed_step = step_id
+            break
+
+    notes_dir = _workspace_path(workspace, manifest.get("notes_dir")) or checkpoints_path.parent
+    dispatch_manifest_path = _write_research_step_dispatch_manifest(
+        workspace=workspace,
+        notes_dir=notes_dir,
+        run_manifest_path=run_manifest_path,
+        question=str(manifest.get("question", "")),
+        job_profile=str(manifest.get("job_profile", DEFAULT_RESEARCH_JOB_PROFILE)),
+        default_profile=default_profile,
+        profile_routes=routes,
+        executed_steps=executed_steps,
+        skipped_steps=skipped_steps,
+        failed_step=failed_step,
+        records=records,
+    )
+    latest_checkpoint_payload = read_json_manifest(checkpoints_path)
+    dispatch_history = [
+        str(item)
+        for item in list(latest_checkpoint_payload.get("dispatch_history", []))
+        if str(item).strip()
+    ]
+    dispatch_history.append(workspace.relative_path(dispatch_manifest_path))
+    latest_checkpoint_payload["dispatch_history"] = dispatch_history
+    _write_research_checkpoint_payload(checkpoints_path, latest_checkpoint_payload)
+
+    append_workspace_log(
+        workspace,
+        operation="research-step-dispatch",
+        title=f"Dispatched research steps for {run_manifest_path.stem}",
+        details=[
+            f"Executed {len(executed_steps)} step(s).",
+            f"Skipped {len(skipped_steps)} step(s).",
+            f"Failed step: `{failed_step}`." if failed_step else "Dispatch completed without failed steps.",
+        ],
+        related_paths=[
+            workspace.relative_path(run_manifest_path),
+            workspace.relative_path(checkpoints_path),
+            workspace.relative_path(dispatch_manifest_path),
+        ],
+    )
+    return ResearchStepDispatchResult(
+        run_manifest_path=run_manifest_path,
+        checkpoints_path=checkpoints_path,
+        dispatch_manifest_path=dispatch_manifest_path,
+        executed_steps=executed_steps,
+        skipped_steps=skipped_steps,
+        failed_step=failed_step,
+        status="failed" if failed_step else ("noop" if not executed_steps else "completed"),
+    )
+
+
 def _resolve_research_manifest_path(workspace: Workspace, resume: str) -> Path:
     if resume == "latest":
         manifests = sorted(workspace.runs_dir.glob("research-*.json"))
@@ -1753,6 +1881,50 @@ def _research_step_review_status(step: Dict[str, object]) -> str:
     return _optional_text(step.get("review_status")) or DEFAULT_RESEARCH_STEP_REVIEW_STATUS
 
 
+def _dispatchable_research_steps(checkpoint_payload: Dict[str, object]) -> List[Dict[str, object]]:
+    steps: List[Dict[str, object]] = []
+    for step in list(checkpoint_payload.get("steps", [])):
+        if isinstance(step, dict) and _is_research_step_dispatchable(step):
+            steps.append(step)
+    return steps
+
+
+def _is_research_step_dispatchable(step: Dict[str, object]) -> bool:
+    return (
+        _optional_text(step.get("execution_packet_path")) is not None
+        and _optional_text(step.get("output_path")) is not None
+        and _optional_text(step.get("owner")) == "planner"
+        and _optional_text(step.get("step_id")) != "retrieve-sources"
+    )
+
+
+def _research_step_dispatch_skip_reason(
+    step: Dict[str, object],
+    steps_by_id: Dict[str, Dict[str, object]],
+    *,
+    retry_failed: bool,
+) -> Optional[str]:
+    execution_status = _research_step_execution_status(step)
+    if execution_status == "completed":
+        return "already_completed"
+    if execution_status == "failed" and not retry_failed:
+        return "previously_failed"
+
+    blocked_dependencies: List[str] = []
+    for dependency_id in list(step.get("depends_on", [])):
+        dependency = steps_by_id.get(str(dependency_id))
+        if dependency is None:
+            continue
+        if _is_research_step_dispatchable(dependency):
+            if _research_step_execution_status(dependency) != "completed":
+                blocked_dependencies.append(str(dependency_id))
+        elif _optional_text(dependency.get("status")) != "completed":
+            blocked_dependencies.append(str(dependency_id))
+    if blocked_dependencies:
+        return f"waiting_on:{','.join(blocked_dependencies)}"
+    return None
+
+
 def _load_research_checkpoint_context(
     workspace: Workspace,
     resume: str,
@@ -1788,6 +1960,45 @@ def _resolve_research_step_packet_path(workspace: Workspace, step: Dict[str, obj
 def _write_research_checkpoint_payload(path: Path, payload: Dict[str, object]) -> None:
     payload["updated_at"] = utc_timestamp()
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _write_research_step_dispatch_manifest(
+    workspace: Workspace,
+    notes_dir: Path,
+    run_manifest_path: Path,
+    question: str,
+    job_profile: str,
+    default_profile: str,
+    profile_routes: Dict[str, str],
+    executed_steps: List[str],
+    skipped_steps: List[str],
+    failed_step: Optional[str],
+    records: List[Dict[str, object]],
+) -> Path:
+    dispatch_dir = notes_dir / "dispatch-runs"
+    dispatch_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"dispatch-{slugify(utc_timestamp())}"
+    dispatch_manifest_path = dispatch_dir / f"{base_name}.json"
+    suffix = 2
+    while dispatch_manifest_path.exists():
+        dispatch_manifest_path = dispatch_dir / f"{base_name}-{suffix}.json"
+        suffix += 1
+    payload = {
+        "schema_version": 1,
+        "generated_at": utc_timestamp(),
+        "run_manifest_path": workspace.relative_path(run_manifest_path),
+        "question": question,
+        "job_profile": job_profile,
+        "default_profile": default_profile,
+        "step_profiles": {step_id: profile_routes.get(step_id, default_profile) for step_id in executed_steps},
+        "executed_steps": executed_steps,
+        "skipped_steps": skipped_steps,
+        "failed_step": failed_step,
+        "status": "failed" if failed_step else ("noop" if not executed_steps else "completed"),
+        "results": records,
+    }
+    dispatch_manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return dispatch_manifest_path
 
 
 def _strip_frontmatter(text: str) -> str:

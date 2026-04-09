@@ -688,6 +688,7 @@ Supported paths in this release:
 
 - `cognisync research-step list --run latest`
 - `cognisync research-step run --run latest --step build-paper-matrix --profile codex`
+- `cognisync research-step dispatch --run latest --default-profile codex --profile-route build-paper-matrix=gemini`
 - `cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1`
 
 The command family:
@@ -695,14 +696,18 @@ The command family:
 1. reads the existing research run manifest from `.cognisync/runs/`
 2. resolves per-step execution packets from `outputs/reports/research-jobs/<run>/execution-packets/`
 3. writes step-level execution state, output paths, and review decisions back into `checkpoints.json`
-4. leaves the filesystem canonical, so remote workers, humans, and later automation all see the same operator history
+4. can route eligible note-building steps to different adapter profiles in one `dispatch` call while respecting step dependencies
+5. leaves the filesystem canonical, so remote workers, humans, and later automation all see the same operator history
 
 ```mermaid
 flowchart LR
     A["research writes plan, notes, packets, and checkpoints"] --> B["research-step list shows per-step execution and review state"]
     B --> C["research-step run executes one packet through an adapter profile"]
+    B --> C2["research-step dispatch routes multiple eligible steps across adapter profiles"]
     C --> D["checkpoint stores execution profile, output path, and executed_at"]
+    C2 --> D2["dispatch manifest records executed, skipped, and failed steps"]
     D --> E["research-step review records approved or changes_requested"]
+    D2 --> E
     E --> F["resume, export, and future orchestrators reuse the same checkpoint state"]
 ```
 

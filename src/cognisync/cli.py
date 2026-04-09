@@ -126,6 +126,7 @@ from cognisync.research import (
     RESEARCH_JOB_PROFILES,
     VALID_RESEARCH_STEP_REVIEW_STATUSES,
     ResearchError,
+    dispatch_research_steps,
     render_research_step_status,
     review_research_step,
     run_research_cycle,
@@ -183,6 +184,18 @@ def _resolve_workspace_path_arg(workspace: Workspace, path_arg: str) -> Path:
     if not path.is_absolute():
         path = workspace.root / path
     return path.resolve()
+
+
+def _parse_profile_routes(raw_routes: list[str]) -> dict[str, str]:
+    routes: dict[str, str] = {}
+    for raw_route in raw_routes:
+        step_id, separator, profile_name = raw_route.partition("=")
+        if not separator or not step_id.strip() or not profile_name.strip():
+            raise ResearchError(
+                f"Invalid --profile-route '{raw_route}'. Expected the form <step-id>=<profile>."
+            )
+        routes[step_id.strip()] = profile_name.strip()
+    return routes
 
 
 def _ensure_snapshot(workspace: Workspace):
@@ -2557,6 +2570,29 @@ def cmd_research_step_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_step_dispatch(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    try:
+        result = dispatch_research_steps(
+            workspace,
+            resume=args.run,
+            default_profile=args.default_profile,
+            profile_routes=_parse_profile_routes(args.profile_route),
+            retry_failed=args.retry_failed,
+        )
+    except ResearchError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    print(f"Executed {len(result.executed_steps)} research step(s)")
+    print(f"Skipped {len(result.skipped_steps)} research step(s)")
+    if result.failed_step is not None:
+        print(f"Failed at step {result.failed_step}", file=sys.stderr)
+    print(f"Wrote dispatch manifest to {result.dispatch_manifest_path}")
+    print(f"Updated checkpoints at {result.checkpoints_path}")
+    return 1 if result.failed_step is not None else 0
+
+
 def cmd_compile(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     output_file = Path(args.output_file).resolve() if args.output_file else None
@@ -3593,6 +3629,26 @@ def build_parser() -> argparse.ArgumentParser:
     research_step_run_parser.add_argument("--profile", required=True)
     research_step_run_parser.add_argument("--output-file", default=None)
     research_step_run_parser.set_defaults(func=cmd_research_step_run)
+
+    research_step_dispatch_parser = research_step_subparsers.add_parser(
+        "dispatch",
+        help="Execute all eligible research step packets in order, with optional per-step profile routing",
+    )
+    research_step_dispatch_parser.add_argument("--workspace", default=".")
+    research_step_dispatch_parser.add_argument("--run", default="latest")
+    research_step_dispatch_parser.add_argument("--default-profile", required=True)
+    research_step_dispatch_parser.add_argument(
+        "--profile-route",
+        action="append",
+        default=[],
+        help="Route a specific step id to a different profile using <step-id>=<profile>.",
+    )
+    research_step_dispatch_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Retry steps whose previous execution status is failed.",
+    )
+    research_step_dispatch_parser.set_defaults(func=cmd_research_step_dispatch)
 
     research_step_review_parser = research_step_subparsers.add_parser(
         "review",

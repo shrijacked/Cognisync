@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- added `cognisync research-step dispatch`, so routed research sub-steps can now be executed in order across different adapter profiles with a durable dispatch manifest
 - added `cognisync research-step list|run|review`, so per-step research execution packets can now be listed, executed through any configured adapter profile, and reviewed without rerunning the full research job
 - taught research-job checkpoints to persist step execution and review state, and to preserve that state across later checkpoint rewrites
 - added `cognisync share attach-remote-bundle|list-attached-remotes|pull-remote|subscribe-remote-pull|unsubscribe-remote-pull`, so peer bundles can now become durable upstream remotes instead of only one-off worker handoffs

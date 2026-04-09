@@ -217,6 +217,7 @@ That run-scoped workspace is now directly operable too:
 ```bash
 cognisync research-step list --run latest
 cognisync research-step run --run latest --step build-paper-matrix --profile codex
+cognisync research-step dispatch --run latest --default-profile codex --profile-route build-paper-matrix=gemini
 cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1
 ```
 
@@ -224,6 +225,7 @@ cognisync research-step review --run latest --step build-paper-matrix --status a
 
 - `list` shows every step with planned, execution, and review status
 - `run` executes one step packet through any configured adapter profile and writes the step artifact back into the research-job workspace
+- `dispatch` executes all eligible note-building steps in dependency order, lets you route specific step ids to different profiles, and records a dispatch manifest under the research job workspace
 - `review` records approval or change-request state on the same checkpoint manifest so later resumes or exports can see which intermediate artifacts were trusted
 
 Research now supports orchestration profiles too:

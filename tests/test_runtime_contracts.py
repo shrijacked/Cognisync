@@ -684,6 +684,125 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(resumed_checkpoint["reviewed_by"], "operator-1")
             self.assertEqual(resumed_checkpoint["review_note"], "grounded and ready to reuse")
 
+    def test_research_step_dispatch_routes_profiles_and_persists_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Step Dispatch Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Step Artifact\\n\\nproduced by alpha [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            config.llm_profiles["beta"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Step Artifact\\n\\nproduced by beta [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            dispatch_stdout = io.StringIO()
+            with redirect_stdout(dispatch_stdout):
+                exit_code = main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--profile-route",
+                        "build-paper-matrix=beta",
+                        "--profile-route",
+                        "capture-open-questions=beta",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Executed 3 research step(s)", dispatch_stdout.getvalue())
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            checkpoints_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            steps = {item["step_id"]: item for item in checkpoints_payload["steps"]}
+            self.assertEqual(steps["build-working-set"]["execution_profile"], "alpha")
+            self.assertEqual(steps["build-paper-matrix"]["execution_profile"], "beta")
+            self.assertEqual(steps["capture-open-questions"]["execution_profile"], "beta")
+            self.assertEqual(steps["build-working-set"]["execution_status"], "completed")
+            self.assertEqual(steps["build-paper-matrix"]["review_status"], "pending_review")
+            self.assertEqual(steps["capture-open-questions"]["review_status"], "pending_review")
+
+            notes_dir = workspace.root / manifest["notes_dir"]
+            self.assertIn("produced by alpha", (notes_dir / "working-set.md").read_text(encoding="utf-8"))
+            self.assertIn("produced by beta", (notes_dir / "paper-matrix.md").read_text(encoding="utf-8"))
+            self.assertIn("produced by beta", (notes_dir / "open-questions.md").read_text(encoding="utf-8"))
+
+            dispatch_history = checkpoints_payload["dispatch_history"]
+            self.assertEqual(len(dispatch_history), 1)
+            dispatch_manifest_path = workspace.root / dispatch_history[0]
+            self.assertTrue(dispatch_manifest_path.exists())
+            dispatch_manifest = json.loads(dispatch_manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(dispatch_manifest["status"], "completed")
+            self.assertEqual(dispatch_manifest["executed_steps"], ["build-working-set", "build-paper-matrix", "capture-open-questions"])
+            self.assertEqual(dispatch_manifest["step_profiles"]["build-working-set"], "alpha")
+            self.assertEqual(dispatch_manifest["step_profiles"]["build-paper-matrix"], "beta")
+
+            second_dispatch_stdout = io.StringIO()
+            with redirect_stdout(second_dispatch_stdout):
+                exit_code = main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Executed 0 research step(s)", second_dispatch_stdout.getvalue())
+            self.assertIn("Skipped 3 research step(s)", second_dispatch_stdout.getvalue())
+
+            second_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(second_payload["dispatch_history"]), 2)
+
     def test_research_resume_latest_preserves_job_profile_notes_and_validation_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
