@@ -304,7 +304,8 @@ The command:
 5. can keep polling through short idle windows, so a remote worker can stay warm for scheduled jobs instead of exiting on the first empty queue
 6. can advertise declared capabilities like `workspace`, `research`, `ingest`, `connector`, or `sync`, so the hosted queue only hands it compatible work
 7. works with scheduler-enqueued connector jobs and peer-scoped sync-export jobs, so scheduled connector pulls and shared-workspace handoffs can be drained by a remote worker instead of the local shell
-8. syncs back only the touched result artifacts from the mirrored workspace, which keeps remote execution file-native without copying the whole mirror state on every job
+8. keeps renewing the active lease while mirrored work is still executing, so detached runs do not silently outlive the hosted job ownership that dispatched them
+9. syncs back only the touched result artifacts from the mirrored workspace, which keeps remote execution file-native without copying the whole mirror state on every job
 
 Together, `control-plane serve`, `control-plane scheduler-tick`, and `worker remote` give Cognisync a remote-ready operator loop without breaking the local-first contract.
 
