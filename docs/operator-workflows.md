@@ -243,6 +243,7 @@ Supported paths in this release:
 - `cognisync control-plane remove-scheduled-job <subscription-id>`
 - `cognisync control-plane scheduler-status`
 - `cognisync control-plane workers`
+- `cognisync control-plane release-worker <worker-id> --reason operator_recovery --requeue-active-jobs`
 - `cognisync control-plane scheduler-tick --enqueue-only --actor-id local-operator`
 - `cognisync control-plane serve --host 127.0.0.1 --port 8766`
 
@@ -258,6 +259,7 @@ The command family:
 8. travels with sync bundles because the control-plane manifest is now part of the declared state manifest set
 9. requires an operator principal for hosted job mutation endpoints even when a token carries matching `jobs.*` scopes, so HTTP queue execution does not bypass the workspace roster
 10. carries worker capability routing through `/api/jobs/run-next`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/workers`, so remote workers can advertise what they handle, stay visible while polling, and expose their current job while the hosted queue respects that routing
+11. lets operators release a stale worker and immediately requeue its active lease, so hosted recovery can happen on demand instead of waiting for a lease timeout to expire
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
 
@@ -279,6 +281,7 @@ The served API now covers a real remote review surface too:
 - `POST /api/sync/export` and `POST /api/sync/import` let operator tokens exchange inline sync archives over HTTP while still honoring accepted-peer trust policy on import
 - peer-scoped sync handoffs now require the accepted peer to declare `sync.import`, so `sync export --for-peer`, `sync import --from-peer`, and their HTTP equivalents remain explicit capability-based trust decisions instead of role-only defaults
 - `POST /api/jobs/run-next`, `claim-next`, and `heartbeat` now also accept `worker_capabilities`, and `GET /api/workers` persists those declared capabilities in the derived worker registry
+- `POST /api/workers/release` can now also requeue a stale worker's live lease immediately, so remote recovery can happen through the hosted surface instead of waiting for lease expiry
 - `POST /api/jobs/dispatch-next`, `complete`, and `fail` now support detached mirrored workers too, so remote operators can claim a job, execute it against a synced local mirror, and return only the resulting artifacts instead of asking the server process to do the work locally
 
 ### `worker remote`

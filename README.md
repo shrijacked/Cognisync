@@ -349,6 +349,7 @@ The hosted-alpha control-plane layer is now available too:
 - `cognisync control-plane list-scheduled-jobs --workspace .`
 - `cognisync control-plane scheduler-status --workspace .`
 - `cognisync control-plane workers --workspace .`
+- `cognisync control-plane release-worker remote-a --workspace . --reason operator_recovery --requeue-active-jobs`
 - `cognisync control-plane scheduler-tick --workspace . --enqueue-only`
 - `cognisync control-plane serve --workspace .`
 - `cognisync worker remote --server-url http://127.0.0.1:8766 --token "$(jq -r .token remote-ops.json)" --worker-id remote-a --max-jobs 5 --poll-interval-seconds 2 --max-idle-polls 30`
@@ -370,6 +371,7 @@ That layer keeps the same filesystem-first contract:
 - peer-scoped `sync export --for-peer` and `sync import --from-peer` now also require the accepted peer to declare `sync.import`, so bundle exchange is opt-in at the peer-capability layer instead of inferred from role alone
 - scheduled connector automation can enqueue `connector-sync-all --scheduled-only` work, scheduled peer sync subscriptions can enqueue peer-scoped `sync-export` work, attached remotes can enqueue `remote-sync-pull` work, and recurring research, compile, lint, or maintain subscriptions can enqueue regular corpus work without adding a second queue system
 - remote workers can poll through short idle windows and their live state is visible through `control-plane workers` plus `/api/workers`, including polling sessions before a job is claimed and running mirrored workers with their current job ids
+- operators can now release a stale hosted worker and immediately requeue its live lease through `control-plane release-worker` or `POST /api/workers/release`, so recovery does not have to wait for a long lease timeout to expire
 - remote workers now report their declared capability set through `.cognisync/jobs/workers.json` and `/api/workers`, and hosted job claims respect that routing data when a worker polls with `--capability`
 - mirrored remote workers can now use `/api/jobs/dispatch-next`, `/api/jobs/complete`, and `/api/jobs/fail` to claim work, execute it against a synced local mirror, and push back only the result artifacts through a targeted sync bundle instead of asking the server process to do the execution itself
 - `control-plane serve` now also exposes `/api/share`, `/api/access`, `/api/collab`, `/api/notifications`, `/api/audit`, and `/api/usage`, so the hosted-alpha surface can inspect shared-workspace, roster, review, inbox, and observability state remotely

@@ -109,6 +109,8 @@
 - added `--capability` support to `jobs claim-next`, `jobs heartbeat`, `jobs run-next`, `jobs work`, and `worker remote`, so remote orchestration can target research, ingest, workspace, connector, or sync workers without inventing another queue
 - taught `.cognisync/jobs/workers.json` and `/api/workers` to persist each worker's declared capabilities, so hosted dashboards can distinguish what a worker can handle from the job it happens to own
 - added durable worker-session presence for hosted polling workers, so `/api/workers` can surface remote workers before they claim a lease and keep mirroring their current job while they execute against a detached workspace
+- fixed hosted `claim-next` and `heartbeat` payloads to serialize manifest paths correctly over HTTP instead of leaking raw `Path` objects
+- added `cognisync control-plane release-worker` plus hosted worker-release requeue support, so operators can recover stale leased jobs immediately instead of waiting for the original lease timeout
 
 ## v0.1.4 - 2026-04-03
 
