@@ -573,6 +573,182 @@ class SharingAndSchedulerTests(unittest.TestCase):
             self.assertFalse(payload["trust_policy"]["allow_remote_workers"])
             self.assertFalse(payload["trust_policy"]["allow_sync_imports_from_peers"])
 
+    def test_share_policy_can_restrict_control_plane_hosts_and_peer_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            trusted_bundle_path = Path(tmp) / "trusted-remote.json"
+            untrusted_bundle_path = Path(tmp) / "untrusted-remote.json"
+            self.assertEqual(main(["init", str(root), "--name", "Trust Policy Workspace"]), 0)
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "set-policy",
+                        "--workspace",
+                        str(root),
+                        "--max-peer-role",
+                        "reviewer",
+                        "--allow-peer-capability",
+                        "review.remote",
+                        "--allow-peer-capability",
+                        "sync.import",
+                        "--allow-control-plane-host",
+                        "control.example.test",
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "http://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("requires https", stderr.getvalue())
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "bind-control-plane",
+                        "https://control.example.test/api",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-ops",
+                        "operator",
+                        "--workspace",
+                        str(root),
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("max_peer_role", stderr.getvalue())
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-jobs",
+                        "reviewer",
+                        "--workspace",
+                        str(root),
+                        "--capability",
+                        "jobs.remote",
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("allowed peer capability list", stderr.getvalue())
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "invite-peer",
+                        "remote-review",
+                        "reviewer",
+                        "--workspace",
+                        str(root),
+                        "--capability",
+                        "review.remote",
+                    ]
+                ),
+                0,
+            )
+
+            trusted_bundle_path.write_text(
+                json.dumps(
+                    {
+                        "workspace_id": "trusted-workspace",
+                        "workspace_name": "Trusted Workspace",
+                        "server_url": "https://control.example.test/api",
+                        "principal_id": "trusted-peer",
+                        "display_name": "Trusted Peer",
+                        "role": "reviewer",
+                        "token": "cp_trusted",
+                        "token_id": "token-trusted",
+                        "scopes": ["control.read"],
+                        "capabilities": ["sync.import"],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            untrusted_bundle_path.write_text(
+                json.dumps(
+                    {
+                        "workspace_id": "untrusted-workspace",
+                        "workspace_name": "Untrusted Workspace",
+                        "server_url": "https://rogue.example.test/api",
+                        "principal_id": "rogue-peer",
+                        "display_name": "Rogue Peer",
+                        "role": "reviewer",
+                        "token": "cp_rogue",
+                        "token_id": "token-rogue",
+                        "scopes": ["control.read"],
+                        "capabilities": ["jobs.remote"],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "share",
+                        "attach-remote-bundle",
+                        str(untrusted_bundle_path),
+                        "--workspace",
+                        str(root),
+                    ]
+                )
+            self.assertEqual(exit_code, 2)
+            self.assertIn("allowed control-plane host list", stderr.getvalue())
+
+            self.assertEqual(
+                main(
+                    [
+                        "share",
+                        "attach-remote-bundle",
+                        str(trusted_bundle_path),
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            payload = json.loads((root / ".cognisync" / "shared-workspace.json").read_text(encoding="utf-8"))
+            trust_policy = payload["trust_policy"]
+            self.assertEqual(trust_policy["max_peer_role"], "reviewer")
+            self.assertTrue(trust_policy["require_secure_control_plane"])
+            self.assertEqual(trust_policy["allowed_control_plane_hosts"], ["control.example.test"])
+            self.assertEqual(trust_policy["allowed_peer_capabilities"], ["review.remote", "sync.import"])
+            self.assertEqual(payload["attached_remotes"][0]["principal_id"], "trusted-peer")
+
     def test_share_manifest_tracks_bound_control_plane_and_peer_acceptance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

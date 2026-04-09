@@ -9,6 +9,7 @@ import unittest
 from contextlib import redirect_stderr
 from http.client import HTTPConnection
 from pathlib import Path
+from unittest import mock
 
 from tests import support  # noqa: F401
 
@@ -952,7 +953,7 @@ class ControlPlaneTests(unittest.TestCase):
                         "share",
                         "invite-peer",
                         "remote-ops",
-                        "operator",
+                        "reviewer",
                         "--workspace",
                         str(root),
                     ]
@@ -992,6 +993,10 @@ class ControlPlaneTests(unittest.TestCase):
                         {
                             "allow_remote_workers": False,
                             "allow_sync_imports_from_peers": False,
+                            "max_peer_role": "reviewer",
+                            "require_secure_control_plane": True,
+                            "allowed_control_plane_hosts": ["control.example.test"],
+                            "allowed_peer_capabilities": ["review.remote", "sync.import"],
                         }
                     ),
                     headers={
@@ -1004,6 +1009,10 @@ class ControlPlaneTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertFalse(payload["trust_policy"]["allow_remote_workers"])
                 self.assertFalse(payload["trust_policy"]["allow_sync_imports_from_peers"])
+                self.assertEqual(payload["trust_policy"]["max_peer_role"], "reviewer")
+                self.assertTrue(payload["trust_policy"]["require_secure_control_plane"])
+                self.assertEqual(payload["trust_policy"]["allowed_control_plane_hosts"], ["control.example.test"])
+                self.assertEqual(payload["trust_policy"]["allowed_peer_capabilities"], ["review.remote", "sync.import"])
                 connection.close()
 
                 connection = HTTPConnection(host, port, timeout=5)
@@ -2598,6 +2607,75 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_remote_worker_session_is_visible_while_polling_without_an_active_lease(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Polling Session Workspace")
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = {}
+
+                def _run_worker() -> None:
+                    worker_result["result"] = run_remote_worker(
+                        server_url=f"http://{host}:{port}",
+                        token=token_value,
+                        worker_id="remote-session",
+                        max_jobs=1,
+                        poll_interval_seconds=0.1,
+                        max_idle_polls=20,
+                    )
+
+                worker_thread = threading.Thread(target=_run_worker, daemon=True)
+                worker_thread.start()
+                time.sleep(0.25)
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/workers", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                workers_payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                session_worker = next(item for item in workers_payload["workers"] if item["worker_id"] == "remote-session")
+                self.assertEqual(session_worker["status"], "polling")
+                self.assertEqual(session_worker["declared_capabilities"], [])
+                self.assertTrue(session_worker["last_seen_at"])
+                connection.close()
+
+                self.assertEqual(main(["jobs", "enqueue", "lint", "--workspace", str(root)]), 0)
+                worker_thread.join(timeout=5)
+                self.assertFalse(worker_thread.is_alive(), "remote worker did not finish after polling")
+                self.assertEqual(worker_result["result"].processed_count, 1)
+                self.assertEqual(worker_result["result"].completed_count, 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_remote_worker_can_route_jobs_by_declared_capability_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -2766,6 +2844,122 @@ class ControlPlaneTests(unittest.TestCase):
 
                 sync_history = json.loads((server_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
                 self.assertGreaterEqual(sync_history["operation_counts"].get("import", 0), 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_remote_worker_session_tracks_running_mirrored_jobs_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server_root = Path(tmp) / "server-workspace"
+            mirror_root = Path(tmp) / "mirror-workspace"
+            workspace = Workspace(server_root)
+            workspace.initialize(name="Running Remote Worker Session Workspace")
+            (server_root / "raw" / "seed.md").write_text(
+                "# Seed\n\nRunning workers should stay visible.\n",
+                encoding="utf-8",
+            )
+
+            initial_bundle = export_sync_bundle(workspace)
+            mirror_workspace = Workspace(mirror_root)
+            mirror_workspace.initialize(name="Running Remote Worker Mirror")
+            import_sync_bundle_archive(
+                mirror_workspace,
+                encode_sync_bundle_archive(initial_bundle.directory),
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "jobs",
+                        "enqueue",
+                        "ingest-url",
+                        "data:text/html;charset=utf-8,<html><head><title>Running Mirror</title></head><body><p>Track the running worker.</p></body></html>",
+                        "--workspace",
+                        str(server_root),
+                        "--name",
+                        "running-worker",
+                    ]
+                ),
+                0,
+            )
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(server_root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.claim",
+                        "--scope",
+                        "jobs.heartbeat",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = {}
+                started = threading.Event()
+                release = threading.Event()
+
+                def _slow_execute_job_payload(*args, **kwargs):
+                    started.set()
+                    self.assertTrue(release.wait(timeout=5), "timed out waiting to release the slow mirrored job")
+                    from cognisync.jobs import execute_job_payload as real_execute_job_payload
+
+                    return real_execute_job_payload(*args, **kwargs)
+
+                def _run_worker() -> None:
+                    worker_result["result"] = run_remote_worker(
+                        server_url=f"http://{host}:{port}",
+                        token=token_value,
+                        worker_id="remote-running",
+                        max_jobs=1,
+                        worker_capabilities=["ingest"],
+                        workspace_root=mirror_root,
+                    )
+
+                with mock.patch("cognisync.remote_worker.execute_job_payload", side_effect=_slow_execute_job_payload):
+                    worker_thread = threading.Thread(target=_run_worker, daemon=True)
+                    worker_thread.start()
+                    self.assertTrue(started.wait(timeout=5), "remote worker never reached running state")
+
+                    connection = HTTPConnection(host, port, timeout=5)
+                    connection.request("GET", "/api/workers", headers={"Authorization": f"Bearer {token_value}"})
+                    response = connection.getresponse()
+                    workers_payload = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(response.status, 200)
+                    running_worker = next(item for item in workers_payload["workers"] if item["worker_id"] == "remote-running")
+                    self.assertEqual(running_worker["status"], "running")
+                    self.assertEqual(running_worker["current_job_type"], "ingest_url")
+                    self.assertTrue(running_worker["current_job_id"])
+                    self.assertEqual(running_worker["declared_capabilities"], ["ingest"])
+                    self.assertEqual(running_worker["workspace_root"], str(mirror_root.resolve()))
+                    connection.close()
+
+                    release.set()
+                    worker_thread.join(timeout=5)
+                    self.assertFalse(worker_thread.is_alive(), "remote worker did not finish after the running-state check")
+
+                self.assertEqual(worker_result["result"].processed_count, 1)
+                self.assertEqual(worker_result["result"].completed_count, 1)
+                self.assertTrue((server_root / "raw" / "urls" / "running-worker.md").exists())
             finally:
                 server.shutdown()
                 server.server_close()

@@ -61,7 +61,10 @@ from cognisync.jobs import (
     enqueue_research_job,
     enqueue_sync_export_job,
     heartbeat_job,
+    heartbeat_worker_session,
     read_worker_registry,
+    register_worker_session,
+    release_worker_session,
     run_next_job,
 )
 from cognisync.maintenance import (
@@ -1809,6 +1812,69 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), **result.__dict__})
                 return
+            if parsed.path == "/api/workers/register":
+                actor = self._authenticate(["control.read"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "register worker sessions over the control plane",
+                )
+                session = register_worker_session(
+                    self._workspace,
+                    worker_id=str(payload.get("worker_id", "")),
+                    status=str(payload.get("status", "")) or "idle",
+                    worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))],
+                    ttl_seconds=int(payload.get("ttl_seconds", 120) or 120),
+                    current_job_id=str(payload.get("current_job_id", "")),
+                    current_job_type=str(payload.get("current_job_type", "")),
+                    workspace_root=str(payload.get("workspace_root", "")) or None,
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "session": session, **read_worker_registry(self._workspace)},
+                )
+                return
+            if parsed.path == "/api/workers/heartbeat":
+                actor = self._authenticate(["control.read"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "renew worker sessions over the control plane",
+                )
+                session = heartbeat_worker_session(
+                    self._workspace,
+                    worker_id=str(payload.get("worker_id", "")),
+                    status=str(payload.get("status", "")) or None,
+                    worker_capabilities=[str(item) for item in list(payload.get("worker_capabilities", []))]
+                    if payload.get("worker_capabilities") is not None
+                    else None,
+                    ttl_seconds=int(payload.get("ttl_seconds", 120) or 120),
+                    current_job_id=str(payload.get("current_job_id", "")) if payload.get("current_job_id") is not None else None,
+                    current_job_type=str(payload.get("current_job_type", "")) if payload.get("current_job_type") is not None else None,
+                    workspace_root=str(payload.get("workspace_root", "")) if payload.get("workspace_root") is not None else None,
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "session": session, **read_worker_registry(self._workspace)},
+                )
+                return
+            if parsed.path == "/api/workers/release":
+                actor = self._authenticate(["control.read"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "release worker sessions over the control plane",
+                )
+                session = release_worker_session(
+                    self._workspace,
+                    worker_id=str(payload.get("worker_id", "")),
+                    reason=str(payload.get("reason", "")) or "stopped",
+                )
+                self._send_json(
+                    200,
+                    {"actor": _serialize_actor(actor), "session": session, **read_worker_registry(self._workspace)},
+                )
+                return
             if parsed.path == "/api/jobs/dispatch-next":
                 actor = self._authenticate(["jobs.run"])
                 actor = _require_control_admin_actor(
@@ -2147,6 +2213,22 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     allow_remote_workers=payload.get("allow_remote_workers"),
                     allow_sync_imports_from_peers=payload.get("allow_sync_imports_from_peers"),
                     default_peer_role=str(payload.get("default_peer_role", "")) or None,
+                    max_peer_role=str(payload.get("max_peer_role", "")) or None,
+                    require_secure_control_plane=(
+                        bool(payload.get("require_secure_control_plane"))
+                        if payload.get("require_secure_control_plane") is not None
+                        else None
+                    ),
+                    allowed_control_plane_hosts=(
+                        [str(item) for item in list(payload.get("allowed_control_plane_hosts", []))]
+                        if payload.get("allowed_control_plane_hosts") is not None
+                        else None
+                    ),
+                    allowed_peer_capabilities=(
+                        [str(item) for item in list(payload.get("allowed_peer_capabilities", []))]
+                        if payload.get("allowed_peer_capabilities") is not None
+                        else None
+                    ),
                 )
                 self._send_json(
                     200,

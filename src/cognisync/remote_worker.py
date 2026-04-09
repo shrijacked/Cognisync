@@ -58,10 +58,33 @@ def run_remote_worker(
     stopped_reason = "idle"
     idle_polls = 0
 
+    _post_json_best_effort(
+        f"{normalized_server}/api/workers/register",
+        token=normalized_token,
+        payload={
+            "worker_id": normalized_worker,
+            "status": "polling" if poll_interval_seconds > 0 else "idle",
+            "ttl_seconds": max(int(lease_seconds), 120),
+            "worker_capabilities": normalized_worker_capabilities,
+            "workspace_root": str(resolved_workspace_root) if resolved_workspace_root is not None else "",
+        },
+    )
+
     while True:
         if max_jobs is not None and processed_count >= max_jobs:
             stopped_reason = "max_jobs_reached"
             break
+        _post_json_best_effort(
+            f"{normalized_server}/api/workers/heartbeat",
+            token=normalized_token,
+            payload={
+                "worker_id": normalized_worker,
+                "status": "polling" if poll_interval_seconds > 0 else "idle",
+                "ttl_seconds": max(int(lease_seconds), 120),
+                "worker_capabilities": normalized_worker_capabilities,
+                "workspace_root": str(resolved_workspace_root) if resolved_workspace_root is not None else "",
+            },
+        )
         try:
             if resolved_workspace_root is None:
                 payload = _post_json(
@@ -93,8 +116,28 @@ def run_remote_worker(
             raise
         processed_count += 1
         idle_polls = 0
+        _post_json_best_effort(
+            f"{normalized_server}/api/workers/heartbeat",
+            token=normalized_token,
+            payload={
+                "worker_id": normalized_worker,
+                "status": "idle",
+                "ttl_seconds": max(int(lease_seconds), 120),
+                "worker_capabilities": normalized_worker_capabilities,
+                "workspace_root": str(resolved_workspace_root) if resolved_workspace_root is not None else "",
+            },
+        )
         if str(payload.get("status", "")) == "completed":
             completed_count += 1
+
+    _post_json_best_effort(
+        f"{normalized_server}/api/workers/release",
+        token=normalized_token,
+        payload={
+            "worker_id": normalized_worker,
+            "reason": stopped_reason,
+        },
+    )
 
     return RemoteWorkerResult(
         processed_count=processed_count,
@@ -184,3 +227,12 @@ def _post_json(url: str, token: str, payload: dict) -> dict:
         except json.JSONDecodeError:
             pass
         raise RemoteWorkerError(f"{http_error.code}: {message}") from http_error
+    except error.URLError as url_error:
+        raise RemoteWorkerError(f"Could not reach control plane: {url_error.reason}") from url_error
+
+
+def _post_json_best_effort(url: str, token: str, payload: dict) -> None:
+    try:
+        _post_json(url, token, payload)
+    except RemoteWorkerError:
+        pass

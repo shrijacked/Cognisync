@@ -397,6 +397,121 @@ def read_worker_registry(workspace: Workspace) -> Dict[str, object]:
     return _read_worker_registry(workspace)
 
 
+def register_worker_session(
+    workspace: Workspace,
+    worker_id: str,
+    status: str = "idle",
+    worker_capabilities: Optional[List[str]] = None,
+    ttl_seconds: int = 120,
+    current_job_id: str = "",
+    current_job_type: str = "",
+    origin: str = "remote-http",
+    workspace_root: Optional[str] = None,
+) -> Dict[str, object]:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    if ttl_seconds < 1:
+        raise JobError("Worker session ttl_seconds must be at least 1.")
+    payload = _read_worker_sessions(workspace)
+    sessions = {str(item.get("worker_id", "")): dict(item) for item in list(payload.get("sessions", []))}
+    existing = sessions.get(normalized_worker_id, {})
+    now = utc_timestamp()
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).replace(microsecond=0).isoformat()
+    sessions[normalized_worker_id] = {
+        "worker_id": normalized_worker_id,
+        "status": str(status or "idle").strip().lower() or "idle",
+        "origin": str(origin or "remote-http").strip() or "remote-http",
+        "registered_at": str(existing.get("registered_at", now)) or now,
+        "updated_at": now,
+        "last_seen_at": now,
+        "expires_at": expires_at,
+        "released_at": "",
+        "release_reason": "",
+        "current_job_id": str(current_job_id or "").strip(),
+        "current_job_type": str(current_job_type or "").strip(),
+        "declared_capabilities": _normalize_worker_capabilities(
+            worker_capabilities if worker_capabilities is not None else list(existing.get("declared_capabilities", []))
+        ),
+        "workspace_root": str(workspace_root or existing.get("workspace_root", "")).strip(),
+    }
+    _write_worker_sessions(workspace, {"sessions": list(sessions.values())})
+    _write_worker_registry(workspace)
+    return sessions[normalized_worker_id]
+
+
+def heartbeat_worker_session(
+    workspace: Workspace,
+    worker_id: str,
+    status: Optional[str] = None,
+    worker_capabilities: Optional[List[str]] = None,
+    ttl_seconds: int = 120,
+    current_job_id: Optional[str] = None,
+    current_job_type: Optional[str] = None,
+    workspace_root: Optional[str] = None,
+) -> Dict[str, object]:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    payload = _read_worker_sessions(workspace)
+    sessions = {str(item.get("worker_id", "")): dict(item) for item in list(payload.get("sessions", []))}
+    existing = sessions.get(normalized_worker_id)
+    if existing is None:
+        return register_worker_session(
+            workspace,
+            worker_id=normalized_worker_id,
+            status=status or "idle",
+            worker_capabilities=worker_capabilities,
+            ttl_seconds=ttl_seconds,
+            current_job_id=current_job_id or "",
+            current_job_type=current_job_type or "",
+            workspace_root=workspace_root,
+        )
+    now = utc_timestamp()
+    existing["status"] = str(status or existing.get("status", "idle")).strip().lower() or "idle"
+    existing["updated_at"] = now
+    existing["last_seen_at"] = now
+    existing["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=max(1, int(ttl_seconds)))).replace(
+        microsecond=0
+    ).isoformat()
+    existing["released_at"] = ""
+    existing["release_reason"] = ""
+    if current_job_id is not None:
+        existing["current_job_id"] = str(current_job_id).strip()
+    if current_job_type is not None:
+        existing["current_job_type"] = str(current_job_type).strip()
+    if worker_capabilities is not None:
+        existing["declared_capabilities"] = _normalize_worker_capabilities(worker_capabilities)
+    if workspace_root is not None:
+        existing["workspace_root"] = str(workspace_root).strip()
+    sessions[normalized_worker_id] = existing
+    _write_worker_sessions(workspace, {"sessions": list(sessions.values())})
+    _write_worker_registry(workspace)
+    return existing
+
+
+def release_worker_session(
+    workspace: Workspace,
+    worker_id: str,
+    reason: str = "stopped",
+) -> Dict[str, object]:
+    normalized_worker_id = _normalize_worker_id(worker_id)
+    payload = _read_worker_sessions(workspace)
+    sessions = {str(item.get("worker_id", "")): dict(item) for item in list(payload.get("sessions", []))}
+    existing = sessions.get(normalized_worker_id)
+    if existing is None:
+        raise JobError(f"Worker session {normalized_worker_id} does not exist.")
+    now = utc_timestamp()
+    existing["status"] = "released"
+    existing["updated_at"] = now
+    existing["last_seen_at"] = now
+    existing["expires_at"] = ""
+    existing["released_at"] = now
+    existing["release_reason"] = str(reason).strip() or "stopped"
+    existing["current_job_id"] = ""
+    existing["current_job_type"] = ""
+    sessions[normalized_worker_id] = existing
+    _write_worker_sessions(workspace, {"sessions": list(sessions.values())})
+    _write_worker_registry(workspace)
+    return existing
+
+
 def retry_job(
     workspace: Workspace,
     job_id: str,
@@ -1327,6 +1442,23 @@ def _write_worker_registry(workspace: Workspace, jobs: Optional[List[Dict[str, o
     jobs = jobs if jobs is not None else list_jobs(workspace)
     workers_by_id: Dict[str, Dict[str, object]] = {}
 
+    for session in _active_worker_sessions(workspace):
+        worker_id = str(session.get("worker_id", "")).strip()
+        if not worker_id:
+            continue
+        workers_by_id[worker_id] = {
+            "worker_id": worker_id,
+            "status": str(session.get("status", "idle")).strip() or "idle",
+            "current_job_id": str(session.get("current_job_id", "")).strip(),
+            "current_job_type": str(session.get("current_job_type", "")).strip(),
+            "lease_expires_at": str(session.get("expires_at", "")).strip(),
+            "claim_count": 0,
+            "last_seen_at": str(session.get("last_seen_at", "")).strip(),
+            "declared_capabilities": _normalize_worker_capabilities(list(session.get("declared_capabilities", []))),
+            "session_origin": str(session.get("origin", "")).strip(),
+            "workspace_root": str(session.get("workspace_root", "")).strip(),
+        }
+
     for job in jobs:
         lease = dict(job.get("lease", {}))
         worker_id = str(lease.get("worker_id", "")).strip()
@@ -1343,6 +1475,8 @@ def _write_worker_registry(workspace: Workspace, jobs: Optional[List[Dict[str, o
                 "claim_count": 0,
                 "last_seen_at": "",
                 "declared_capabilities": [],
+                "session_origin": "",
+                "workspace_root": "",
             },
         )
         last_seen_at = (
@@ -1394,6 +1528,78 @@ def _read_worker_registry(workspace: Workspace) -> Dict[str, object]:
             "workers": [],
         }
     return json.loads(workspace.worker_registry_path.read_text(encoding="utf-8"))
+
+
+def _read_worker_sessions(workspace: Workspace) -> Dict[str, object]:
+    if not workspace.worker_sessions_manifest_path.exists():
+        return {
+            "schema_version": 1,
+            "generated_at": utc_timestamp(),
+            "sessions": [],
+        }
+    return json.loads(workspace.worker_sessions_manifest_path.read_text(encoding="utf-8"))
+
+
+def _write_worker_sessions(workspace: Workspace, payload: Dict[str, object]) -> None:
+    sessions = []
+    for session in list(payload.get("sessions", [])):
+        if not isinstance(session, dict):
+            continue
+        worker_id = str(session.get("worker_id", "")).strip()
+        if not worker_id:
+            continue
+        sessions.append(
+            {
+                "worker_id": worker_id,
+                "status": str(session.get("status", "idle")).strip().lower() or "idle",
+                "origin": str(session.get("origin", "remote-http")).strip() or "remote-http",
+                "registered_at": str(session.get("registered_at", "")) or utc_timestamp(),
+                "updated_at": str(session.get("updated_at", "")) or utc_timestamp(),
+                "last_seen_at": str(session.get("last_seen_at", "")) or utc_timestamp(),
+                "expires_at": str(session.get("expires_at", "")),
+                "released_at": str(session.get("released_at", "")),
+                "release_reason": str(session.get("release_reason", "")),
+                "current_job_id": str(session.get("current_job_id", "")),
+                "current_job_type": str(session.get("current_job_type", "")),
+                "declared_capabilities": _normalize_worker_capabilities(list(session.get("declared_capabilities", []))),
+                "workspace_root": str(session.get("workspace_root", "")),
+            }
+        )
+    workspace.worker_sessions_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace.worker_sessions_manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": utc_timestamp(),
+                "session_count": len(sessions),
+                "sessions": sorted(sessions, key=lambda item: item["worker_id"]),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _active_worker_sessions(workspace: Workspace) -> List[Dict[str, object]]:
+    payload = _read_worker_sessions(workspace)
+    active_sessions: List[Dict[str, object]] = []
+    now = datetime.now(timezone.utc)
+    for session in list(payload.get("sessions", [])):
+        if not isinstance(session, dict):
+            continue
+        if str(session.get("status", "")).strip() == "released":
+            continue
+        expires_at = str(session.get("expires_at", "")).strip()
+        if not expires_at:
+            continue
+        try:
+            if datetime.fromisoformat(expires_at) <= now:
+                continue
+        except ValueError:
+            continue
+        active_sessions.append(dict(session))
+    return active_sessions
 
 
 def _normalize_worker_capabilities(worker_capabilities: Optional[List[str]]) -> List[str]:

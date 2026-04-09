@@ -7,6 +7,7 @@ import secrets
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 from urllib import error, request
+from urllib.parse import urlparse
 
 from cognisync.access import (
     AccessError,
@@ -37,6 +38,8 @@ PEER_CAPABILITY_SCOPE_ALIASES = {
     "control.admin": {"control.read", "control.admin"},
     "sync.import": {"control.read", "sync.export"},
 }
+
+ROLE_RANKS = {role: index for index, role in enumerate(VALID_ACCESS_ROLES)}
 
 
 def ensure_shared_workspace_manifest(workspace: "Workspace") -> Dict[str, object]:
@@ -71,6 +74,10 @@ def render_shared_workspace_status(workspace: "Workspace") -> str:
         f"- Issued peer bundles: `{summary['issued_bundle_count']}`",
         f"- Remote workers allowed: `{summary['allow_remote_workers']}`",
         f"- Sync imports from peers allowed: `{summary['allow_sync_imports_from_peers']}`",
+        f"- Max peer role: `{summary['max_peer_role']}`",
+        f"- Secure control plane required: `{summary['require_secure_control_plane']}`",
+        f"- Allowed control-plane hosts: `{', '.join(summary['allowed_control_plane_hosts']) or 'any'}`",
+        f"- Allowed peer capabilities: `{', '.join(summary['allowed_peer_capabilities']) or 'any'}`",
     ]
     return "\n".join(lines)
 
@@ -117,6 +124,10 @@ def sharing_summary(workspace: "Workspace") -> Dict[str, object]:
         "due_sync_peer_count": len(list_due_shared_peer_syncs(workspace)),
         "allow_remote_workers": bool(trust_policy.get("allow_remote_workers", True)),
         "allow_sync_imports_from_peers": bool(trust_policy.get("allow_sync_imports_from_peers", True)),
+        "max_peer_role": str(trust_policy.get("max_peer_role", "operator")),
+        "require_secure_control_plane": bool(trust_policy.get("require_secure_control_plane", True)),
+        "allowed_control_plane_hosts": _normalize_control_plane_hosts(list(trust_policy.get("allowed_control_plane_hosts", []))),
+        "allowed_peer_capabilities": _sorted_capabilities(list(trust_policy.get("allowed_peer_capabilities", []))),
     }
 
 
@@ -130,6 +141,11 @@ def bind_shared_control_plane_url(
     if not normalized_url:
         raise SharingError("A control-plane URL is required.")
     payload = ensure_shared_workspace_manifest(workspace)
+    _validate_control_plane_url_against_policy(
+        normalized_url,
+        dict(payload.get("trust_policy", {})),
+        context_label="published control-plane URL",
+    )
     payload["published_control_plane_url"] = normalized_url
     payload["updated_at"] = utc_timestamp()
     _write_shared_workspace_manifest(workspace, payload)
@@ -155,8 +171,14 @@ def invite_shared_peer(
             f"Unsupported shared-workspace role '{role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
         )
     payload = ensure_shared_workspace_manifest(workspace)
+    _validate_peer_role_against_policy(normalized_role, dict(payload.get("trust_policy", {})))
     peers = {str(item.get("peer_id", "")): dict(item) for item in list(payload.get("peers", []))}
     existing = peers.get(normalized_peer_id) or {}
+    _validate_peer_capabilities_against_policy(
+        list(capabilities or list(existing.get("capabilities", []))),
+        dict(payload.get("trust_policy", {})),
+        context_label=f"shared peer '{normalized_peer_id}'",
+    )
     now = utc_timestamp()
     peer = {
         "peer_id": normalized_peer_id,
@@ -189,6 +211,12 @@ def accept_shared_peer(
     peer = next((item for item in peers if str(item.get("peer_id", "")) == normalized_ref), None)
     if peer is None:
         raise SharingError(f"Could not find shared peer '{normalized_ref}'.")
+    _validate_peer_role_against_policy(str(peer.get("role", "viewer")), dict(payload.get("trust_policy", {})))
+    _validate_peer_capabilities_against_policy(
+        list(peer.get("capabilities", [])),
+        dict(payload.get("trust_policy", {})),
+        context_label=f"shared peer '{normalized_ref}'",
+    )
     if str(peer.get("status", "")) == "accepted":
         return peer
     principal_id = str(peer.get("peer_id", ""))
@@ -221,6 +249,7 @@ def set_shared_peer_role(
             f"Unsupported shared-workspace role '{role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
         )
     payload = ensure_shared_workspace_manifest(workspace)
+    _validate_peer_role_against_policy(normalized_role, dict(payload.get("trust_policy", {})))
     peers = [dict(item) for item in list(payload.get("peers", []))]
     peer = _find_peer_in_list(peers, peer_ref)
     peer["role"] = normalized_role
@@ -321,6 +350,11 @@ def issue_shared_peer_bundle(
         raise SharingError(f"Could not find shared peer '{normalized_ref}'.")
     if str(peer.get("status", "")) != "accepted":
         raise SharingError(f"Peer '{normalized_ref}' must be accepted before a bundle can be issued.")
+    _validate_peer_capabilities_against_policy(
+        list(peer.get("capabilities", [])),
+        trust_policy,
+        context_label=f"shared peer '{normalized_ref}'",
+    )
     allowed_scopes = peer_allowed_control_scopes(peer)
     requested_scopes = sorted({str(item).strip() for item in list(scopes or []) if str(item).strip()}) or allowed_scopes
     disallowed_scopes = sorted(scope for scope in requested_scopes if scope not in allowed_scopes)
@@ -625,6 +659,10 @@ def set_shared_trust_policy(
     allow_remote_workers: Optional[bool] = None,
     allow_sync_imports_from_peers: Optional[bool] = None,
     default_peer_role: Optional[str] = None,
+    max_peer_role: Optional[str] = None,
+    require_secure_control_plane: Optional[bool] = None,
+    allowed_control_plane_hosts: Optional[List[str]] = None,
+    allowed_peer_capabilities: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     require_access_role(workspace, actor_id, OPERATOR_ACTION_ROLES, "update shared-workspace trust policy")
     payload = ensure_shared_workspace_manifest(workspace)
@@ -640,6 +678,20 @@ def set_shared_trust_policy(
                 f"Unsupported default peer role '{default_peer_role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
             )
         trust_policy["default_peer_role"] = normalized_role
+    if max_peer_role is not None:
+        normalized_max_role = max_peer_role.strip().lower()
+        if normalized_max_role not in VALID_ACCESS_ROLES:
+            raise SharingError(
+                f"Unsupported max peer role '{max_peer_role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
+            )
+        trust_policy["max_peer_role"] = normalized_max_role
+    if require_secure_control_plane is not None:
+        trust_policy["require_secure_control_plane"] = bool(require_secure_control_plane)
+    if allowed_control_plane_hosts is not None:
+        trust_policy["allowed_control_plane_hosts"] = _normalize_control_plane_hosts(allowed_control_plane_hosts)
+    if allowed_peer_capabilities is not None:
+        trust_policy["allowed_peer_capabilities"] = _sorted_capabilities(allowed_peer_capabilities)
+    _validate_shared_workspace_payload_against_trust_policy(payload, trust_policy)
     payload["trust_policy"] = trust_policy
     payload["updated_at"] = utc_timestamp()
     _write_shared_workspace_manifest(workspace, payload)
@@ -774,6 +826,10 @@ def default_shared_workspace_manifest(workspace: "Workspace") -> Dict[str, objec
             "allow_remote_workers": True,
             "allow_sync_imports_from_peers": True,
             "default_peer_role": "viewer",
+            "max_peer_role": "operator",
+            "require_secure_control_plane": True,
+            "allowed_control_plane_hosts": [],
+            "allowed_peer_capabilities": [],
         },
         "peers": [],
         "attached_remotes": [],
@@ -797,6 +853,10 @@ def _normalize_shared_workspace_manifest(workspace: "Workspace", payload: Dict[s
             "allow_remote_workers": bool(trust_policy.get("allow_remote_workers", True)),
             "allow_sync_imports_from_peers": bool(trust_policy.get("allow_sync_imports_from_peers", True)),
             "default_peer_role": str(trust_policy.get("default_peer_role", "viewer")).strip().lower() or "viewer",
+            "max_peer_role": str(trust_policy.get("max_peer_role", "operator")).strip().lower() or "operator",
+            "require_secure_control_plane": bool(trust_policy.get("require_secure_control_plane", True)),
+            "allowed_control_plane_hosts": _normalize_control_plane_hosts(list(trust_policy.get("allowed_control_plane_hosts", []))),
+            "allowed_peer_capabilities": _sorted_capabilities(list(trust_policy.get("allowed_peer_capabilities", []))),
         },
         "peers": _sorted_peers([dict(item) for item in list(payload.get("peers", []))]),
         "attached_remotes": _sorted_attached_remotes(
@@ -960,6 +1020,101 @@ def _normalize_pull_subscription(payload: Dict[str, object]) -> Dict[str, object
     }
 
 
+def _normalize_control_plane_hosts(hosts: List[str]) -> List[str]:
+    return sorted(
+        {
+            str(host).strip().lower()
+            for host in hosts
+            if str(host).strip()
+        }
+    )
+
+
+def _validate_peer_role_against_policy(role: str, trust_policy: Dict[str, object]) -> None:
+    normalized_role = str(role).strip().lower()
+    max_role = str(trust_policy.get("max_peer_role", "operator")).strip().lower() or "operator"
+    if normalized_role not in ROLE_RANKS:
+        raise SharingError(
+            f"Unsupported peer role '{role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
+        )
+    if max_role not in ROLE_RANKS:
+        raise SharingError(
+            f"Unsupported max peer role '{max_role}'. Expected one of: {', '.join(VALID_ACCESS_ROLES)}."
+        )
+    if ROLE_RANKS[normalized_role] > ROLE_RANKS[max_role]:
+        raise SharingError(
+            f"Peer role '{normalized_role}' exceeds shared-workspace max_peer_role '{max_role}'."
+        )
+
+
+def _validate_peer_capabilities_against_policy(
+    capabilities: List[str],
+    trust_policy: Dict[str, object],
+    context_label: str,
+) -> None:
+    allowed_capabilities = _sorted_capabilities(list(trust_policy.get("allowed_peer_capabilities", [])))
+    if not allowed_capabilities:
+        return
+    requested_capabilities = _sorted_capabilities(capabilities)
+    disallowed = [capability for capability in requested_capabilities if capability not in allowed_capabilities]
+    if disallowed:
+        raise SharingError(
+            f"{context_label.capitalize()} capabilities {', '.join(disallowed)} are not in the allowed peer capability list."
+        )
+
+
+def _validate_control_plane_url_against_policy(
+    url: str,
+    trust_policy: Dict[str, object],
+    context_label: str,
+) -> None:
+    normalized_url = str(url).strip()
+    parsed = urlparse(normalized_url)
+    host = (parsed.hostname or "").strip().lower()
+    scheme = (parsed.scheme or "").strip().lower()
+    if scheme not in {"http", "https"} or not host:
+        raise SharingError(f"{context_label.capitalize()} must be an http or https URL.")
+    require_secure = bool(trust_policy.get("require_secure_control_plane", True))
+    if require_secure and scheme != "https" and host not in {"localhost", "127.0.0.1", "::1"}:
+        raise SharingError(f"{context_label.capitalize()} requires https under the current trust policy.")
+    allowed_hosts = _normalize_control_plane_hosts(list(trust_policy.get("allowed_control_plane_hosts", [])))
+    if allowed_hosts and host not in allowed_hosts:
+        raise SharingError(
+            f"{context_label.capitalize()} host '{host}' is not in the allowed control-plane host list."
+        )
+
+
+def _validate_shared_workspace_payload_against_trust_policy(
+    payload: Dict[str, object],
+    trust_policy: Dict[str, object],
+) -> None:
+    published_url = str(payload.get("published_control_plane_url", "")).strip()
+    if published_url:
+        _validate_control_plane_url_against_policy(
+            published_url,
+            trust_policy,
+            context_label="published control-plane URL",
+        )
+    for peer in [dict(item) for item in list(payload.get("peers", []))]:
+        _validate_peer_role_against_policy(str(peer.get("role", "viewer")), trust_policy)
+        _validate_peer_capabilities_against_policy(
+            list(peer.get("capabilities", [])),
+            trust_policy,
+            context_label=f"shared peer '{peer.get('peer_id', '')}'",
+        )
+    for remote in [dict(item) for item in list(payload.get("attached_remotes", []))]:
+        _validate_control_plane_url_against_policy(
+            str(remote.get("server_url", "")),
+            trust_policy,
+            context_label=f"attached remote '{remote.get('remote_id', '')}'",
+        )
+        _validate_peer_capabilities_against_policy(
+            list(remote.get("capabilities", [])),
+            trust_policy,
+            context_label=f"attached remote '{remote.get('remote_id', '')}'",
+        )
+
+
 def _revoke_peer_tokens(workspace: "Workspace", principal_id: str, reason: str) -> None:
     from cognisync.control_plane import revoke_control_plane_tokens_for_principal
 
@@ -1027,6 +1182,16 @@ def _upsert_attached_remote(
     workspace_id = str(normalized_bundle.get("workspace_id", ""))
     remote_id = f"{workspace_id}:{principal_id}"
     payload = ensure_shared_workspace_manifest(workspace)
+    _validate_control_plane_url_against_policy(
+        str(normalized_bundle.get("server_url", "")),
+        dict(payload.get("trust_policy", {})),
+        context_label=f"attached remote '{remote_id}'",
+    )
+    _validate_peer_capabilities_against_policy(
+        list(normalized_bundle.get("capabilities", [])),
+        dict(payload.get("trust_policy", {})),
+        context_label=f"attached remote '{remote_id}'",
+    )
     remotes = {str(item.get("remote_id", "")): dict(item) for item in list(payload.get("attached_remotes", []))}
     existing = remotes.get(remote_id) or {}
     if require_existing and not existing:

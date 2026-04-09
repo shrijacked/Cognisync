@@ -934,6 +934,20 @@ def cmd_share_set_policy(args: argparse.Namespace) -> int:
             allow_remote_workers=allow_remote_workers,
             allow_sync_imports_from_peers=allow_sync_imports,
             default_peer_role=args.default_peer_role,
+            max_peer_role=args.max_peer_role,
+            require_secure_control_plane=(
+                True if args.require_secure_control_plane else False if args.allow_insecure_control_plane else None
+            ),
+            allowed_control_plane_hosts=(
+                [] if args.clear_allowed_control_plane_hosts else list(args.allow_control_plane_host or [])
+            )
+            if args.clear_allowed_control_plane_hosts or args.allow_control_plane_host
+            else None,
+            allowed_peer_capabilities=(
+                [] if args.clear_allowed_peer_capabilities else list(args.allow_peer_capability or [])
+            )
+            if args.clear_allowed_peer_capabilities or args.allow_peer_capability
+            else None,
         )
     except (AccessError, SharingError) as error:
         print(str(error), file=sys.stderr)
@@ -943,6 +957,16 @@ def cmd_share_set_policy(args: argparse.Namespace) -> int:
     print(f"allow_remote_workers: {trust_policy.get('allow_remote_workers', True)}")
     print(f"allow_sync_imports_from_peers: {trust_policy.get('allow_sync_imports_from_peers', True)}")
     print(f"default_peer_role: {trust_policy.get('default_peer_role', 'viewer')}")
+    print(f"max_peer_role: {trust_policy.get('max_peer_role', 'operator')}")
+    print(f"require_secure_control_plane: {trust_policy.get('require_secure_control_plane', True)}")
+    print(
+        "allowed_control_plane_hosts: "
+        + ", ".join(list(trust_policy.get("allowed_control_plane_hosts", [])) or ["any"])
+    )
+    print(
+        "allowed_peer_capabilities: "
+        + ", ".join(list(trust_policy.get("allowed_peer_capabilities", [])) or ["any"])
+    )
     print(f"Shared-workspace manifest: {workspace.shared_workspace_manifest_path}")
     return 0
 
@@ -2733,6 +2757,13 @@ def build_parser() -> argparse.ArgumentParser:
     share_set_policy_parser.add_argument("--allow-sync-imports", action="store_true")
     share_set_policy_parser.add_argument("--deny-sync-imports", action="store_true")
     share_set_policy_parser.add_argument("--default-peer-role", default=None, choices=VALID_ACCESS_ROLES)
+    share_set_policy_parser.add_argument("--max-peer-role", default=None, choices=VALID_ACCESS_ROLES)
+    share_set_policy_parser.add_argument("--require-secure-control-plane", action="store_true")
+    share_set_policy_parser.add_argument("--allow-insecure-control-plane", action="store_true")
+    share_set_policy_parser.add_argument("--allow-control-plane-host", action="append", default=[])
+    share_set_policy_parser.add_argument("--clear-allowed-control-plane-hosts", action="store_true")
+    share_set_policy_parser.add_argument("--allow-peer-capability", action="append", default=[])
+    share_set_policy_parser.add_argument("--clear-allowed-peer-capabilities", action="store_true")
     share_set_policy_parser.add_argument("--actor-id", default=DEFAULT_LOCAL_OPERATOR_ID)
     share_set_policy_parser.set_defaults(func=cmd_share_set_policy)
 
