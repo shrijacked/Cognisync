@@ -913,6 +913,160 @@ class RuntimeContractsTests(unittest.TestCase):
                     continue
                 self.assertEqual(record["route_source"], "plan_default")
 
+    def test_research_step_dispatch_can_queue_hosted_jobs_and_run_them_through_jobs_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Research Step Dispatch Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+
+            dispatch_stdout = io.StringIO()
+            with redirect_stdout(dispatch_stdout):
+                exit_code = main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Queued 4 research step job(s)", dispatch_stdout.getvalue())
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            dispatch_manifest_path = workspace.root / checkpoint_payload["dispatch_history"][-1]
+            dispatch_manifest = json.loads(dispatch_manifest_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(dispatch_manifest["dispatch_mode"], "hosted")
+            self.assertEqual(
+                dispatch_manifest["queued_steps"],
+                ["build-working-set", "build-paper-matrix", "capture-open-questions", "execute-profile"],
+            )
+            self.assertEqual(dispatch_manifest["status"], "queued")
+
+            queue_payload = json.loads(workspace.job_queue_manifest_path.read_text(encoding="utf-8"))
+            research_step_jobs = [job for job in queue_payload["jobs"] if job["job_type"] == "research_step"]
+            self.assertEqual(len(research_step_jobs), 4)
+            self.assertTrue(all(job["status"] == "queued" for job in research_step_jobs))
+            self.assertTrue(all(job["worker_capability"] == "research" for job in research_step_jobs))
+            job_manifest_payloads = [
+                json.loads((workspace.job_manifests_dir / f"{job['job_id']}.json").read_text(encoding="utf-8"))
+                for job in research_step_jobs
+            ]
+            params_by_step = {job["parameters"]["step_id"]: job["parameters"] for job in job_manifest_payloads}
+            self.assertEqual(params_by_step["build-working-set"]["assignment_id"], "assignment-build-working-set")
+            self.assertEqual(params_by_step["execute-profile"]["assignment_id"], "assignment-execute-profile")
+            self.assertEqual(params_by_step["execute-profile"]["planned_review_roles"], ["reviewer", "operator"])
+            self.assertEqual(params_by_step["execute-profile"]["route_source"], "plan_default")
+
+            list_stdout = io.StringIO()
+            with redirect_stdout(list_stdout):
+                self.assertEqual(
+                    main(
+                        [
+                            "research-step",
+                            "list",
+                            "--workspace",
+                            str(root),
+                            "--run",
+                            "latest",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertIn("job-status=queued", list_stdout.getvalue())
+
+            for _ in range(4):
+                self.assertEqual(
+                    main(
+                        [
+                            "jobs",
+                            "run-next",
+                            "--workspace",
+                            str(root),
+                            "--worker-id",
+                            "research-worker",
+                            "--capability",
+                            "research",
+                        ]
+                    ),
+                    0,
+                )
+
+            updated_queue_payload = json.loads(workspace.job_queue_manifest_path.read_text(encoding="utf-8"))
+            completed_jobs = [job for job in updated_queue_payload["jobs"] if job["job_type"] == "research_step"]
+            self.assertEqual(len(completed_jobs), 4)
+            self.assertTrue(all(job["status"] == "completed" for job in completed_jobs))
+
+            updated_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            steps = {item["step_id"]: item for item in updated_payload["steps"]}
+            self.assertEqual(steps["build-working-set"]["execution_status"], "completed")
+            self.assertEqual(steps["build-paper-matrix"]["execution_status"], "completed")
+            self.assertEqual(steps["capture-open-questions"]["execution_status"], "completed")
+            self.assertEqual(steps["execute-profile"]["execution_status"], "completed")
+            self.assertEqual(steps["execute-profile"]["review_status"], "pending_review")
+            self.assertEqual(
+                updated_payload["assignment_statuses"]["assignment-execute-profile"]["status"],
+                "pending_review",
+            )
+
+            answer_path = workspace.root / manifest["answer_path"]
+            self.assertTrue(answer_path.exists())
+            self.assertIn("Agent loops use memory", answer_path.read_text(encoding="utf-8"))
+
+            updated_dispatch_manifest = json.loads(dispatch_manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated_dispatch_manifest["status"], "completed")
+            self.assertEqual(
+                updated_dispatch_manifest["executed_steps"],
+                ["build-working-set", "build-paper-matrix", "capture-open-questions", "execute-profile"],
+            )
+            updated_results = {item["step_id"]: item for item in updated_dispatch_manifest["results"]}
+            self.assertEqual(updated_results["build-working-set"]["status"], "completed")
+            self.assertEqual(updated_results["execute-profile"]["status"], "completed")
+            self.assertEqual(updated_results["execute-profile"]["profile"], "alpha")
+
     def test_research_resume_backfills_missing_agent_plan_and_assignment_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

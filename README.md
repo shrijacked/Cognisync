@@ -219,6 +219,7 @@ That run-scoped workspace is now directly operable too:
 cognisync research-step list --run latest
 cognisync research-step run --run latest --step build-paper-matrix --profile codex
 cognisync research-step dispatch --run latest --default-profile codex --profile-route build-paper-matrix=gemini
+cognisync research-step dispatch --run latest --default-profile codex --hosted
 cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1
 ```
 
@@ -226,14 +227,14 @@ cognisync research-step review --run latest --step build-paper-matrix --status a
 
 - `list` shows every step with planned, execution, and review status plus its assignment id, agent role, worker capability, review path, and planned adapter default
 - `run` executes one step packet through any configured adapter profile and writes the step artifact back into the research-job workspace
-- `dispatch` executes all eligible note-building steps in dependency order, honors assignment-level adapter defaults when present, lets you override specific step ids with `--profile-route`, and records a dispatch manifest under the research job workspace
+- `dispatch` either executes eligible note-building steps locally in dependency order or queues the remote-eligible research steps as hosted jobs with `--hosted`, always honoring assignment-level adapter defaults unless you override specific step ids with `--profile-route`
 - `review` records approval or change-request state on the same checkpoint manifest so later resumes or exports can see which intermediate artifacts were trusted
 
-The new agent-plan artifact makes the multi-agent intent explicit without pretending the hosted runtime is finished yet:
+The agent-plan artifact now makes the multi-agent intent explicit and drives the first hosted research-step runtime:
 
 - each eligible research step now maps to a stable assignment with an agent role, worker capability, validation rule set, and review path
 - checkpoints keep step-level execution and review state linked back to those assignment ids
-- hosted remote research-step execution is still a later milestone; this slice only formalizes the planning and assignment contract
+- `research-step dispatch --hosted` queues note-building and synthesis assignments as first-class `research_step` jobs for remote workers, while validation and filing remain local-only in this milestone
 
 Research now supports orchestration profiles too:
 
@@ -413,7 +414,7 @@ That layer keeps the same filesystem-first contract:
 - the same served control plane now also accepts peer invites, peer acceptance, peer bundle issuance, attached-remote attach and refresh actions, and attached-remote suspend and remove actions over HTTP, so remote operator handoffs can be prepared and tightened through the hosted-alpha surface too
 - the same served control plane now also accepts peer role updates, suspension, and removal over HTTP, so shared-workspace trust can be tightened remotely instead of only granted
 - connector registry state is now readable at `/api/connectors`, and operator tokens can add connectors, manage subscriptions, or trigger `/api/connectors/sync` and `/api/connectors/sync-all` remotely through the same hosted-alpha surface
-- job queues are no longer read-only over HTTP: operator tokens can now enqueue research, compile, lint, maintain, ingest, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`
+- job queues are no longer read-only over HTTP: operator tokens can now enqueue research, research-step, compile, lint, maintain, ingest, connector, and peer-scoped sync-export jobs through `/api/jobs/enqueue/...`, including `/api/jobs/enqueue/research-step` for hosted step execution
 - hosted job mutation endpoints stay role-gated too: matching `jobs.*` scopes are not enough on their own, because `/api/jobs/enqueue/...`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/jobs/run-next` also resolve back through `.cognisync/access.json` and require an operator principal
 - hosted detached-worker endpoints now also exist: `/api/jobs/dispatch-next`, `/api/jobs/complete`, and `/api/jobs/fail` let a mirrored worker claim work, execute it remotely, and return result artifacts plus sync history over the same scoped control-plane surface
 - scheduler subscriptions are remotely manageable too: `GET /api/scheduler/jobs` and `POST /api/scheduler/jobs/research|compile|lint|maintain|remove` expose the recurring-job layer over the same token-backed surface

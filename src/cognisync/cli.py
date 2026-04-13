@@ -2579,12 +2579,16 @@ def cmd_research_step_dispatch(args: argparse.Namespace) -> int:
             default_profile=args.default_profile,
             profile_routes=_parse_profile_routes(args.profile_route),
             retry_failed=args.retry_failed,
+            hosted=bool(args.hosted),
         )
     except ResearchError as error:
         print(str(error), file=sys.stderr)
         return 2
 
-    print(f"Executed {len(result.executed_steps)} research step(s)")
+    if result.dispatch_mode == "hosted":
+        print(f"Queued {len(result.queued_steps)} research step job(s)")
+    else:
+        print(f"Executed {len(result.executed_steps)} research step(s)")
     print(f"Skipped {len(result.skipped_steps)} research step(s)")
     if result.failed_step is not None:
         print(f"Failed at step {result.failed_step}", file=sys.stderr)
@@ -3647,6 +3651,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--retry-failed",
         action="store_true",
         help="Retry steps whose previous execution status is failed.",
+    )
+    research_step_dispatch_parser.add_argument(
+        "--hosted",
+        action="store_true",
+        help="Queue remote-eligible research steps as hosted jobs instead of executing them locally.",
     )
     research_step_dispatch_parser.set_defaults(func=cmd_research_step_dispatch)
 

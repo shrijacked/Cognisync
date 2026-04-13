@@ -1527,6 +1527,127 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_control_plane_can_enqueue_research_step_jobs_over_http(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Research Step Queue Workspace")
+            (root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+
+            operator_token_path = Path(tmp) / "operator-token.json"
+            reviewer_token_path = Path(tmp) / "reviewer-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(operator_token_path),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "reviewer-1",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(reviewer_token_path),
+                    ]
+                ),
+                0,
+            )
+            operator_token = json.loads(operator_token_path.read_text(encoding="utf-8"))["token"]
+            reviewer_token = json.loads(reviewer_token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/research-step",
+                    body=json.dumps(
+                        {
+                            "run": "latest",
+                            "step_id": "build-paper-matrix",
+                            "profile_name": "alpha",
+                            "route_source": "cli_override",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {operator_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["job"]["job_type"], "research_step")
+                self.assertEqual(payload["job"]["worker_capability"], "research")
+                self.assertEqual(payload["job"]["parameters"]["step_id"], "build-paper-matrix")
+                self.assertEqual(payload["job"]["parameters"]["assignment_id"], "assignment-build-paper-matrix")
+                self.assertEqual(payload["job"]["parameters"]["planned_review_roles"], ["reviewer"])
+                self.assertEqual(payload["job"]["parameters"]["route_source"], "cli_override")
+                connection.close()
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/jobs/enqueue/research-step",
+                    body=json.dumps(
+                        {
+                            "run": "latest",
+                            "step_id": "build-paper-matrix",
+                            "profile_name": "alpha",
+                        }
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {reviewer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(response.status, 403)
+                self.assertIn("jobs.run", payload["error"])
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_control_plane_job_endpoints_still_require_operator_role(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
@@ -2944,6 +3065,142 @@ class ControlPlaneTests(unittest.TestCase):
 
                 sync_history = json.loads((server_root / ".cognisync" / "sync" / "history.json").read_text(encoding="utf-8"))
                 self.assertGreaterEqual(sync_history["operation_counts"].get("import", 0), 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_remote_worker_can_execute_hosted_research_step_jobs_in_a_mirrored_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server_root = Path(tmp) / "server-workspace"
+            mirror_root = Path(tmp) / "mirror-workspace"
+            workspace = Workspace(server_root)
+            workspace.initialize(name="Mirrored Hosted Research Step Workspace")
+            (server_root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (server_root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(server_root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(server_root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                ),
+                0,
+            )
+
+            initial_bundle = export_sync_bundle(workspace)
+            mirror_workspace = Workspace(mirror_root)
+            mirror_workspace.initialize(name="Mirrored Hosted Research Step Mirror")
+            import_sync_bundle_archive(
+                mirror_workspace,
+                encode_sync_bundle_archive(initial_bundle.directory),
+            )
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(server_root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.claim",
+                        "--scope",
+                        "jobs.heartbeat",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = run_remote_worker(
+                    server_url=f"http://{host}:{port}",
+                    token=token_value,
+                    worker_id="remote-research",
+                    max_jobs=4,
+                    worker_capabilities=["research"],
+                    workspace_root=mirror_root,
+                )
+
+                self.assertEqual(worker_result.processed_count, 4)
+                self.assertEqual(worker_result.completed_count, 4)
+
+                run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+                manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+                checkpoints_path = workspace.root / manifest["checkpoints_path"]
+                checkpoints_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+                steps = {item["step_id"]: item for item in checkpoints_payload["steps"]}
+                self.assertEqual(steps["build-working-set"]["execution_status"], "completed")
+                self.assertEqual(steps["build-paper-matrix"]["execution_status"], "completed")
+                self.assertEqual(steps["capture-open-questions"]["execution_status"], "completed")
+                self.assertEqual(steps["execute-profile"]["execution_status"], "completed")
+                self.assertTrue((server_root / manifest["answer_path"]).exists())
+                self.assertTrue((mirror_root / manifest["answer_path"]).exists())
+
+                queue_payload = json.loads((server_root / ".cognisync" / "jobs" / "queue.json").read_text(encoding="utf-8"))
+                completed_jobs = [job for job in queue_payload["jobs"] if job["job_type"] == "research_step"]
+                self.assertEqual(len(completed_jobs), 4)
+                self.assertTrue(all(job["status"] == "completed" for job in completed_jobs))
+
+                dispatch_manifest_path = server_root / checkpoints_payload["dispatch_history"][-1]
+                dispatch_manifest = json.loads(dispatch_manifest_path.read_text(encoding="utf-8"))
+                self.assertEqual(dispatch_manifest["dispatch_mode"], "hosted")
+                self.assertEqual(dispatch_manifest["status"], "completed")
+                self.assertEqual(
+                    dispatch_manifest["executed_steps"],
+                    ["build-working-set", "build-paper-matrix", "capture-open-questions", "execute-profile"],
+                )
             finally:
                 server.shutdown()
                 server.server_close()

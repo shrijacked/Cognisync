@@ -260,6 +260,7 @@ The command family:
 9. requires an operator principal for hosted job mutation endpoints even when a token carries matching `jobs.*` scopes, so HTTP queue execution does not bypass the workspace roster
 10. carries worker capability routing through `/api/jobs/run-next`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/workers`, so remote workers can advertise what they handle, stay visible while polling, and expose their current job while the hosted queue respects that routing
 11. lets operators release a stale worker and immediately requeue its active lease, so hosted recovery can happen on demand instead of waiting for a lease timeout to expire
+12. exposes hosted research-step queueing through the same surface, so remote-eligible research assignments can be enqueued either by `research-step dispatch --hosted` or directly through `/api/jobs/enqueue/research-step` without inventing a second orchestration path
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
 
@@ -277,7 +278,7 @@ The served API now covers a real remote review surface too:
 - `POST /api/share/set-policy`, `subscribe-sync`, and `unsubscribe-sync` let operator tokens manage shared-workspace trust policy and scheduled peer exports remotely
 - `POST /api/share/invite-peer`, `accept-peer`, `issue-peer-bundle`, `peers/role`, `peers/suspend`, and `peers/remove` let operator tokens prepare or tighten remote peer handoffs over HTTP too
 - `GET /api/connectors` plus `POST /api/connectors/add`, `subscribe`, `unsubscribe`, `sync`, and `sync-all` let the hosted-alpha layer inspect and execute connector work without falling back to a local shell
-- `POST /api/jobs/enqueue/research|compile|lint|maintain|ingest-url|ingest-repo|ingest-sitemap|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
+- `POST /api/jobs/enqueue/research|research-step|compile|lint|maintain|ingest-url|ingest-repo|ingest-sitemap|connector-sync|connector-sync-all|sync-export` lets operator tokens submit new work into the manifest-backed queue remotely
 - `POST /api/sync/export` and `POST /api/sync/import` let operator tokens exchange inline sync archives over HTTP while still honoring accepted-peer trust policy on import
 - peer-scoped sync handoffs now require the accepted peer to declare `sync.import`, so `sync export --for-peer`, `sync import --from-peer`, and their HTTP equivalents remain explicit capability-based trust decisions instead of role-only defaults
 - `POST /api/jobs/run-next`, `claim-next`, and `heartbeat` now also accept `worker_capabilities`, and `GET /api/workers` persists those declared capabilities in the derived worker registry
@@ -689,6 +690,7 @@ Supported paths in this release:
 - `cognisync research-step list --run latest`
 - `cognisync research-step run --run latest --step build-paper-matrix --profile codex`
 - `cognisync research-step dispatch --run latest --default-profile codex --profile-route build-paper-matrix=gemini`
+- `cognisync research-step dispatch --run latest --default-profile codex --hosted`
 - `cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1`
 
 The command family:
@@ -696,19 +698,23 @@ The command family:
 1. reads the existing research run manifest from `.cognisync/runs/`
 2. resolves the explicit agent-plan and per-step execution packets from the research-job workspace
 3. writes step-level execution state, output paths, review decisions, and assignment-linked status back into `checkpoints.json`
-4. can route eligible note-building steps to different adapter profiles in one `dispatch` call while respecting step dependencies and any assignment-level default profile already recorded in the agent plan
+4. can route eligible note-building steps to different adapter profiles in one local `dispatch` call while respecting step dependencies and any assignment-level default profile already recorded in the agent plan
 5. leaves the filesystem canonical, so remote workers, humans, and later automation all see the same operator history
-6. still stops short of first-class hosted remote research-step execution; this slice formalizes the assignment contract, not the distributed executor
+6. can also queue remote-eligible note-building and synthesis assignments as first-class hosted `research_step` jobs through `dispatch --hosted`, with the same assignment metadata and adapter defaults carried into the queue manifests
+7. intentionally keeps deterministic validation and filing steps local-only in this milestone, so the hosted layer handles research generation first while the workspace remains the canonical validator and filer
 
 ```mermaid
 flowchart LR
     A["research writes plan, notes, packets, and checkpoints"] --> B["research-step list shows per-step execution and review state"]
     B --> C["research-step run executes one packet through an adapter profile"]
     B --> C2["research-step dispatch routes multiple eligible steps across adapter profiles"]
+    B --> C3["research-step dispatch --hosted queues remote-eligible research_step jobs"]
     C --> D["checkpoint stores execution profile, output path, and executed_at"]
     C2 --> D2["dispatch manifest records executed, skipped, and failed steps"]
+    C3 --> D3["control-plane and remote workers execute queued research_step jobs"]
     D --> E["research-step review records approved or changes_requested"]
     D2 --> E
+    D3 --> E
     E --> F["resume, export, and future orchestrators reuse the same checkpoint state"]
 ```
 

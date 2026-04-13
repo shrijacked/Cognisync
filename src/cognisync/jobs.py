@@ -14,9 +14,14 @@ from cognisync.ingest import ingest_repo, ingest_sitemap, ingest_url
 from cognisync.knowledge_surfaces import append_workspace_log
 from cognisync.linter import lint_snapshot
 from cognisync.maintenance import run_maintenance_cycle
-from cognisync.manifests import write_run_manifest, write_workspace_manifests
+from cognisync.manifests import read_json_manifest, write_run_manifest, write_workspace_manifests
 from cognisync.notifications import write_notifications_manifest
-from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, run_research_cycle
+from cognisync.research import (
+    DEFAULT_RESEARCH_JOB_PROFILE,
+    run_research_cycle,
+    run_research_step,
+    update_research_step_dispatch_record,
+)
 from cognisync.scanner import scan_workspace
 from cognisync.sharing import pull_attached_remote
 from cognisync.sync import export_sync_bundle, import_sync_bundle_archive
@@ -31,6 +36,7 @@ class JobError(RuntimeError):
 
 WORKER_CAPABILITY_BY_JOB_TYPE = {
     "research": "research",
+    "research_step": "research",
     "improve_research": "research",
     "compile": "workspace",
     "lint": "workspace",
@@ -125,6 +131,47 @@ def enqueue_research_job(
         "job_profile": job_profile,
     }
     return _enqueue_job(workspace, "research", question, parameters, requested_by=requested_by)
+
+
+def enqueue_research_step_job(
+    workspace: Workspace,
+    run_manifest_path: str,
+    step_id: str,
+    assignment_id: str,
+    profile_name: str,
+    planned_worker_capability: str,
+    planned_review_roles: Optional[List[str]] = None,
+    route_source: str = "plan_default",
+    dispatch_manifest_path: Optional[str] = None,
+    requested_by: Optional[Dict[str, object]] = None,
+) -> Path:
+    normalized_step_id = str(step_id).strip()
+    if not normalized_step_id:
+        raise JobError("A research step id is required.")
+    normalized_assignment_id = str(assignment_id).strip()
+    if not normalized_assignment_id:
+        raise JobError("A research assignment id is required.")
+    normalized_profile_name = str(profile_name).strip()
+    if not normalized_profile_name:
+        raise JobError("A profile name is required for research-step jobs.")
+    parameters = {
+        "run_manifest_path": str(run_manifest_path).strip(),
+        "step_id": normalized_step_id,
+        "assignment_id": normalized_assignment_id,
+        "profile_name": normalized_profile_name,
+        "planned_worker_capability": str(planned_worker_capability).strip() or "research",
+        "planned_review_roles": [str(item) for item in list(planned_review_roles or []) if str(item).strip()],
+        "route_source": str(route_source).strip() or "plan_default",
+        "dispatch_manifest_path": str(dispatch_manifest_path).strip() if dispatch_manifest_path else None,
+    }
+    return _enqueue_job(
+        workspace,
+        "research_step",
+        normalized_step_id,
+        parameters,
+        requested_by=requested_by,
+        worker_capability=str(planned_worker_capability).strip() or "research",
+    )
 
 
 def enqueue_improve_research_job(
@@ -818,6 +865,22 @@ def complete_dispatched_job(
         snapshot = workspace.refresh_index()
         write_workspace_manifests(workspace, snapshot)
 
+    if str(job.get("job_type", "")) == "research_step":
+        dispatch_manifest_path = _optional_string(final_result.get("dispatch_manifest_ref"))
+        if dispatch_manifest_path:
+            returncode = _optional_int(final_result.get("returncode"))
+            update_research_step_dispatch_record(
+                workspace,
+                dispatch_manifest_ref=dispatch_manifest_path,
+                job_id=job_id,
+                step_id=_optional_string(final_result.get("step_id")) or str(dict(job.get("parameters", {})).get("step_id", "")),
+                status="completed" if returncode == 0 else "failed",
+                profile_name=_optional_string(final_result.get("profile_name")),
+                output_path=_optional_string(final_result.get("output_path")),
+                returncode=returncode,
+                error_message=_optional_string(final_result.get("stderr")) if returncode not in {None, 0} else None,
+            )
+
     job = _update_job_manifest(
         manifest_path,
         status="completed",
@@ -846,6 +909,16 @@ def fail_dispatched_job(
     manifest_path = workspace.job_manifests_dir / f"{job_id}.json"
     job = _read_job_by_id(workspace, job_id)
     _require_job_worker(job, normalized_worker_id)
+    if str(job.get("job_type", "")) == "research_step":
+        update_research_step_dispatch_record(
+            workspace,
+            dispatch_manifest_ref=_optional_string(dict(job.get("parameters", {})).get("dispatch_manifest_path")),
+            job_id=job_id,
+            step_id=str(dict(job.get("parameters", {})).get("step_id", "")),
+            status="failed",
+            profile_name=_optional_string(dict(job.get("parameters", {})).get("profile_name")),
+            error_message=error_message,
+        )
     job = _update_job_manifest(
         manifest_path,
         status="failed",
@@ -1186,6 +1259,39 @@ def _execute_job(workspace: Workspace, job: Dict[str, object]) -> Dict[str, obje
             "status": result.status,
             "warning_count": result.warning_count,
         }
+    if job_type == "research_step":
+        result = run_research_step(
+            workspace,
+            resume=str(parameters.get("run_manifest_path", "")),
+            step_id=str(parameters.get("step_id", "")),
+            profile_name=str(parameters.get("profile_name", "")),
+        )
+        run_manifest = read_json_manifest(result.run_manifest_path)
+        plan_path = _optional_string(run_manifest.get("plan_path"))
+        plan_json_path = _optional_string(run_manifest.get("plan_json_path"))
+        agent_plan_path = _optional_string(run_manifest.get("agent_plan_path"))
+        agent_plan_markdown_path = None
+        if agent_plan_path:
+            agent_plan_markdown_path = str(Path(agent_plan_path).with_suffix(".md"))
+        return {
+            "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+            "checkpoints_path": workspace.relative_path(result.checkpoints_path),
+            "step_id": result.step_id,
+            "assignment_id": _optional_string(parameters.get("assignment_id")),
+            "profile_name": result.profile_name,
+            "output_path": workspace.relative_path(result.output_path),
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "plan_path": plan_path,
+            "plan_json_path": plan_json_path,
+            "agent_plan_path": agent_plan_path,
+            "agent_plan_markdown_path": agent_plan_markdown_path,
+            "dispatch_manifest_ref": _optional_string(parameters.get("dispatch_manifest_path")),
+            "planned_worker_capability": _optional_string(parameters.get("planned_worker_capability")),
+            "planned_review_roles": [str(item) for item in list(parameters.get("planned_review_roles", []))],
+            "route_source": _optional_string(parameters.get("route_source")) or "plan_default",
+        }
     if job_type == "improve_research":
         result = improve_research_loop(
             workspace,
@@ -1211,6 +1317,7 @@ def _enqueue_job(
     parameters: Dict[str, object],
     retry_of_job_id: Optional[str] = None,
     requested_by: Optional[Dict[str, object]] = None,
+    worker_capability: Optional[str] = None,
 ) -> Path:
     workspace.job_manifests_dir.mkdir(parents=True, exist_ok=True)
     job_id = _job_id(job_type, title_seed)
@@ -1219,7 +1326,7 @@ def _enqueue_job(
         "schema_version": 1,
         "job_id": job_id,
         "job_type": job_type,
-        "worker_capability": _job_worker_capability(job_type),
+        "worker_capability": _optional_string(worker_capability) or _job_worker_capability(job_type),
         "title": title_seed,
         "status": "queued",
         "created_at": utc_timestamp(),
@@ -1320,6 +1427,21 @@ def _write_queue_manifest(workspace: Workspace) -> Path:
                 "lease_expires_at": str(dict(job.get("lease", {})).get("lease_expires_at", "")),
                 "last_heartbeat_at": str(dict(job.get("lease", {})).get("last_heartbeat_at", "")),
                 "retry_of_job_id": str(job.get("retry_of_job_id", "") or ""),
+                "step_id": (
+                    str(dict(job.get("parameters", {})).get("step_id", ""))
+                    if str(job.get("job_type", "")) == "research_step"
+                    else ""
+                ),
+                "assignment_id": (
+                    str(dict(job.get("parameters", {})).get("assignment_id", ""))
+                    if str(job.get("job_type", "")) == "research_step"
+                    else ""
+                ),
+                "profile_name": (
+                    str(dict(job.get("parameters", {})).get("profile_name", ""))
+                    if str(job.get("job_type", "")) == "research_step"
+                    else ""
+                ),
             }
             for job in jobs
         ],
@@ -1356,6 +1478,15 @@ def _optional_string(value: object) -> Optional[str]:
     if not normalized or normalized.lower() == "none":
         return None
     return normalized
+
+
+def _optional_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _with_artifact_paths(result_payload: Dict[str, object]) -> Dict[str, object]:

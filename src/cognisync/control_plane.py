@@ -81,7 +81,7 @@ from cognisync.maintenance import (
 from cognisync.notifications import write_notifications_manifest
 from cognisync.review_queue import build_review_queue
 from cognisync.review_state import read_review_actions
-from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE
+from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, enqueue_research_step_job_for_run
 from cognisync.scanner import scan_workspace
 from cognisync.sharing import (
     accept_shared_peer,
@@ -1506,6 +1506,23 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     requested_by=actor,
                 )
                 self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(manifest_path)})
+                return
+            if parsed.path == "/api/jobs/enqueue/research-step":
+                actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(
+                    self._workspace,
+                    actor,
+                    "enqueue jobs over the control plane",
+                )
+                queued = enqueue_research_step_job_for_run(
+                    self._workspace,
+                    resume=str(payload.get("run", "latest") or "latest"),
+                    step_id=str(payload.get("step_id", "")),
+                    profile_name=str(payload.get("profile_name", "")) or None,
+                    route_source=str(payload.get("route_source", "")) or "plan_default",
+                    requested_by=actor,
+                )
+                self._send_json(200, {"actor": _serialize_actor(actor), "job": _load_job_manifest(queued.job_manifest_path)})
                 return
             if parsed.path == "/api/jobs/enqueue/compile":
                 actor = self._authenticate(["jobs.run"])
