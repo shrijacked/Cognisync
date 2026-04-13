@@ -15,7 +15,8 @@ from cognisync.knowledge_surfaces import is_navigation_surface_path
 MARKDOWN_EXTENSIONS = {".md", ".markdown"}
 TEXT_EXTENSIONS = {".txt", ".rst"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
-DATA_EXTENSIONS = {".csv", ".json", ".jsonl"}
+NOTEBOOK_EXTENSIONS = {".ipynb"}
+DATA_EXTENSIONS = {".csv", ".json", ".jsonl", ".tsv"}
 CODE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".sh", ".yaml", ".yml", ".toml"}
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$", re.MULTILINE)
@@ -34,6 +35,8 @@ def detect_kind(path: Path) -> str:
         return "text"
     if suffix in IMAGE_EXTENSIONS:
         return "image"
+    if suffix in NOTEBOOK_EXTENSIONS:
+        return "notebook"
     if suffix == ".pdf":
         return "pdf"
     if suffix in DATA_EXTENSIONS:

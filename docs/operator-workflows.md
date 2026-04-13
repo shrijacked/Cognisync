@@ -75,6 +75,9 @@ Supported paths in this release:
 
 - `cognisync ingest file ...`
 - `cognisync ingest pdf ...`
+- `cognisync ingest notebook ...`
+- `cognisync ingest dataset ...`
+- `cognisync ingest image-folder ...`
 - `cognisync ingest url ...`
 - `cognisync ingest urls ...`
 - `cognisync ingest sitemap ...`
@@ -84,10 +87,15 @@ Supported paths in this release:
 The richer ingest pass extracts more structure up front so later compile and query steps have better substrate:
 
 - PDF ingest preserves the source file and writes a Markdown sidecar with extracted text plus ingest metadata
+- notebook ingest preserves the `.ipynb` and writes a Markdown sidecar with cell counts, kernel metadata, code previews, and output-type summaries
+- dataset ingest copies JSON, JSONL, CSV, TSV, Markdown, or text descriptors and writes descriptor-level previews without importing full dataset row stores
+- image-folder ingest copies image assets into `raw/images/<name>-assets/` and writes a gallery sidecar with extension counts plus sibling Markdown/text captions when present
 - URL ingest records description, canonical URL, headings, discovered links, content stats, and local image captures
 - URL-list ingest expands text or JSON URL inventories into deterministic per-page captures
 - sitemap ingest expands a sitemap into URL captures without shell scripting around the CLI
 - repo ingest records repository stats, language signals, recent commits, and a nested tree snapshot in the manifest, even when the source is cloned from a remote Git URL
+
+Notebook, dataset, and image-folder ingest are local-first capture paths in this slice. Hosted remote research-step execution and hosted local-file leasing remain later milestones rather than hidden behavior in the CLI.
 
 ### `compile`
 

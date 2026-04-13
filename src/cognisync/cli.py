@@ -72,7 +72,10 @@ from cognisync.exports import (
 from cognisync.ingest import (
     IngestError,
     ingest_batch,
+    ingest_dataset,
     ingest_file,
+    ingest_image_folder,
+    ingest_notebook,
     ingest_pdf,
     ingest_repo,
     ingest_sitemap,
@@ -2308,6 +2311,75 @@ def cmd_ingest_pdf(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_notebook(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
+    try:
+        result = ingest_notebook(workspace, source=Path(args.source), name=args.name, force=args.force)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = workspace.refresh_index()
+    write_workspace_manifests(workspace, snapshot)
+    change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title=f"Filed notebook {result.path.name}",
+        details=["Imported a notebook and wrote a Markdown sidecar with cell and output metadata."],
+        related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+    )
+    print(f"Ingested notebook into {result.path}")
+    print(f"Wrote change summary to {change_summary.path}")
+    return 0
+
+
+def cmd_ingest_dataset(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
+    try:
+        result = ingest_dataset(workspace, source=Path(args.source), name=args.name, force=args.force)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = workspace.refresh_index()
+    write_workspace_manifests(workspace, snapshot)
+    change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title=f"Filed dataset descriptor {result.path.name}",
+        details=["Imported dataset descriptor metadata and a lightweight preview sidecar."],
+        related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+    )
+    print(f"Ingested dataset into {result.path}")
+    print(f"Wrote change summary to {change_summary.path}")
+    return 0
+
+
+def cmd_ingest_image_folder(args: argparse.Namespace) -> int:
+    workspace = _workspace_from_arg(args.workspace)
+    previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
+    try:
+        result = ingest_image_folder(workspace, source=Path(args.source), name=args.name, force=args.force)
+    except IngestError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    snapshot = workspace.refresh_index()
+    write_workspace_manifests(workspace, snapshot)
+    change_summary = write_change_summary(workspace, "ingest", previous_state, snapshot)
+    _log_workspace_activity(
+        workspace,
+        operation="ingest",
+        title=f"Filed image folder {result.path.name}",
+        details=["Imported image assets and wrote a Markdown gallery sidecar."],
+        related_paths=[workspace.relative_path(result.path), workspace.relative_path(change_summary.path)],
+    )
+    print(f"Ingested image folder into {result.path}")
+    print(f"Wrote change summary to {change_summary.path}")
+    return 0
+
+
 def cmd_ingest_url(args: argparse.Namespace) -> int:
     workspace = _workspace_from_arg(args.workspace)
     previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
@@ -3466,6 +3538,36 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_pdf_parser.add_argument("--name", default=None)
     ingest_pdf_parser.add_argument("--force", action="store_true")
     ingest_pdf_parser.set_defaults(func=cmd_ingest_pdf)
+
+    ingest_notebook_parser = ingest_subparsers.add_parser(
+        "notebook",
+        help="Copy a Jupyter notebook into raw/notebooks with a Markdown sidecar",
+    )
+    ingest_notebook_parser.add_argument("source")
+    ingest_notebook_parser.add_argument("--workspace", default=".")
+    ingest_notebook_parser.add_argument("--name", default=None)
+    ingest_notebook_parser.add_argument("--force", action="store_true")
+    ingest_notebook_parser.set_defaults(func=cmd_ingest_notebook)
+
+    ingest_dataset_parser = ingest_subparsers.add_parser(
+        "dataset",
+        help="Copy a dataset descriptor into raw/datasets with a preview sidecar",
+    )
+    ingest_dataset_parser.add_argument("source")
+    ingest_dataset_parser.add_argument("--workspace", default=".")
+    ingest_dataset_parser.add_argument("--name", default=None)
+    ingest_dataset_parser.add_argument("--force", action="store_true")
+    ingest_dataset_parser.set_defaults(func=cmd_ingest_dataset)
+
+    ingest_image_folder_parser = ingest_subparsers.add_parser(
+        "image-folder",
+        help="Copy an image directory into raw/images with a gallery sidecar",
+    )
+    ingest_image_folder_parser.add_argument("source")
+    ingest_image_folder_parser.add_argument("--workspace", default=".")
+    ingest_image_folder_parser.add_argument("--name", default=None)
+    ingest_image_folder_parser.add_argument("--force", action="store_true")
+    ingest_image_folder_parser.set_defaults(func=cmd_ingest_image_folder)
 
     ingest_url_parser = ingest_subparsers.add_parser("url", help="Fetch a URL into raw/urls as Markdown")
     ingest_url_parser.add_argument("url")

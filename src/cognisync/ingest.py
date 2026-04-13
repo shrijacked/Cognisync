@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -23,6 +24,13 @@ from cognisync.workspace import Workspace
 
 class IngestError(RuntimeError):
     pass
+
+
+NOTEBOOK_EXTENSIONS = {".ipynb"}
+DATASET_DESCRIPTOR_EXTENSIONS = {".csv", ".json", ".jsonl", ".md", ".markdown", ".tsv", ".txt"}
+IMAGE_FOLDER_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
+MAX_NOTEBOOK_CODE_LINES = 40
+MAX_DATASET_PREVIEW_ROWS = 5
 
 
 @dataclass(frozen=True)
@@ -75,6 +83,30 @@ class PdfCapture:
     page_count: int
     extracted_text: str
     extractor: str
+
+
+@dataclass(frozen=True)
+class NotebookCellSummary:
+    cell_type: str
+    source: str
+    execution_count: Optional[int]
+    output_types: List[str]
+
+
+@dataclass(frozen=True)
+class DatasetDescriptorCapture:
+    descriptor_type: str
+    summary_lines: List[str]
+    preview_lines: List[str]
+
+
+@dataclass(frozen=True)
+class ImageFolderItem:
+    filename: str
+    relative_path: str
+    extension: str
+    byte_size: int
+    caption: str
 
 
 class _HtmlToMarkdownParser(HTMLParser):
@@ -205,6 +237,223 @@ def ingest_pdf(workspace: Workspace, source: Path, name: Optional[str] = None, f
     ]
     sidecar_path.write_text("\n".join(sidecar_lines), encoding="utf-8")
     return IngestResult(path=target_path, kind="pdf")
+
+
+def ingest_notebook(workspace: Workspace, source: Path, name: Optional[str] = None, force: bool = False) -> IngestResult:
+    source_path = Path(source).resolve()
+    if not source_path.is_file():
+        raise IngestError(f"Notebook source does not exist: {source_path}")
+    if source_path.suffix.lower() not in NOTEBOOK_EXTENSIONS:
+        raise IngestError(f"Notebook ingest expects a .ipynb file: {source_path}")
+
+    target_dir = workspace.raw_dir / "notebooks"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    slug = slugify(name or source_path.stem)
+    target_path = target_dir / f"{slug}.ipynb"
+    sidecar_path = target_dir / f"{slug}.md"
+    if (target_path.exists() or sidecar_path.exists()) and not force:
+        raise IngestError(
+            f"Target already exists: {target_path} or {sidecar_path}. Re-run with --force to overwrite it."
+        )
+
+    shutil.copy2(source_path, target_path)
+    try:
+        notebook_payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise IngestError(f"Notebook is not valid JSON: {source_path}") from error
+
+    cells = _summarize_notebook_cells(notebook_payload)
+    metadata = dict(notebook_payload.get("metadata", {})) if isinstance(notebook_payload.get("metadata", {}), dict) else {}
+    kernelspec = dict(metadata.get("kernelspec", {})) if isinstance(metadata.get("kernelspec", {}), dict) else {}
+    language_info = dict(metadata.get("language_info", {})) if isinstance(metadata.get("language_info", {}), dict) else {}
+    markdown_count = sum(1 for cell in cells if cell.cell_type == "markdown")
+    code_count = sum(1 for cell in cells if cell.cell_type == "code")
+    raw_count = sum(1 for cell in cells if cell.cell_type == "raw")
+    output_count = sum(len(cell.output_types) for cell in cells)
+    language = str(language_info.get("name", "") or kernelspec.get("language", "") or "").strip()
+    kernel = str(kernelspec.get("display_name", "") or kernelspec.get("name", "") or "").strip()
+
+    lines = [
+        "---",
+        f"title: {source_path.stem}",
+        "tags: [notebook-ingest]",
+        f"source_file: {source_path.name}",
+        f"source_path: {source_path}",
+        f"notebook_file: {target_path.name}",
+        "---",
+        f"# {source_path.stem}",
+        "",
+        "## Notebook Metadata",
+        "",
+        f"- Source file: `{source_path.name}`",
+        f"- Notebook file: `{target_path.name}`",
+        f"- Cell count: `{len(cells)}`",
+        f"- Markdown cells: `{markdown_count}`",
+        f"- Code cells: `{code_count}`",
+        f"- Raw cells: `{raw_count}`",
+        f"- Output count: `{output_count}`",
+    ]
+    if kernel:
+        lines.append(f"- Kernel: `{kernel}`")
+    if language:
+        lines.append(f"- Language: `{language}`")
+    lines.extend(["", "## Cells", ""])
+    if not cells:
+        lines.extend(["No notebook cells were found.", ""])
+    for index, cell in enumerate(cells, start=1):
+        lines.extend([f"### Cell {index}: {cell.cell_type}", ""])
+        if cell.execution_count is not None:
+            lines.extend([f"- Execution count: `{cell.execution_count}`", ""])
+        if cell.output_types:
+            lines.append(f"- Output count: `{len(cell.output_types)}`")
+            lines.append(f"- Output types: {', '.join(f'`{kind}`' for kind in cell.output_types)}")
+            lines.append("")
+        if cell.cell_type == "code":
+            fence_language = language or "text"
+            preview = "\n".join(cell.source.splitlines()[:MAX_NOTEBOOK_CODE_LINES])
+            if len(cell.source.splitlines()) > MAX_NOTEBOOK_CODE_LINES:
+                preview += "\n# ... truncated ..."
+            lines.extend([f"```{fence_language}", preview, "```", ""])
+        else:
+            lines.extend([cell.source or "(empty cell)", ""])
+
+    sidecar_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return IngestResult(path=target_path, kind="notebook")
+
+
+def ingest_dataset(workspace: Workspace, source: Path, name: Optional[str] = None, force: bool = False) -> IngestResult:
+    source_path = Path(source).resolve()
+    if not source_path.is_file():
+        raise IngestError(f"Dataset descriptor does not exist: {source_path}")
+    suffix = source_path.suffix.lower()
+    if suffix not in DATASET_DESCRIPTOR_EXTENSIONS:
+        raise IngestError(
+            f"Dataset ingest expects a descriptor file with one of: {', '.join(sorted(DATASET_DESCRIPTOR_EXTENSIONS))}."
+        )
+
+    target_dir = workspace.raw_dir / "datasets"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    slug = slugify(name or source_path.stem)
+    sidecar_path = target_dir / f"{slug}.md"
+    target_asset_name = f"{slug}{suffix}" if suffix not in {".md", ".markdown"} else f"{slug}-descriptor{suffix}"
+    target_path = target_dir / target_asset_name
+    if (target_path.exists() or sidecar_path.exists()) and not force:
+        raise IngestError(
+            f"Target already exists: {target_path} or {sidecar_path}. Re-run with --force to overwrite it."
+        )
+
+    shutil.copy2(source_path, target_path)
+    capture = _capture_dataset_descriptor(source_path)
+    lines = [
+        "---",
+        f"title: {source_path.stem}",
+        "tags: [dataset-ingest]",
+        f"source_file: {source_path.name}",
+        f"source_path: {source_path}",
+        f"descriptor_file: {target_path.name}",
+        f"descriptor_type: {capture.descriptor_type}",
+        "---",
+        f"# {source_path.stem}",
+        "",
+        "## Dataset Descriptor",
+        "",
+        "This is descriptor-level ingest. Cognisync records metadata and lightweight previews, not full dataset row materialization.",
+        "",
+        f"- Source file: `{source_path.name}`",
+        f"- Descriptor file: `{target_path.name}`",
+        f"- Descriptor type: `{capture.descriptor_type}`",
+    ]
+    lines.extend(capture.summary_lines)
+    if capture.preview_lines:
+        lines.extend(["", "## Preview", ""])
+        lines.extend(capture.preview_lines)
+    sidecar_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return IngestResult(path=target_path, kind="dataset")
+
+
+def ingest_image_folder(workspace: Workspace, source: Path, name: Optional[str] = None, force: bool = False) -> IngestResult:
+    source_dir = Path(source).resolve()
+    if not source_dir.is_dir():
+        raise IngestError(f"Image folder does not exist: {source_dir}")
+
+    image_paths = sorted(
+        [path for path in source_dir.iterdir() if path.is_file() and path.suffix.lower() in IMAGE_FOLDER_EXTENSIONS],
+        key=lambda path: path.name.lower(),
+    )
+    if not image_paths:
+        raise IngestError(f"No supported image files found in: {source_dir}")
+
+    target_dir = workspace.raw_dir / "images"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    slug = slugify(name or source_dir.name)
+    sidecar_path = target_dir / f"{slug}.md"
+    asset_dir = target_dir / f"{slug}-assets"
+    if (sidecar_path.exists() or asset_dir.exists()) and not force:
+        raise IngestError(
+            f"Target already exists: {sidecar_path} or {asset_dir}. Re-run with --force to overwrite it."
+        )
+    if force and asset_dir.exists():
+        shutil.rmtree(asset_dir)
+    asset_dir.mkdir(parents=True, exist_ok=True)
+
+    items: List[ImageFolderItem] = []
+    for image_path in image_paths:
+        target_path = asset_dir / image_path.name
+        shutil.copy2(image_path, target_path)
+        caption = _read_image_caption(image_path)
+        items.append(
+            ImageFolderItem(
+                filename=image_path.name,
+                relative_path=f"{asset_dir.name}/{image_path.name}",
+                extension=image_path.suffix.lower().lstrip("."),
+                byte_size=image_path.stat().st_size,
+                caption=caption,
+            )
+        )
+
+    extension_counts: Dict[str, int] = {}
+    for item in items:
+        extension_counts[item.extension] = extension_counts.get(item.extension, 0) + 1
+
+    lines = [
+        "---",
+        f"title: {source_dir.name}",
+        "tags: [image-folder-ingest]",
+        f"source_folder: {source_dir}",
+        f"asset_folder: {asset_dir.name}",
+        "---",
+        f"# {source_dir.name}",
+        "",
+        "## Image Folder Metadata",
+        "",
+        f"- Source folder: `{source_dir}`",
+        f"- Asset folder: `{asset_dir.name}`",
+        f"- Image count: `{len(items)}`",
+        "",
+        "## Extension Counts",
+        "",
+    ]
+    for extension, count in sorted(extension_counts.items()):
+        lines.append(f"- `{extension}`: {count}")
+    lines.extend(["", "## Images", ""])
+    for item in items:
+        lines.extend(
+            [
+                f"### {item.filename}",
+                "",
+                f"![{item.filename}]({item.relative_path})",
+                "",
+                f"- File: `{item.relative_path}`",
+                f"- Extension: `{item.extension}`",
+                f"- Byte size: `{item.byte_size}`",
+            ]
+        )
+        if item.caption:
+            lines.extend(["", "Caption:", "", item.caption])
+        lines.append("")
+
+    sidecar_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return IngestResult(path=sidecar_path, kind="image_folder")
 
 
 def ingest_url(workspace: Workspace, url: str, name: Optional[str] = None, force: bool = False) -> IngestResult:
@@ -406,6 +655,12 @@ def ingest_batch(workspace: Workspace, manifest_path: Path, force: bool = False)
             results.append(ingest_file(workspace, source=Path(entry.source), category="files", name=entry.name, force=force))
         elif entry.kind == "pdf":
             results.append(ingest_pdf(workspace, source=Path(entry.source), name=entry.name, force=force))
+        elif entry.kind == "notebook":
+            results.append(ingest_notebook(workspace, source=Path(entry.source), name=entry.name, force=force))
+        elif entry.kind == "dataset":
+            results.append(ingest_dataset(workspace, source=Path(entry.source), name=entry.name, force=force))
+        elif entry.kind in {"image-folder", "image_folder", "images"}:
+            results.append(ingest_image_folder(workspace, source=Path(entry.source), name=entry.name, force=force))
         elif entry.kind == "url":
             results.append(ingest_url(workspace, url=entry.source, name=entry.name, force=force))
         elif entry.kind in {"urls", "url-list", "url_list"}:
@@ -416,7 +671,8 @@ def ingest_batch(workspace: Workspace, manifest_path: Path, force: bool = False)
             results.extend(ingest_sitemap(workspace, source=entry.source, force=force))
         else:
             raise IngestError(
-                f"Unsupported batch ingest kind '{entry.kind}'. Expected one of file, pdf, url, urls, sitemap, repo."
+                "Unsupported batch ingest kind "
+                f"'{entry.kind}'. Expected one of file, pdf, notebook, dataset, image-folder, url, urls, sitemap, repo."
             )
     return results
 
@@ -437,6 +693,128 @@ def ingest_sitemap(workspace: Workspace, source: str, force: bool = False, limit
     for url in urls:
         results.append(ingest_url(workspace, url=url, force=force))
     return results
+
+
+def _summarize_notebook_cells(notebook_payload: Dict[str, object]) -> List[NotebookCellSummary]:
+    raw_cells = notebook_payload.get("cells", [])
+    if not isinstance(raw_cells, list):
+        raise IngestError("Notebook JSON must include a `cells` list.")
+    cells: List[NotebookCellSummary] = []
+    for raw_cell in raw_cells:
+        if not isinstance(raw_cell, dict):
+            continue
+        cell_type = str(raw_cell.get("cell_type", "unknown")).strip() or "unknown"
+        outputs = raw_cell.get("outputs", [])
+        output_types = []
+        if isinstance(outputs, list):
+            for output in outputs:
+                if isinstance(output, dict):
+                    output_type = str(output.get("output_type", "")).strip()
+                    if output_type:
+                        output_types.append(output_type)
+        execution_count = raw_cell.get("execution_count")
+        cells.append(
+            NotebookCellSummary(
+                cell_type=cell_type,
+                source=_cell_source_text(raw_cell.get("source", "")),
+                execution_count=execution_count if isinstance(execution_count, int) else None,
+                output_types=output_types,
+            )
+        )
+    return cells
+
+
+def _cell_source_text(source: object) -> str:
+    if isinstance(source, list):
+        return "".join(str(part) for part in source).strip()
+    return str(source or "").strip()
+
+
+def _capture_dataset_descriptor(source_path: Path) -> DatasetDescriptorCapture:
+    suffix = source_path.suffix.lower()
+    text = source_path.read_text(encoding="utf-8", errors="ignore")
+    if suffix == ".json":
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise IngestError(f"Dataset descriptor is not valid JSON: {source_path}") from error
+        summary_lines = _json_descriptor_summary_lines(payload)
+        preview = ["```json", json.dumps(payload, indent=2, sort_keys=True)[:2000], "```"]
+        return DatasetDescriptorCapture(descriptor_type="json", summary_lines=summary_lines, preview_lines=preview)
+    if suffix == ".jsonl":
+        lines = [line for line in text.splitlines() if line.strip()]
+        preview_items = []
+        for line in lines[:MAX_DATASET_PREVIEW_ROWS]:
+            try:
+                preview_items.append(json.loads(line))
+            except json.JSONDecodeError:
+                preview_items.append(line)
+        summary_lines = [
+            f"- JSONL records detected: `{len(lines)}`",
+            f"- Rows previewed: `{len(preview_items)}`",
+        ]
+        preview = ["```json", json.dumps(preview_items, indent=2, sort_keys=True), "```"]
+        return DatasetDescriptorCapture(descriptor_type="jsonl", summary_lines=summary_lines, preview_lines=preview)
+    if suffix in {".csv", ".tsv"}:
+        delimiter = "\t" if suffix == ".tsv" else ","
+        rows = list(csv.reader(text.splitlines(), delimiter=delimiter))
+        header = rows[0] if rows else []
+        preview_rows = rows[1 : MAX_DATASET_PREVIEW_ROWS + 1] if len(rows) > 1 else []
+        summary_lines = [
+            f"- Column count: `{len(header)}`",
+            f"- Rows previewed: `{len(preview_rows)}`",
+        ]
+        if header:
+            summary_lines.append(f"- Columns: {', '.join(f'`{column}`' for column in header)}")
+        preview = _markdown_table(header, preview_rows)
+        return DatasetDescriptorCapture(
+            descriptor_type="tsv" if suffix == ".tsv" else "csv",
+            summary_lines=summary_lines,
+            preview_lines=preview,
+        )
+    excerpt = "\n".join(text.splitlines()[:80]).strip()
+    return DatasetDescriptorCapture(
+        descriptor_type=suffix.lstrip(".") or "text",
+        summary_lines=[f"- Character count: `{len(text)}`"],
+        preview_lines=["```text", excerpt or "(empty descriptor)", "```"],
+    )
+
+
+def _json_descriptor_summary_lines(payload: object) -> List[str]:
+    if isinstance(payload, dict):
+        lines = [f"- Top-level key count: `{len(payload)}`", "", "### Top-Level Keys", ""]
+        for key in sorted(payload):
+            value = payload[key]
+            value_type = type(value).__name__
+            lines.append(f"- `{key}` ({value_type})")
+        return lines
+    if isinstance(payload, list):
+        return [f"- Top-level list items: `{len(payload)}`"]
+    return [f"- Top-level value type: `{type(payload).__name__}`"]
+
+
+def _markdown_table(header: List[str], rows: List[List[str]]) -> List[str]:
+    if not header:
+        return ["No tabular preview rows found."]
+    normalized_header = [str(column) for column in header]
+    lines = [
+        "| " + " | ".join(normalized_header) + " |",
+        "| " + " | ".join("---" for _ in normalized_header) + " |",
+    ]
+    for row in rows:
+        padded = [str(value) for value in row[: len(normalized_header)]]
+        while len(padded) < len(normalized_header):
+            padded.append("")
+        lines.append("| " + " | ".join(padded) + " |")
+    return lines
+
+
+def _read_image_caption(image_path: Path) -> str:
+    for suffix in [".md", ".txt"]:
+        caption_path = image_path.with_suffix(suffix)
+        if caption_path.exists() and caption_path.is_file():
+            return caption_path.read_text(encoding="utf-8", errors="ignore").strip()
+    return ""
 
 
 def _convert_remote_text_to_markdown(text: str, content_type: str) -> HtmlCapture:

@@ -32,6 +32,34 @@ PDF_QUERY_TOKENS: Set[str] = {
     "research",
     "study",
 }
+NOTEBOOK_QUERY_TOKENS: Set[str] = {
+    "analysis",
+    "cell",
+    "cells",
+    "code",
+    "experiment",
+    "kernel",
+    "notebook",
+    "output",
+    "outputs",
+}
+DATASET_QUERY_TOKENS: Set[str] = {
+    "benchmark",
+    "column",
+    "columns",
+    "data",
+    "dataset",
+    "descriptor",
+    "feature",
+    "features",
+    "record",
+    "records",
+    "row",
+    "rows",
+    "schema",
+    "split",
+    "splits",
+}
 VISUAL_QUERY_TOKENS: Set[str] = {
     "architecture",
     "chart",
@@ -63,6 +91,12 @@ def classify_source_kind(path: str, tags: Iterable[str]) -> str:
         return "repo"
     if "pdf-ingest" in normalized_tags or path.startswith("raw/pdfs/"):
         return "pdf"
+    if "notebook-ingest" in normalized_tags or path.startswith("raw/notebooks/"):
+        return "notebook"
+    if "dataset-ingest" in normalized_tags or path.startswith("raw/datasets/"):
+        return "dataset"
+    if "image-folder-ingest" in normalized_tags or path.startswith("raw/images/"):
+        return "image_folder"
     if "url-ingest" in normalized_tags or path.startswith("raw/urls/"):
         return "url"
     if path.startswith("raw/files/"):
@@ -92,6 +126,8 @@ def source_group_key(path: str) -> Optional[str]:
     category = parts[1]
     if category == "urls" and len(parts) >= 3 and parts[2].endswith("-assets"):
         return f"raw/urls/{parts[2][:-7]}"
+    if category == "images" and len(parts) >= 3 and parts[2].endswith("-assets"):
+        return f"raw/images/{parts[2][:-7]}"
 
     return f"raw/{category}/{PurePosixPath(path).stem}"
 
@@ -102,6 +138,9 @@ def pick_primary_artifact(paths: List[str], source_kind: str) -> Optional[str]:
         "url": [".md"],
         "repo": [".md"],
         "file": [".md", ".txt", ".rst"],
+        "notebook": [".md", ".ipynb"],
+        "dataset": [".md", ".json", ".csv", ".jsonl", ".tsv", ".txt"],
+        "image_folder": [".md", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"],
     }.get(source_kind, [".md", ".txt", ".json", ".csv"])
 
     for suffix in preferred_suffixes:
@@ -118,6 +157,12 @@ def infer_extraction_status(source_kind: str, paths: List[str]) -> str:
         return "captured" if any(path.endswith(".md") for path in paths) else "assets_only"
     if source_kind == "repo":
         return "manifest_available"
+    if source_kind == "notebook":
+        return "notebook_available" if any(path.endswith(".ipynb") for path in paths) else "metadata_available"
+    if source_kind == "dataset":
+        return "descriptor_available" if any(path.endswith(".md") for path in paths) else "descriptor_only"
+    if source_kind == "image_folder":
+        return "assets_available" if any(not path.endswith(".md") for path in paths) else "manifest_only"
     if source_kind == "file":
         return "copied"
     return "available"
@@ -130,8 +175,14 @@ def source_kind_boost(source_kind: str, query_tokens: Iterable[str], image_count
         boost += 0.35
     if token_set & PDF_QUERY_TOKENS and source_kind == "pdf":
         boost += 0.35
+    if token_set & NOTEBOOK_QUERY_TOKENS and source_kind == "notebook":
+        boost += 0.35
+    if token_set & DATASET_QUERY_TOKENS and source_kind == "dataset":
+        boost += 0.35
     if token_set & WEB_QUERY_TOKENS and source_kind == "url":
         boost += 0.2
+    if token_set & VISUAL_QUERY_TOKENS and source_kind == "image_folder":
+        boost += 0.35
     if token_set & VISUAL_QUERY_TOKENS and (source_kind == "url" or image_count):
         boost += 0.3
     if token_set & VISUAL_QUERY_TOKENS and image_count:

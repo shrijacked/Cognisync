@@ -350,6 +350,103 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(pdf_hits[0].path, "raw/pdfs/memory-study.md")
             self.assertEqual(visual_hits[0].path, "raw/urls/vision-capture.md")
 
+    def test_new_ingest_sources_write_manifests_and_rank_for_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="New Ingest Source Manifest Test")
+
+            source_root = root / "sources"
+            source_root.mkdir()
+            notebook = source_root / "memory-analysis.ipynb"
+            notebook.write_text(
+                json.dumps(
+                    {
+                        "cells": [
+                            {
+                                "cell_type": "markdown",
+                                "metadata": {},
+                                "source": ["# Memory Notebook\n\nNotebook experiment tracks recall."],
+                            },
+                            {
+                                "cell_type": "code",
+                                "metadata": {},
+                                "source": ["recall_score = 0.91\n"],
+                                "outputs": [],
+                            },
+                        ],
+                        "metadata": {"language_info": {"name": "python"}},
+                        "nbformat": 4,
+                        "nbformat_minor": 5,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            dataset = source_root / "memory-corpus.json"
+            dataset.write_text(
+                json.dumps(
+                    {
+                        "name": "memory-corpus",
+                        "features": ["question", "answer", "citation"],
+                        "splits": {"train": 10, "test": 2},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            image_dir = source_root / "diagrams"
+            image_dir.mkdir()
+            (image_dir / "architecture.png").write_bytes(
+                bytes.fromhex(
+                    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+                    "0000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
+                )
+            )
+            (image_dir / "architecture.txt").write_text("Architecture diagram for the memory pipeline.", encoding="utf-8")
+
+            self.assertEqual(
+                main(["ingest", "notebook", str(notebook), "--workspace", str(workspace.root), "--name", "memory-analysis"]),
+                0,
+            )
+            self.assertEqual(
+                main(["ingest", "dataset", str(dataset), "--workspace", str(workspace.root), "--name", "memory-corpus"]),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "ingest",
+                        "image-folder",
+                        str(image_dir),
+                        "--workspace",
+                        str(workspace.root),
+                        "--name",
+                        "architecture-sketches",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(main(["scan", "--workspace", str(workspace.root)]), 0)
+
+            sources_payload = json.loads(workspace.sources_manifest_path.read_text(encoding="utf-8"))
+            by_kind = {source["source_kind"]: source for source in sources_payload["sources"]}
+            self.assertEqual(by_kind["notebook"]["extraction_status"], "notebook_available")
+            self.assertIn("raw/notebooks/memory-analysis.ipynb", by_kind["notebook"]["artifacts"])
+            self.assertIn("raw/notebooks/memory-analysis.md", by_kind["notebook"]["artifacts"])
+            self.assertEqual(by_kind["dataset"]["extraction_status"], "descriptor_available")
+            self.assertIn("raw/datasets/memory-corpus.json", by_kind["dataset"]["artifacts"])
+            self.assertEqual(by_kind["image_folder"]["extraction_status"], "assets_available")
+            self.assertIn("raw/images/architecture-sketches-assets/architecture.png", by_kind["image_folder"]["captured_assets"])
+
+            snapshot = scan_workspace(workspace)
+            engine = SearchEngine.from_workspace(workspace, snapshot)
+            notebook_hits = engine.search("notebook code experiment recall", limit=3)
+            dataset_hits = engine.search("dataset features splits benchmark", limit=3)
+            visual_hits = engine.search("architecture diagram image pipeline", limit=3)
+
+            self.assertEqual(notebook_hits[0].path, "raw/notebooks/memory-analysis.md")
+            self.assertEqual(dataset_hits[0].path, "raw/datasets/memory-corpus.md")
+            self.assertEqual(visual_hits[0].path, "raw/images/architecture-sketches.md")
+
     def test_research_mode_writes_run_manifest_and_mode_specific_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

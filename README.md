@@ -163,11 +163,14 @@ The wiki root also regenerates four navigation surfaces on refresh:
 The richer ingest layer now makes the loop more useful before an LLM even runs:
 
 - `ingest pdf` preserves the source PDF and writes a sidecar Markdown file with extracted text and metadata
+- `ingest notebook` preserves the `.ipynb` and writes a Markdown sidecar with cell counts, kernel metadata, code previews, and output-type summaries
+- `ingest dataset` copies JSON, JSONL, CSV, TSV, Markdown, or text dataset descriptors into `raw/datasets/` and writes a descriptor-level preview sidecar without materializing full datasets
+- `ingest image-folder` copies supported image assets into `raw/images/<name>-assets/` and writes a gallery sidecar with extension counts and sibling Markdown/text captions when present
 - `ingest url` captures page metadata such as description, canonical URL, headings, discovered links, content stats, and local image captures
 - `ingest repo` captures repository stats, language signals, recent commits, and a nested tree snapshot in the repo manifest, whether the source is local or cloned from a remote Git URL
 - `ingest urls` reads a plain-text or JSON URL list into `raw/urls/`
 - `ingest sitemap` expands a sitemap into individual URL captures
-- `ingest batch` processes a JSON manifest so larger source sets can land in one deterministic pass, including URL lists and sitemaps
+- `ingest batch` processes a JSON manifest so larger source sets can land in one deterministic pass, including notebooks, dataset descriptors, image folders, URL lists, and sitemaps
 
 Batch ingest accepts a JSON list or an object with an `items` list:
 
@@ -178,10 +181,15 @@ Batch ingest accepts a JSON list or an object with an `items` list:
     {"kind": "urls", "source": "/path/to/urls.txt"},
     {"kind": "sitemap", "source": "/path/to/sitemap.xml"},
     {"kind": "pdf", "source": "/path/to/paper.pdf"},
+    {"kind": "notebook", "source": "/path/to/analysis.ipynb", "name": "analysis"},
+    {"kind": "dataset", "source": "/path/to/dataset-card.json", "name": "dataset-card"},
+    {"kind": "image-folder", "source": "/path/to/diagrams", "name": "architecture-diagrams"},
     {"kind": "repo", "source": "https://github.com/example/repo.git"}
   ]
 }
 ```
+
+Notebook, dataset, and image-folder ingest are local-first corpus capture paths. Hosted remote execution for local filesystem research-step ingest is intentionally still a later milestone; this release records durable artifacts and source manifests that future remote workers can consume.
 
 The query and research outputs are now more citation-friendly by default:
 
