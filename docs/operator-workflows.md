@@ -676,8 +676,8 @@ Research and scan now persist:
 - `.cognisync/runs/` for compile and research run manifests with validation details
 
 Research now also writes a dedicated plan in `.cognisync/plans/`, a run-scoped job workspace in `outputs/reports/research-jobs/`, and supports `--resume latest` or `--resume /path/to/run.json` so a planned run can be executed later without rebuilding the prompt packet.
-Each research job workspace contains deterministic intermediate notes plus a source packet, per-step execution packets, a checkpoints manifest, and a validation report, and the scanner ignores `outputs/reports/research-jobs/` so those orchestration artifacts do not pollute retrieval.
-Checkpoint steps include the matching `execution_packet_path`, plus execution and review state, so a future orchestrator or human operator can run one profile step without reverse-engineering the main prompt packet.
+Each research job workspace contains deterministic intermediate notes plus a source packet, an explicit `agent-plan.json` and `agent-plan.md` pair, per-step execution packets, a checkpoints manifest, and a validation report, and the scanner ignores `outputs/reports/research-jobs/` so those orchestration artifacts do not pollute retrieval.
+Checkpoint steps include the matching `execution_packet_path`, `assignment_id`, plus execution and review state, so a future orchestrator or human operator can run one profile step without reverse-engineering the main prompt packet.
 Every planned, resumed, or completed research run also writes a research-scoped change summary so operators can see what the question actually changed in the corpus.
 
 ### `research-step`
@@ -694,10 +694,11 @@ Supported paths in this release:
 The command family:
 
 1. reads the existing research run manifest from `.cognisync/runs/`
-2. resolves per-step execution packets from `outputs/reports/research-jobs/<run>/execution-packets/`
-3. writes step-level execution state, output paths, and review decisions back into `checkpoints.json`
-4. can route eligible note-building steps to different adapter profiles in one `dispatch` call while respecting step dependencies
+2. resolves the explicit agent-plan and per-step execution packets from the research-job workspace
+3. writes step-level execution state, output paths, review decisions, and assignment-linked status back into `checkpoints.json`
+4. can route eligible note-building steps to different adapter profiles in one `dispatch` call while respecting step dependencies and any assignment-level default profile already recorded in the agent plan
 5. leaves the filesystem canonical, so remote workers, humans, and later automation all see the same operator history
+6. still stops short of first-class hosted remote research-step execution; this slice formalizes the assignment contract, not the distributed executor
 
 ```mermaid
 flowchart LR

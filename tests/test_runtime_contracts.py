@@ -495,8 +495,10 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(manifest["job_profile"], "literature-review")
             notes_dir = workspace.root / manifest["notes_dir"]
             self.assertTrue(notes_dir.exists())
+            agent_plan_path = workspace.root / manifest["agent_plan_path"]
             source_packet_path = workspace.root / manifest["source_packet_path"]
             checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            self.assertTrue(agent_plan_path.exists())
             self.assertTrue(source_packet_path.exists())
             self.assertTrue(checkpoints_path.exists())
             execution_packet_paths = [workspace.root / path for path in manifest["execution_packet_paths"]]
@@ -510,18 +512,31 @@ class RuntimeContractsTests(unittest.TestCase):
             plan_text = (workspace.root / manifest["plan_path"]).read_text(encoding="utf-8")
             packet_text = (workspace.root / manifest["packet_path"]).read_text(encoding="utf-8")
             source_packet_text = source_packet_path.read_text(encoding="utf-8")
+            agent_plan_text = (notes_dir / "agent-plan.md").read_text(encoding="utf-8")
+            agent_plan_payload = json.loads(agent_plan_path.read_text(encoding="utf-8"))
             checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
             matrix_checkpoint = next(item for item in checkpoint_payload["steps"] if item["step_id"] == "build-paper-matrix")
             matrix_packet_path = workspace.root / matrix_checkpoint["execution_packet_path"]
             matrix_packet_text = matrix_packet_path.read_text(encoding="utf-8")
             self.assertIn("Job profile: literature-review", plan_text)
+            self.assertIn("## Agent Assignments", plan_text)
             self.assertIn("Build paper matrix", plan_text)
             self.assertIn("Research job profile: literature-review", packet_text)
             self.assertIn("# Research Source Packet", source_packet_text)
+            self.assertIn("# Research Agent Plan", agent_plan_text)
+            self.assertEqual(agent_plan_payload["job_profile"], "literature-review")
+            self.assertEqual(
+                agent_plan_payload["run_manifest_path"],
+                workspace.relative_path(run_manifests[0]),
+            )
+            self.assertEqual(agent_plan_payload["checkpoints_path"], manifest["checkpoints_path"])
+            self.assertTrue(any(item["assignment_id"] == "assignment-build-paper-matrix" for item in agent_plan_payload["assignments"]))
             self.assertIn("# Research Execution Packet", matrix_packet_text)
             self.assertIn("Step: Build paper matrix", matrix_packet_text)
             self.assertIn(str(manifest["source_packet_path"]), matrix_packet_text)
             self.assertIn(str(manifest["packet_path"]), matrix_packet_text)
+            self.assertEqual(matrix_checkpoint["assignment_id"], "assignment-build-paper-matrix")
+            self.assertIn("assignment-build-paper-matrix", checkpoint_payload["assignment_statuses"])
 
     def test_research_step_commands_execute_and_review_execution_packets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -581,6 +596,10 @@ class RuntimeContractsTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("build-paper-matrix", list_stdout.getvalue())
+            self.assertIn("assignment=assignment-build-paper-matrix", list_stdout.getvalue())
+            self.assertIn("agent=matrix-builder", list_stdout.getvalue())
+            self.assertIn("capability=research", list_stdout.getvalue())
+            self.assertIn("review-roles=reviewer", list_stdout.getvalue())
             self.assertIn("execution=not_run", list_stdout.getvalue())
             self.assertIn("review=unreviewed", list_stdout.getvalue())
 
@@ -610,12 +629,17 @@ class RuntimeContractsTests(unittest.TestCase):
             checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
             matrix_checkpoint = next(item for item in checkpoint_payload["steps"] if item["step_id"] == "build-paper-matrix")
             matrix_output_path = workspace.root / matrix_checkpoint["execution_output_path"]
+            self.assertEqual(matrix_checkpoint["assignment_id"], "assignment-build-paper-matrix")
             self.assertEqual(matrix_checkpoint["execution_profile"], "stepper")
             self.assertEqual(matrix_checkpoint["execution_status"], "completed")
             self.assertEqual(matrix_checkpoint["review_status"], "pending_review")
             self.assertTrue(matrix_checkpoint["executed_at"])
             self.assertTrue(matrix_output_path.exists())
             self.assertIn("Paper Matrix", matrix_output_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                checkpoint_payload["assignment_statuses"]["assignment-build-paper-matrix"]["status"],
+                "pending_review",
+            )
 
             review_stdout = io.StringIO()
             with redirect_stdout(review_stdout):
@@ -780,6 +804,12 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(dispatch_manifest["executed_steps"], ["build-working-set", "build-paper-matrix", "capture-open-questions"])
             self.assertEqual(dispatch_manifest["step_profiles"]["build-working-set"], "alpha")
             self.assertEqual(dispatch_manifest["step_profiles"]["build-paper-matrix"], "beta")
+            results_by_step = {item["step_id"]: item for item in dispatch_manifest["results"]}
+            self.assertEqual(results_by_step["build-working-set"]["assignment_id"], "assignment-build-working-set")
+            self.assertEqual(results_by_step["build-working-set"]["planned_worker_capability"], "research")
+            self.assertEqual(results_by_step["build-working-set"]["planned_review_roles"], ["reviewer"])
+            self.assertEqual(results_by_step["build-working-set"]["route_source"], "plan_default")
+            self.assertEqual(results_by_step["build-paper-matrix"]["route_source"], "cli_override")
 
             second_dispatch_stdout = io.StringIO()
             with redirect_stdout(second_dispatch_stdout):
@@ -802,6 +832,182 @@ class RuntimeContractsTests(unittest.TestCase):
 
             second_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
             self.assertEqual(len(second_payload["dispatch_history"]), 2)
+
+    def test_research_step_dispatch_uses_plan_default_profile_when_no_route_is_given(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Step Plan Defaults Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            config.llm_profiles["beta"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Step Artifact\\n\\nproduced by beta [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "--profile",
+                        "alpha",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "beta",
+                    ]
+                ),
+                0,
+            )
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest = json.loads(run_manifests[-1].read_text(encoding="utf-8"))
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            dispatch_manifest_path = workspace.root / checkpoint_payload["dispatch_history"][-1]
+            dispatch_manifest = json.loads(dispatch_manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(dispatch_manifest["step_profiles"]["build-working-set"], "alpha")
+            self.assertEqual(dispatch_manifest["step_profiles"]["build-paper-matrix"], "alpha")
+            self.assertEqual(dispatch_manifest["step_profiles"]["capture-open-questions"], "alpha")
+            for record in dispatch_manifest["results"]:
+                if record["status"] == "skipped":
+                    continue
+                self.assertEqual(record["route_source"], "plan_default")
+
+    def test_research_resume_backfills_missing_agent_plan_and_assignment_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Agent Plan Backfill Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+
+            run_manifests = sorted((workspace.state_dir / "runs").glob("research-*.json"))
+            manifest_path = run_manifests[-1]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            notes_dir = workspace.root / manifest["notes_dir"]
+            plan_json_path = workspace.root / manifest["plan_json_path"]
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            agent_plan_path = workspace.root / manifest["agent_plan_path"]
+
+            legacy_manifest = dict(manifest)
+            legacy_manifest.pop("agent_plan_path", None)
+            manifest_path.write_text(json.dumps(legacy_manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+            legacy_plan = json.loads(plan_json_path.read_text(encoding="utf-8"))
+            legacy_plan.pop("agent_plan_path", None)
+            legacy_plan.pop("assignments", None)
+            for step in legacy_plan["steps"]:
+                step.pop("assignment_id", None)
+            plan_json_path.write_text(json.dumps(legacy_plan, indent=2, sort_keys=True), encoding="utf-8")
+
+            checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            checkpoint_payload.pop("assignment_statuses", None)
+            for step in checkpoint_payload["steps"]:
+                step.pop("assignment_id", None)
+            checkpoints_path.write_text(json.dumps(checkpoint_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+            agent_plan_path.unlink()
+            (notes_dir / "agent-plan.md").unlink()
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["answerer"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings over time. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--resume",
+                        "latest",
+                        "--profile",
+                        "answerer",
+                    ]
+                ),
+                0,
+            )
+
+            updated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            updated_plan = json.loads(plan_json_path.read_text(encoding="utf-8"))
+            updated_checkpoints = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            self.assertIn("agent_plan_path", updated_manifest)
+            self.assertTrue((workspace.root / updated_manifest["agent_plan_path"]).exists())
+            self.assertIn("agent_plan_path", updated_plan)
+            self.assertTrue(updated_plan["assignments"])
+            self.assertTrue(all(step.get("assignment_id") for step in updated_plan["steps"] if step["kind"] in {"build_working_set", "build_paper_matrix", "capture_open_questions", "execute_profile", "validate_citations", "file_answer"}))
+            self.assertTrue(
+                all(step.get("assignment_id") for step in updated_checkpoints["steps"] if step["kind"] in {"build_working_set", "build_paper_matrix", "capture_open_questions", "execute_profile", "validate_citations", "file_answer"})
+            )
+            self.assertIn("assignment-build-paper-matrix", updated_checkpoints["assignment_statuses"])
 
     def test_research_resume_latest_preserves_job_profile_notes_and_validation_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

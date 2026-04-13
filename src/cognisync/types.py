@@ -149,6 +149,7 @@ class ResearchPlanStep:
     status: str
     detail: str
     owner: str = "operator"
+    assignment_id: Optional[str] = None
     output_path: Optional[str] = None
     depends_on: List[str] = field(default_factory=list)
 
@@ -164,8 +165,82 @@ class ResearchPlanStep:
             status=str(data["status"]),
             detail=str(data.get("detail", "")),
             owner=str(data.get("owner", "operator")),
+            assignment_id=str(data["assignment_id"]) if data.get("assignment_id") is not None else None,
             output_path=str(data["output_path"]) if data.get("output_path") is not None else None,
             depends_on=list(data.get("depends_on", [])),
+        )
+
+
+@dataclass
+class ResearchStepAssignment:
+    assignment_id: str
+    step_id: str
+    title: str
+    agent_role: str
+    adapter_profile: Optional[str] = None
+    worker_capability: str = "research"
+    execution_mode: str = "remote_eligible"
+    validation_rules: List[str] = field(default_factory=list)
+    review_roles: List[str] = field(default_factory=list)
+    depends_on_assignment_ids: List[str] = field(default_factory=list)
+    output_path: Optional[str] = None
+    status: str = "planned"
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "ResearchStepAssignment":
+        return cls(
+            assignment_id=str(data["assignment_id"]),
+            step_id=str(data["step_id"]),
+            title=str(data["title"]),
+            agent_role=str(data["agent_role"]),
+            adapter_profile=str(data["adapter_profile"]) if data.get("adapter_profile") is not None else None,
+            worker_capability=str(data.get("worker_capability", "research")),
+            execution_mode=str(data.get("execution_mode", "remote_eligible")),
+            validation_rules=list(data.get("validation_rules", [])),
+            review_roles=list(data.get("review_roles", [])),
+            depends_on_assignment_ids=list(data.get("depends_on_assignment_ids", [])),
+            output_path=str(data["output_path"]) if data.get("output_path") is not None else None,
+            status=str(data.get("status", "planned")),
+        )
+
+
+@dataclass
+class ResearchAgentPlan:
+    generated_at: str
+    question: str
+    job_profile: str
+    run_manifest_path: str
+    checkpoints_path: str
+    default_profile: Optional[str]
+    assignments: List[ResearchStepAssignment]
+    summary_counts: Dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "generated_at": self.generated_at,
+            "question": self.question,
+            "job_profile": self.job_profile,
+            "run_manifest_path": self.run_manifest_path,
+            "checkpoints_path": self.checkpoints_path,
+            "default_profile": self.default_profile,
+            "assignments": [assignment.to_dict() for assignment in self.assignments],
+            "summary_counts": dict(self.summary_counts),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "ResearchAgentPlan":
+        return cls(
+            generated_at=str(data["generated_at"]),
+            question=str(data["question"]),
+            job_profile=str(data.get("job_profile", "synthesis-report")),
+            run_manifest_path=str(data["run_manifest_path"]),
+            checkpoints_path=str(data["checkpoints_path"]),
+            default_profile=str(data["default_profile"]) if data.get("default_profile") is not None else None,
+            assignments=[ResearchStepAssignment.from_dict(item) for item in data.get("assignments", [])],
+            summary_counts={str(key): int(value) for key, value in dict(data.get("summary_counts", {})).items()},
         )
 
 
@@ -184,8 +259,10 @@ class ResearchPlan:
     note_paths: List[str]
     checkpoints_path: Optional[str]
     validation_report_path: Optional[str]
+    agent_plan_path: Optional[str]
     sources: List[Dict[str, object]]
     steps: List[ResearchPlanStep]
+    assignments: List[ResearchStepAssignment] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -202,8 +279,10 @@ class ResearchPlan:
             "note_paths": self.note_paths,
             "checkpoints_path": self.checkpoints_path,
             "validation_report_path": self.validation_report_path,
+            "agent_plan_path": self.agent_plan_path,
             "sources": self.sources,
             "steps": [step.to_dict() for step in self.steps],
+            "assignments": [assignment.to_dict() for assignment in self.assignments],
         }
 
     @classmethod
@@ -224,8 +303,10 @@ class ResearchPlan:
             validation_report_path=(
                 str(data["validation_report_path"]) if data.get("validation_report_path") is not None else None
             ),
+            agent_plan_path=str(data["agent_plan_path"]) if data.get("agent_plan_path") is not None else None,
             sources=list(data.get("sources", [])),
             steps=[ResearchPlanStep.from_dict(item) for item in data.get("steps", [])],
+            assignments=[ResearchStepAssignment.from_dict(item) for item in data.get("assignments", [])],
         )
 
 

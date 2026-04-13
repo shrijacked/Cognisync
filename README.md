@@ -207,6 +207,7 @@ Every research run now also writes:
 - a research plan in `.cognisync/plans/`
 - a run manifest in `.cognisync/runs/`
 - a research job workspace in `outputs/reports/research-jobs/`
+- a first-class agent-plan artifact pair at `outputs/reports/research-jobs/<run>/agent-plan.json` and `agent-plan.md`
 - per-step execution packets in `outputs/reports/research-jobs/<run>/execution-packets/`
 - step execution and review state in `outputs/reports/research-jobs/<run>/checkpoints.json`
 - a research change summary in `outputs/reports/change-summaries/`
@@ -223,10 +224,16 @@ cognisync research-step review --run latest --step build-paper-matrix --status a
 
 `research-step` turns the packet scaffold into a file-native operator loop:
 
-- `list` shows every step with planned, execution, and review status
+- `list` shows every step with planned, execution, and review status plus its assignment id, agent role, worker capability, review path, and planned adapter default
 - `run` executes one step packet through any configured adapter profile and writes the step artifact back into the research-job workspace
-- `dispatch` executes all eligible note-building steps in dependency order, lets you route specific step ids to different profiles, and records a dispatch manifest under the research job workspace
+- `dispatch` executes all eligible note-building steps in dependency order, honors assignment-level adapter defaults when present, lets you override specific step ids with `--profile-route`, and records a dispatch manifest under the research job workspace
 - `review` records approval or change-request state on the same checkpoint manifest so later resumes or exports can see which intermediate artifacts were trusted
+
+The new agent-plan artifact makes the multi-agent intent explicit without pretending the hosted runtime is finished yet:
+
+- each eligible research step now maps to a stable assignment with an agent role, worker capability, validation rule set, and review path
+- checkpoints keep step-level execution and review state linked back to those assignment ids
+- hosted remote research-step execution is still a later milestone; this slice only formalizes the planning and assignment contract
 
 Research now supports orchestration profiles too:
 

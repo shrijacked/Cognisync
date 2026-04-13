@@ -13,7 +13,7 @@ from cognisync.manifests import read_json_manifest, write_run_manifest, write_wo
 from cognisync.renderers import render_marp_slides, render_query_packet, render_query_report
 from cognisync.scanner import scan_workspace
 from cognisync.search import SearchEngine
-from cognisync.types import ResearchPlan, ResearchPlanStep, SearchHit
+from cognisync.types import ResearchAgentPlan, ResearchPlan, ResearchPlanStep, ResearchStepAssignment, SearchHit
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
 
@@ -162,6 +162,41 @@ CONFLICT_ACK_MARKERS = {"conflict", "disagree", "however", "contradict", "tensio
 VALID_RESEARCH_STEP_REVIEW_STATUSES = {"approved", "changes_requested", "needs_follow_up"}
 DEFAULT_RESEARCH_STEP_EXECUTION_STATUS = "not_run"
 DEFAULT_RESEARCH_STEP_REVIEW_STATUS = "unreviewed"
+NOTE_BUILD_VALIDATION_RULES = ["writes_declared_output", "grounded_inline_citations"]
+FINAL_SYNTHESIS_VALIDATION_RULES = [
+    "top_level_heading",
+    "valid_inline_citations",
+    "unsupported_claim_check",
+    "conflict_acknowledgement_if_needed",
+]
+NOTE_BUILD_STEP_KINDS = {
+    "build_working_set",
+    "capture_open_questions",
+    "shape_synthesis_outline",
+    "build_paper_matrix",
+    "map_code_surfaces",
+    "capture_risks_and_interfaces",
+    "build_claim_ledger",
+    "build_resolution_checklist",
+    "build_competitor_grid",
+    "capture_positioning_questions",
+}
+ASSIGNMENT_ELIGIBLE_STEP_KINDS = NOTE_BUILD_STEP_KINDS | {"execute_profile", "validate_citations", "file_answer"}
+AGENT_ROLE_BY_STEP_KIND = {
+    "build_working_set": "researcher",
+    "capture_open_questions": "researcher",
+    "shape_synthesis_outline": "outliner",
+    "build_paper_matrix": "matrix-builder",
+    "map_code_surfaces": "repo-mapper",
+    "capture_risks_and_interfaces": "repo-mapper",
+    "build_claim_ledger": "claim-auditor",
+    "build_resolution_checklist": "claim-auditor",
+    "build_competitor_grid": "market-analyst",
+    "capture_positioning_questions": "market-analyst",
+    "execute_profile": "synthesizer",
+    "validate_citations": "validator",
+    "file_answer": "filer",
+}
 
 
 @dataclass(frozen=True)
@@ -312,6 +347,7 @@ def run_research_cycle(
         note_paths=[workspace.relative_path(path) for path in job_artifacts.note_paths],
     )
     slide_path = render_marp_slides(workspace, question, hits) if slides or mode == "slides" else None
+    agent_plan_json_path, _ = _agent_plan_artifact_paths(job_artifacts.notes_dir)
     plan = _build_research_plan(
         question=question,
         mode=mode,
@@ -329,10 +365,27 @@ def run_research_cycle(
         execution_status=execution_status,
         validation_status=validation_status,
         filing_status=filing_status,
+        agent_plan_path=workspace.relative_path(agent_plan_json_path),
+    )
+    _build_research_agent_plan(
+        plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(job_artifacts.checkpoints_path),
+        default_profile=profile_name,
     )
     plan_path, plan_json_path = _write_research_plan(workspace, question, plan)
     execution_packet_paths = _write_research_execution_packets(workspace, plan, job_artifacts.notes_dir)
     _write_research_checkpoints(workspace, job_artifacts.checkpoints_path, plan, execution_packet_paths)
+    _write_research_agent_plan(
+        job_artifacts.notes_dir,
+        _build_research_agent_plan(
+            plan,
+            run_manifest_path=workspace.relative_path(run_manifest_path),
+            checkpoints_path=workspace.relative_path(job_artifacts.checkpoints_path),
+            default_profile=profile_name,
+            checkpoint_payload=read_json_manifest(job_artifacts.checkpoints_path),
+        ),
+    )
 
     if not profile_name:
         change_summary_path = _write_research_change_summary(workspace, previous_state)
@@ -352,6 +405,7 @@ def run_research_cycle(
             notes_dir=job_artifacts.notes_dir,
             note_paths=job_artifacts.note_paths,
             execution_packet_paths=list(execution_packet_paths.values()),
+            agent_plan_path=agent_plan_json_path,
             source_packet_path=job_artifacts.source_packet_path,
             checkpoints_path=job_artifacts.checkpoints_path,
             validation_report_path=job_artifacts.validation_report_path,
@@ -407,6 +461,7 @@ def run_research_cycle(
         slide_path=slide_path,
         notes_dir=job_artifacts.notes_dir,
         note_paths=job_artifacts.note_paths,
+        agent_plan_path=agent_plan_json_path,
         source_packet_path=job_artifacts.source_packet_path,
         checkpoints_path=job_artifacts.checkpoints_path,
         validation_report_path=job_artifacts.validation_report_path,
@@ -461,6 +516,7 @@ def _resume_research_cycle(
 
     sources = list(manifest.get("sources", []))
     notes_dir = _workspace_path(workspace, manifest.get("notes_dir")) or (workspace.research_jobs_dir / run_manifest_path.stem)
+    agent_plan_path = _workspace_path(workspace, manifest.get("agent_plan_path")) or (notes_dir / "agent-plan.json")
     source_packet_path = _workspace_path(workspace, manifest.get("source_packet_path")) or (notes_dir / "source-packet.md")
     checkpoints_path = _workspace_path(workspace, manifest.get("checkpoints_path")) or (notes_dir / "checkpoints.json")
     note_paths = [
@@ -502,6 +558,7 @@ def _resume_research_cycle(
         slide_path=slide_path,
         notes_dir=job_artifacts.notes_dir,
         note_paths=job_artifacts.note_paths,
+        agent_plan_path=agent_plan_path,
         source_packet_path=job_artifacts.source_packet_path,
         checkpoints_path=job_artifacts.checkpoints_path,
         validation_report_path=job_artifacts.validation_report_path,
@@ -529,6 +586,7 @@ def _execute_research_run(
     slide_path: Optional[Path],
     notes_dir: Path,
     note_paths: List[Path],
+    agent_plan_path: Path,
     source_packet_path: Path,
     checkpoints_path: Path,
     validation_report_path: Path,
@@ -561,10 +619,27 @@ def _execute_research_run(
             execution_status="failed",
             validation_status="pending",
             filing_status="pending",
+            agent_plan_path=workspace.relative_path(agent_plan_path),
+        )
+        _build_research_agent_plan(
+            failed_plan,
+            run_manifest_path=workspace.relative_path(run_manifest_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
+            default_profile=profile_name,
         )
         _persist_existing_research_plan(workspace, plan_path, plan_json_path, failed_plan)
         execution_packet_paths = _write_research_execution_packets(workspace, failed_plan, notes_dir)
         _write_research_checkpoints(workspace, checkpoints_path, failed_plan, execution_packet_paths)
+        _write_research_agent_plan(
+            notes_dir,
+            _build_research_agent_plan(
+                failed_plan,
+                run_manifest_path=workspace.relative_path(run_manifest_path),
+                checkpoints_path=workspace.relative_path(checkpoints_path),
+                default_profile=profile_name,
+                checkpoint_payload=read_json_manifest(checkpoints_path),
+            ),
+        )
         _write_research_run_state(
             workspace=workspace,
             run_id=run_id,
@@ -581,6 +656,7 @@ def _execute_research_run(
             notes_dir=notes_dir,
             note_paths=note_paths,
             execution_packet_paths=list(execution_packet_paths.values()),
+            agent_plan_path=agent_plan_path,
             source_packet_path=source_packet_path,
             checkpoints_path=checkpoints_path,
             validation_report_path=validation_report_path,
@@ -611,10 +687,27 @@ def _execute_research_run(
         execution_status="running",
         validation_status="pending",
         filing_status="pending",
+        agent_plan_path=workspace.relative_path(agent_plan_path),
+    )
+    _build_research_agent_plan(
+        running_plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        default_profile=profile_name,
     )
     _persist_existing_research_plan(workspace, plan_path, plan_json_path, running_plan)
     execution_packet_paths = _write_research_execution_packets(workspace, running_plan, notes_dir)
     _write_research_checkpoints(workspace, checkpoints_path, running_plan, execution_packet_paths)
+    _write_research_agent_plan(
+        notes_dir,
+        _build_research_agent_plan(
+            running_plan,
+            run_manifest_path=workspace.relative_path(run_manifest_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
+            default_profile=profile_name,
+            checkpoint_payload=read_json_manifest(checkpoints_path),
+        ),
+    )
     _write_research_run_state(
         workspace=workspace,
         run_id=run_id,
@@ -631,6 +724,7 @@ def _execute_research_run(
         notes_dir=notes_dir,
         note_paths=note_paths,
         execution_packet_paths=list(execution_packet_paths.values()),
+        agent_plan_path=agent_plan_path,
         source_packet_path=source_packet_path,
         checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
@@ -661,10 +755,27 @@ def _execute_research_run(
             execution_status="failed",
             validation_status="pending",
             filing_status="pending",
+            agent_plan_path=workspace.relative_path(agent_plan_path),
+        )
+        _build_research_agent_plan(
+            failed_plan,
+            run_manifest_path=workspace.relative_path(run_manifest_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
+            default_profile=profile_name,
         )
         _persist_existing_research_plan(workspace, plan_path, plan_json_path, failed_plan)
         execution_packet_paths = _write_research_execution_packets(workspace, failed_plan, notes_dir)
         _write_research_checkpoints(workspace, checkpoints_path, failed_plan, execution_packet_paths)
+        _write_research_agent_plan(
+            notes_dir,
+            _build_research_agent_plan(
+                failed_plan,
+                run_manifest_path=workspace.relative_path(run_manifest_path),
+                checkpoints_path=workspace.relative_path(checkpoints_path),
+                default_profile=profile_name,
+                checkpoint_payload=read_json_manifest(checkpoints_path),
+            ),
+        )
         _write_research_run_state(
             workspace=workspace,
             run_id=run_id,
@@ -681,6 +792,7 @@ def _execute_research_run(
             notes_dir=notes_dir,
             note_paths=note_paths,
             execution_packet_paths=list(execution_packet_paths.values()),
+            agent_plan_path=agent_plan_path,
             source_packet_path=source_packet_path,
             checkpoints_path=checkpoints_path,
             validation_report_path=validation_report_path,
@@ -730,10 +842,27 @@ def _execute_research_run(
         execution_status="completed",
         validation_status=validation_step_status,
         filing_status="completed" if output_file.exists() else "pending",
+        agent_plan_path=workspace.relative_path(agent_plan_path),
+    )
+    _build_research_agent_plan(
+        final_plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        default_profile=profile_name,
     )
     _persist_existing_research_plan(workspace, plan_path, plan_json_path, final_plan)
     execution_packet_paths = _write_research_execution_packets(workspace, final_plan, notes_dir)
     _write_research_checkpoints(workspace, checkpoints_path, final_plan, execution_packet_paths)
+    _write_research_agent_plan(
+        notes_dir,
+        _build_research_agent_plan(
+            final_plan,
+            run_manifest_path=workspace.relative_path(run_manifest_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
+            default_profile=profile_name,
+            checkpoint_payload=read_json_manifest(checkpoints_path),
+        ),
+    )
     _write_research_run_state(
         workspace=workspace,
         run_id=run_id,
@@ -750,6 +879,7 @@ def _execute_research_run(
         notes_dir=notes_dir,
         note_paths=note_paths,
         execution_packet_paths=list(execution_packet_paths.values()),
+        agent_plan_path=agent_plan_path,
         source_packet_path=source_packet_path,
         checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
@@ -811,6 +941,7 @@ def _write_research_run_state(
     notes_dir: Path,
     note_paths: List[Path],
     execution_packet_paths: List[Path],
+    agent_plan_path: Path,
     source_packet_path: Path,
     checkpoints_path: Path,
     validation_report_path: Path,
@@ -839,6 +970,7 @@ def _write_research_run_state(
             "notes_dir": workspace.relative_path(notes_dir),
             "note_paths": [workspace.relative_path(path) for path in note_paths],
             "execution_packet_paths": [workspace.relative_path(path) for path in execution_packet_paths],
+            "agent_plan_path": workspace.relative_path(agent_plan_path),
             "source_packet_path": workspace.relative_path(source_packet_path),
             "checkpoints_path": workspace.relative_path(checkpoints_path),
             "validation_report_path": workspace.relative_path(validation_report_path),
@@ -882,6 +1014,8 @@ def _build_research_plan(
     execution_status: str,
     validation_status: str,
     filing_status: str,
+    agent_plan_path: Optional[str] = None,
+    assignments: Optional[List[ResearchStepAssignment]] = None,
 ) -> ResearchPlan:
     profile_definition = RESEARCH_JOB_PROFILES[job_profile]
     note_lookup = {Path(path).name: path for path in note_paths}
@@ -963,9 +1097,254 @@ def _build_research_plan(
         note_paths=note_paths,
         checkpoints_path=checkpoints_path,
         validation_report_path=validation_report_path,
+        agent_plan_path=agent_plan_path,
         sources=sources,
         steps=steps,
+        assignments=list(assignments or []),
     )
+
+
+def _agent_plan_artifact_paths(notes_dir: Path) -> tuple[Path, Path]:
+    return notes_dir / "agent-plan.json", notes_dir / "agent-plan.md"
+
+
+def _attach_assignment_ids_to_plan(plan: ResearchPlan, assignments: Sequence[ResearchStepAssignment]) -> None:
+    assignment_ids_by_step = {assignment.step_id: assignment.assignment_id for assignment in assignments}
+    for step in plan.steps:
+        step.assignment_id = assignment_ids_by_step.get(step.step_id)
+    plan.assignments = list(assignments)
+
+
+def _initial_assignment_status(step: ResearchPlanStep) -> str:
+    if step.kind in NOTE_BUILD_STEP_KINDS:
+        return "planned"
+    if step.status in {"completed", "failed", "running", "warning"}:
+        return step.status
+    return "planned"
+
+
+def _build_research_assignment(
+    plan: ResearchPlan,
+    step: ResearchPlanStep,
+    default_profile: Optional[str],
+) -> Optional[ResearchStepAssignment]:
+    assignment_id = f"assignment-{step.step_id}"
+    agent_role = AGENT_ROLE_BY_STEP_KIND.get(step.kind)
+    if step.kind in NOTE_BUILD_STEP_KINDS:
+        return ResearchStepAssignment(
+            assignment_id=assignment_id,
+            step_id=step.step_id,
+            title=step.title,
+            agent_role=agent_role or "researcher",
+            adapter_profile=default_profile,
+            worker_capability="research",
+            execution_mode="remote_eligible",
+            validation_rules=list(NOTE_BUILD_VALIDATION_RULES),
+            review_roles=["reviewer"],
+            output_path=step.output_path,
+            status=_initial_assignment_status(step),
+        )
+    if step.kind == "execute_profile":
+        return ResearchStepAssignment(
+            assignment_id=assignment_id,
+            step_id=step.step_id,
+            title=step.title,
+            agent_role=agent_role or "synthesizer",
+            adapter_profile=default_profile,
+            worker_capability="research",
+            execution_mode="remote_eligible",
+            validation_rules=list(FINAL_SYNTHESIS_VALIDATION_RULES),
+            review_roles=["reviewer", "operator"],
+            output_path=plan.answer_path,
+            status=_initial_assignment_status(step),
+        )
+    if step.kind == "validate_citations":
+        return ResearchStepAssignment(
+            assignment_id=assignment_id,
+            step_id=step.step_id,
+            title=step.title,
+            agent_role=agent_role or "validator",
+            adapter_profile=None,
+            worker_capability="workspace",
+            execution_mode="local_only",
+            validation_rules=[],
+            review_roles=[],
+            output_path=step.output_path,
+            status=_initial_assignment_status(step),
+        )
+    if step.kind == "file_answer":
+        return ResearchStepAssignment(
+            assignment_id=assignment_id,
+            step_id=step.step_id,
+            title=step.title,
+            agent_role=agent_role or "filer",
+            adapter_profile=None,
+            worker_capability="workspace",
+            execution_mode="local_only",
+            validation_rules=[],
+            review_roles=[],
+            output_path=plan.answer_path,
+            status=_initial_assignment_status(step),
+        )
+    return None
+
+
+def _build_research_assignments(
+    plan: ResearchPlan,
+    default_profile: Optional[str],
+) -> List[ResearchStepAssignment]:
+    step_lookup = {step.step_id: step for step in plan.steps}
+    assignments = [
+        assignment
+        for step in plan.steps
+        for assignment in [_build_research_assignment(plan, step, default_profile)]
+        if assignment is not None
+    ]
+    assignment_ids_by_step = {assignment.step_id: assignment.assignment_id for assignment in assignments}
+    for assignment in assignments:
+        step = step_lookup[assignment.step_id]
+        assignment.depends_on_assignment_ids = [
+            assignment_ids_by_step[dependency_id]
+            for dependency_id in step.depends_on
+            if dependency_id in assignment_ids_by_step
+        ]
+    _attach_assignment_ids_to_plan(plan, assignments)
+    return assignments
+
+
+def _step_payloads_by_id(checkpoint_payload: Optional[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
+    if checkpoint_payload is None:
+        return {}
+    return {
+        str(step["step_id"]): step
+        for step in list(checkpoint_payload.get("steps", []))
+        if isinstance(step, dict) and step.get("step_id") is not None
+    }
+
+
+def _assignment_status_from_step_payload(step_payload: Dict[str, object]) -> str:
+    kind = _optional_text(step_payload.get("kind")) or ""
+    planned_status = _optional_text(step_payload.get("status")) or "planned"
+    execution_status = _research_step_execution_status(step_payload)
+    review_status = _research_step_review_status(step_payload)
+    if kind in NOTE_BUILD_STEP_KINDS:
+        if execution_status == "failed":
+            return "failed"
+        if review_status in {"changes_requested", "needs_follow_up"}:
+            return review_status
+        if review_status == "approved":
+            return "completed"
+        if execution_status == "completed":
+            return "pending_review" if review_status == "pending_review" else "completed"
+        return "planned"
+    if kind == "execute_profile":
+        if planned_status in {"running", "failed", "completed"}:
+            return planned_status
+        return "planned"
+    if kind in {"validate_citations", "file_answer"}:
+        if planned_status in {"failed", "warning", "completed"}:
+            return planned_status
+        return "planned"
+    return planned_status
+
+
+def _build_research_agent_plan(
+    plan: ResearchPlan,
+    run_manifest_path: str,
+    checkpoints_path: str,
+    default_profile: Optional[str],
+    checkpoint_payload: Optional[Dict[str, object]] = None,
+) -> ResearchAgentPlan:
+    assignments = [
+        ResearchStepAssignment.from_dict(assignment.to_dict())
+        for assignment in (plan.assignments or _build_research_assignments(plan, default_profile))
+    ]
+    if not assignments:
+        assignments = _build_research_assignments(plan, default_profile)
+    _attach_assignment_ids_to_plan(plan, assignments)
+    step_payloads = _step_payloads_by_id(checkpoint_payload)
+    for assignment in assignments:
+        step_payload = step_payloads.get(assignment.step_id)
+        if step_payload is not None:
+            assignment.status = _assignment_status_from_step_payload(step_payload)
+    status_counts: Dict[str, int] = {}
+    for assignment in assignments:
+        status_counts[assignment.status] = status_counts.get(assignment.status, 0) + 1
+    summary_counts = {
+        "assignment_count": len(assignments),
+        "remote_eligible_count": sum(1 for assignment in assignments if assignment.execution_mode == "remote_eligible"),
+        "local_only_count": sum(1 for assignment in assignments if assignment.execution_mode == "local_only"),
+        "research_worker_count": sum(1 for assignment in assignments if assignment.worker_capability == "research"),
+        "workspace_worker_count": sum(1 for assignment in assignments if assignment.worker_capability == "workspace"),
+        **{f"status_{status}": count for status, count in sorted(status_counts.items())},
+    }
+    plan.assignments = assignments
+    return ResearchAgentPlan(
+        generated_at=utc_timestamp(),
+        question=plan.question,
+        job_profile=plan.job_profile,
+        run_manifest_path=run_manifest_path,
+        checkpoints_path=checkpoints_path,
+        default_profile=default_profile,
+        assignments=assignments,
+        summary_counts=summary_counts,
+    )
+
+
+def render_research_agent_plan(agent_plan: ResearchAgentPlan) -> str:
+    lines = [
+        "# Research Agent Plan",
+        "",
+        f"Generated: {agent_plan.generated_at}",
+        f"Question: {agent_plan.question}",
+        f"Job profile: {agent_plan.job_profile}",
+        f"Run manifest: `{agent_plan.run_manifest_path}`",
+        f"Checkpoints: `{agent_plan.checkpoints_path}`",
+        f"Default profile: `{agent_plan.default_profile or '-'}`",
+        "",
+        "## Summary",
+        "",
+    ]
+    for key, value in sorted(agent_plan.summary_counts.items()):
+        lines.append(f"- {key.replace('_', ' ')}: `{value}`")
+    lines.extend(["", "## Assignments", ""])
+    if not agent_plan.assignments:
+        lines.append("No explicit agent assignments were generated.")
+        lines.append("")
+        return "\n".join(lines)
+    for assignment in agent_plan.assignments:
+        review_roles = ", ".join(assignment.review_roles) or "-"
+        validation_rules = ", ".join(assignment.validation_rules) or "-"
+        dependency_ids = ", ".join(f"`{item}`" for item in assignment.depends_on_assignment_ids) or "-"
+        lines.extend(
+            [
+                f"### {assignment.title}",
+                "",
+                f"- Assignment id: `{assignment.assignment_id}`",
+                f"- Step id: `{assignment.step_id}`",
+                f"- Agent role: `{assignment.agent_role}`",
+                f"- Adapter profile: `{assignment.adapter_profile or '-'}`",
+                f"- Worker capability: `{assignment.worker_capability}`",
+                f"- Execution mode: `{assignment.execution_mode}`",
+                f"- Review roles: {review_roles}",
+                f"- Validation rules: {validation_rules}",
+                f"- Depends on assignments: {dependency_ids}",
+                f"- Output path: `{assignment.output_path or '-'}`",
+                f"- Status: `{assignment.status}`",
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _write_research_agent_plan(
+    notes_dir: Path,
+    agent_plan: ResearchAgentPlan,
+) -> tuple[Path, Path]:
+    agent_plan_json_path, agent_plan_markdown_path = _agent_plan_artifact_paths(notes_dir)
+    agent_plan_json_path.write_text(json.dumps(agent_plan.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+    agent_plan_markdown_path.write_text(render_research_agent_plan(agent_plan), encoding="utf-8")
+    return agent_plan_json_path, agent_plan_markdown_path
 
 
 def _write_research_plan(workspace: Workspace, question: str, plan: ResearchPlan) -> tuple[Path, Path]:
@@ -1010,6 +1389,8 @@ def render_research_plan(plan: ResearchPlan) -> str:
         lines.append(f"- Validation report: `{plan.validation_report_path}`")
     if plan.checkpoints_path:
         lines.append(f"- Checkpoints: `{plan.checkpoints_path}`")
+    if plan.agent_plan_path:
+        lines.append(f"- Agent plan: `{plan.agent_plan_path}`")
     if plan.note_paths:
         lines.extend(["", "## Intermediate Notes", ""])
         for path in plan.note_paths:
@@ -1025,6 +1406,26 @@ def render_research_plan(plan: ResearchPlan) -> str:
                 f"(`{source['source_kind']}`) -> `{source['path']}`"
             )
         lines.append("")
+    lines.extend(["## Agent Assignments", ""])
+    if not plan.assignments:
+        lines.append("No explicit agent assignments have been generated yet.")
+        lines.append("")
+    else:
+        if plan.agent_plan_path:
+            lines.append(f"- Agent plan artifact: `{plan.agent_plan_path}`")
+        for assignment in plan.assignments:
+            review_roles = ", ".join(assignment.review_roles) or "-"
+            lines.append(
+                "- "
+                f"`{assignment.assignment_id}` "
+                f"step=`{assignment.step_id}` "
+                f"role=`{assignment.agent_role}` "
+                f"profile=`{assignment.adapter_profile or '-'}` "
+                f"capability=`{assignment.worker_capability}` "
+                f"review=`{review_roles}` "
+                f"status=`{assignment.status}`"
+            )
+        lines.append("")
     lines.extend(["## Steps", ""])
     for step in plan.steps:
         lines.extend(
@@ -1037,6 +1438,8 @@ def render_research_plan(plan: ResearchPlan) -> str:
                 f"- Detail: {step.detail}",
             ]
         )
+        if step.assignment_id:
+            lines.append(f"- Assignment id: `{step.assignment_id}`")
         if step.output_path:
             lines.append(f"- Output: `{step.output_path}`")
         if step.depends_on:
@@ -1316,6 +1719,17 @@ def _write_research_checkpoints(
         overall_status = "completed"
     else:
         overall_status = "in_progress"
+    assignment_lookup = {assignment.step_id: assignment for assignment in plan.assignments}
+    step_payloads = [
+        _build_research_checkpoint_step_payload(
+            workspace=workspace,
+            step=step,
+            execution_packet_path=packet_paths.get(step.step_id),
+            existing_step=existing_steps.get(step.step_id),
+            assignment=assignment_lookup.get(step.step_id),
+        )
+        for step in plan.steps
+    ]
     payload = {
         "schema_version": 1,
         "generated_at": _optional_text(existing_payload.get("generated_at")) or utc_timestamp(),
@@ -1324,15 +1738,17 @@ def _write_research_checkpoints(
         "job_profile": plan.job_profile,
         "status": overall_status,
         "dispatch_history": [str(item) for item in list(existing_payload.get("dispatch_history", [])) if str(item).strip()],
-        "steps": [
-            _build_research_checkpoint_step_payload(
-                workspace=workspace,
-                step=step,
-                execution_packet_path=packet_paths.get(step.step_id),
-                existing_step=existing_steps.get(step.step_id),
-            )
-            for step in plan.steps
-        ],
+        "steps": step_payloads,
+        "assignment_statuses": {
+            str(step_payload["assignment_id"]): {
+                "step_id": step_payload["step_id"],
+                "status": _assignment_status_from_step_payload(step_payload),
+                "execution_status": _research_step_execution_status(step_payload),
+                "review_status": _research_step_review_status(step_payload),
+            }
+            for step_payload in step_payloads
+            if step_payload.get("assignment_id")
+        },
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -1342,6 +1758,7 @@ def _build_research_checkpoint_step_payload(
     step: ResearchPlanStep,
     execution_packet_path: Optional[Path],
     existing_step: Optional[Dict[str, object]] = None,
+    assignment: Optional[ResearchStepAssignment] = None,
 ) -> Dict[str, object]:
     existing = existing_step or {}
     return {
@@ -1350,8 +1767,13 @@ def _build_research_checkpoint_step_payload(
         "title": step.title,
         "status": step.status,
         "owner": step.owner,
+        "assignment_id": step.assignment_id or (assignment.assignment_id if assignment is not None else None),
         "output_path": step.output_path,
-        "execution_packet_path": workspace.relative_path(execution_packet_path) if execution_packet_path else None,
+        "execution_packet_path": (
+            workspace.relative_path(execution_packet_path)
+            if execution_packet_path
+            else _optional_text(existing.get("execution_packet_path"))
+        ),
         "depends_on": step.depends_on,
         "execution_status": _optional_text(existing.get("execution_status")) or DEFAULT_RESEARCH_STEP_EXECUTION_STATUS,
         "execution_profile": _optional_text(existing.get("execution_profile")),
@@ -1568,8 +1990,126 @@ def _failed_validation_payload(available_citations: Sequence[str], errors: List[
     return payload
 
 
+def _load_research_plan_context(
+    workspace: Workspace,
+    manifest: Dict[str, object],
+) -> tuple[Path, Path, ResearchPlan]:
+    plan_path = _workspace_path(workspace, manifest.get("plan_path"))
+    plan_json_path = _workspace_path(workspace, manifest.get("plan_json_path"))
+    if plan_path is None or not plan_path.exists():
+        raise ResearchError(f"Research plan is missing for run manifest: {plan_path}")
+    if plan_json_path is None or not plan_json_path.exists():
+        raise ResearchError(f"Research plan JSON is missing for run manifest: {plan_json_path}")
+    return plan_path, plan_json_path, ResearchPlan.from_dict(read_json_manifest(plan_json_path))
+
+
+def _update_research_run_manifest_fields(
+    run_manifest_path: Path,
+    updates: Dict[str, object],
+) -> Dict[str, object]:
+    manifest = read_json_manifest(run_manifest_path)
+    changed = False
+    for key, value in updates.items():
+        if manifest.get(key) != value:
+            manifest[key] = value
+            changed = True
+    if changed:
+        run_manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    return manifest
+
+
+def _ensure_research_agent_plan_backfill(
+    workspace: Workspace,
+    run_manifest_path: Path,
+    manifest: Dict[str, object],
+    checkpoints_path: Path,
+    checkpoint_payload: Dict[str, object],
+) -> tuple[Dict[str, object], Dict[str, object], ResearchPlan]:
+    plan_path, plan_json_path, plan = _load_research_plan_context(workspace, manifest)
+    notes_dir = _workspace_path(workspace, manifest.get("notes_dir")) or checkpoints_path.parent
+    agent_plan_json_path, _ = _agent_plan_artifact_paths(notes_dir)
+    relevant_steps = [step for step in plan.steps if step.kind in ASSIGNMENT_ELIGIBLE_STEP_KINDS]
+    checkpoint_steps = [
+        step
+        for step in list(checkpoint_payload.get("steps", []))
+        if isinstance(step, dict) and str(step.get("kind", "")) in ASSIGNMENT_ELIGIBLE_STEP_KINDS
+    ]
+    needs_backfill = (
+        not plan.agent_plan_path
+        or not manifest.get("agent_plan_path")
+        or not plan.assignments
+        or not agent_plan_json_path.exists()
+        or any(step.assignment_id is None for step in relevant_steps)
+        or any(_optional_text(step.get("assignment_id")) is None for step in checkpoint_steps)
+    )
+    if not needs_backfill:
+        return manifest, checkpoint_payload, plan
+
+    plan.agent_plan_path = workspace.relative_path(agent_plan_json_path)
+    _build_research_agent_plan(
+        plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        default_profile=_optional_text(manifest.get("profile")),
+        checkpoint_payload=checkpoint_payload,
+    )
+    _persist_existing_research_plan(workspace, plan_path, plan_json_path, plan)
+    _write_research_checkpoints(workspace, checkpoints_path, plan)
+    checkpoint_payload = read_json_manifest(checkpoints_path)
+    _write_research_agent_plan(
+        notes_dir,
+        _build_research_agent_plan(
+            plan,
+            run_manifest_path=workspace.relative_path(run_manifest_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
+            default_profile=_optional_text(manifest.get("profile")),
+            checkpoint_payload=checkpoint_payload,
+        ),
+    )
+    manifest = _update_research_run_manifest_fields(
+        run_manifest_path,
+        {"agent_plan_path": workspace.relative_path(agent_plan_json_path)},
+    )
+    return manifest, checkpoint_payload, plan
+
+
+def _sync_research_agent_plan(
+    workspace: Workspace,
+    run_manifest_path: Path,
+    manifest: Dict[str, object],
+    checkpoints_path: Path,
+    checkpoint_payload: Dict[str, object],
+    plan: ResearchPlan,
+) -> None:
+    plan_path, plan_json_path, _ = _load_research_plan_context(workspace, manifest)
+    notes_dir = _workspace_path(workspace, manifest.get("notes_dir")) or checkpoints_path.parent
+    agent_plan_json_path, _ = _agent_plan_artifact_paths(notes_dir)
+    plan.agent_plan_path = workspace.relative_path(agent_plan_json_path)
+    agent_plan = _build_research_agent_plan(
+        plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        default_profile=_optional_text(manifest.get("profile")),
+        checkpoint_payload=checkpoint_payload,
+    )
+    _persist_existing_research_plan(workspace, plan_path, plan_json_path, plan)
+    _write_research_agent_plan(notes_dir, agent_plan)
+    _update_research_run_manifest_fields(
+        run_manifest_path,
+        {"agent_plan_path": workspace.relative_path(agent_plan_json_path)},
+    )
+
+
 def render_research_step_status(workspace: Workspace, resume: str = "latest") -> str:
-    run_manifest_path, manifest, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan = _load_research_checkpoint_context(workspace, resume)
+    agent_plan = _build_research_agent_plan(
+        plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        default_profile=_optional_text(manifest.get("profile")),
+        checkpoint_payload=checkpoint_payload,
+    )
+    assignments_by_step = {assignment.step_id: assignment for assignment in agent_plan.assignments}
     lines = [
         "# Research Step Queue",
         "",
@@ -1582,10 +2122,24 @@ def render_research_step_status(workspace: Workspace, resume: str = "latest") ->
         "",
     ]
     for step in list(checkpoint_payload.get("steps", [])):
+        assignment = assignments_by_step.get(str(step.get("step_id", "")))
         output_path = _optional_text(step.get("execution_output_path")) or _optional_text(step.get("output_path")) or "-"
         packet_path = _optional_text(step.get("execution_packet_path")) or "-"
+        profile_name = "-"
+        worker_capability = "-"
+        review_roles = "-"
+        agent_role = "-"
+        assignment_id = _optional_text(step.get("assignment_id")) or "-"
+        if assignment is not None:
+            profile_name = assignment.adapter_profile or "-"
+            worker_capability = assignment.worker_capability
+            review_roles = ", ".join(assignment.review_roles) or "-"
+            agent_role = assignment.agent_role
+            assignment_id = assignment.assignment_id
         lines.append(
-            f"- {step['step_id']} | {step['title']} | owner={step['owner']} | planned={step['status']} "
+            f"- {step['step_id']} | {step['title']} | owner={step['owner']} | assignment={assignment_id} "
+            f"| agent={agent_role} | profile={profile_name} | capability={worker_capability} | review-roles={review_roles} "
+            f"| planned={step['status']} "
             f"| execution={_research_step_execution_status(step)} | review={_research_step_review_status(step)} "
             f"| output=`{output_path}` | packet=`{packet_path}`"
         )
@@ -1599,7 +2153,9 @@ def run_research_step(
     profile_name: str,
     output_file: Optional[Path] = None,
 ) -> ResearchStepExecutionResult:
-    run_manifest_path, _, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan = _load_research_checkpoint_context(
+        workspace, resume
+    )
     step = _resolve_research_step_payload(checkpoint_payload, step_id)
     packet_path = _resolve_research_step_packet_path(workspace, step)
 
@@ -1638,6 +2194,7 @@ def run_research_step(
     step["reviewed_by"] = None
     step["review_note"] = None
     _write_research_checkpoint_payload(checkpoints_path, checkpoint_payload)
+    _sync_research_agent_plan(workspace, run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan)
 
     append_workspace_log(
         workspace,
@@ -1679,7 +2236,9 @@ def review_research_step(
             f"Unsupported review status '{review_status}'. Expected one of: "
             f"{', '.join(sorted(VALID_RESEARCH_STEP_REVIEW_STATUSES))}."
         )
-    run_manifest_path, _, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan = _load_research_checkpoint_context(
+        workspace, resume
+    )
     step = _resolve_research_step_payload(checkpoint_payload, step_id)
     if _research_step_execution_status(step) == DEFAULT_RESEARCH_STEP_EXECUTION_STATUS:
         raise ResearchError(f"Research step '{step_id}' must be executed before it can be reviewed.")
@@ -1689,6 +2248,7 @@ def review_research_step(
     step["reviewed_by"] = reviewer
     step["review_note"] = note.strip() if note and note.strip() else None
     _write_research_checkpoint_payload(checkpoints_path, checkpoint_payload)
+    _sync_research_agent_plan(workspace, run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan)
 
     related_paths = [workspace.relative_path(checkpoints_path)]
     packet_path = _workspace_path(workspace, step.get("execution_packet_path"))
@@ -1725,7 +2285,17 @@ def dispatch_research_steps(
     retry_failed: bool = False,
 ) -> ResearchStepDispatchResult:
     routes = dict(profile_routes or {})
-    run_manifest_path, manifest, checkpoints_path, checkpoint_payload = _load_research_checkpoint_context(workspace, resume)
+    run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan = _load_research_checkpoint_context(
+        workspace, resume
+    )
+    agent_plan = _build_research_agent_plan(
+        plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        default_profile=_optional_text(manifest.get("profile")),
+        checkpoint_payload=checkpoint_payload,
+    )
+    assignments_by_step = {assignment.step_id: assignment for assignment in agent_plan.assignments}
     steps = _dispatchable_research_steps(checkpoint_payload)
     step_ids = {str(step["step_id"]) for step in steps}
     unknown_routes = sorted(set(routes) - step_ids)
@@ -1746,21 +2316,34 @@ def dispatch_research_steps(
 
     for step in steps:
         step_id = str(step["step_id"])
+        assignment = assignments_by_step.get(step_id)
+        planned_profile = (
+            assignment.adapter_profile
+            if assignment is not None and assignment.adapter_profile
+            else default_profile
+        )
+        route_source = "cli_override" if step_id in routes else "plan_default"
         skip_reason = _research_step_dispatch_skip_reason(step, steps_by_id, retry_failed=retry_failed)
         if skip_reason is not None:
             skipped_steps.append(step_id)
             records.append(
                 {
                     "step_id": step_id,
+                    "assignment_id": assignment.assignment_id if assignment is not None else None,
                     "title": step.get("title", ""),
                     "status": "skipped",
                     "reason": skip_reason,
-                    "profile": routes.get(step_id, default_profile),
+                    "profile": routes.get(step_id, planned_profile),
+                    "planned_worker_capability": assignment.worker_capability if assignment is not None else None,
+                    "planned_review_roles": list(assignment.review_roles) if assignment is not None else [],
+                    "route_source": route_source,
                 }
             )
             continue
 
-        profile_name = routes.get(step_id, default_profile)
+        profile_name = planned_profile
+        if step_id in routes:
+            profile_name = routes[step_id]
         result = run_research_step(
             workspace,
             resume=resume,
@@ -1772,9 +2355,13 @@ def dispatch_research_steps(
         records.append(
             {
                 "step_id": step_id,
+                "assignment_id": assignment.assignment_id if assignment is not None else None,
                 "title": step.get("title", ""),
                 "status": "completed" if result.returncode == 0 else "failed",
                 "profile": profile_name,
+                "planned_worker_capability": assignment.worker_capability if assignment is not None else None,
+                "planned_review_roles": list(assignment.review_roles) if assignment is not None else [],
+                "route_source": route_source,
                 "output_path": workspace.relative_path(result.output_path),
                 "returncode": result.returncode,
             }
@@ -1806,6 +2393,7 @@ def dispatch_research_steps(
     dispatch_history.append(workspace.relative_path(dispatch_manifest_path))
     latest_checkpoint_payload["dispatch_history"] = dispatch_history
     _write_research_checkpoint_payload(checkpoints_path, latest_checkpoint_payload)
+    _sync_research_agent_plan(workspace, run_manifest_path, manifest, checkpoints_path, latest_checkpoint_payload, plan)
 
     append_workspace_log(
         workspace,
@@ -1928,7 +2516,7 @@ def _research_step_dispatch_skip_reason(
 def _load_research_checkpoint_context(
     workspace: Workspace,
     resume: str,
-) -> tuple[Path, Dict[str, object], Path, Dict[str, object]]:
+) -> tuple[Path, Dict[str, object], Path, Dict[str, object], ResearchPlan]:
     run_manifest_path = _resolve_research_manifest_path(workspace, resume)
     manifest = read_json_manifest(run_manifest_path)
     if manifest.get("run_kind") != "research":
@@ -1940,7 +2528,14 @@ def _load_research_checkpoint_context(
     checkpoint_payload = read_json_manifest(checkpoints_path)
     if not isinstance(checkpoint_payload.get("steps"), list):
         raise ResearchError(f"Research checkpoints are malformed: {checkpoints_path}")
-    return run_manifest_path, manifest, checkpoints_path, checkpoint_payload
+    manifest, checkpoint_payload, plan = _ensure_research_agent_plan_backfill(
+        workspace,
+        run_manifest_path,
+        manifest,
+        checkpoints_path,
+        checkpoint_payload,
+    )
+    return run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan
 
 
 def _resolve_research_step_payload(checkpoint_payload: Dict[str, object], step_id: str) -> Dict[str, object]:
@@ -1958,6 +2553,20 @@ def _resolve_research_step_packet_path(workspace: Workspace, step: Dict[str, obj
 
 
 def _write_research_checkpoint_payload(path: Path, payload: Dict[str, object]) -> None:
+    assignment_statuses = {
+        str(step["assignment_id"]): {
+            "step_id": str(step["step_id"]),
+            "status": _assignment_status_from_step_payload(step),
+            "execution_status": _research_step_execution_status(step),
+            "review_status": _research_step_review_status(step),
+        }
+        for step in list(payload.get("steps", []))
+        if isinstance(step, dict) and _optional_text(step.get("assignment_id")) is not None
+    }
+    if assignment_statuses:
+        payload["assignment_statuses"] = assignment_statuses
+    else:
+        payload.pop("assignment_statuses", None)
     payload["updated_at"] = utc_timestamp()
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -1990,7 +2599,11 @@ def _write_research_step_dispatch_manifest(
         "question": question,
         "job_profile": job_profile,
         "default_profile": default_profile,
-        "step_profiles": {step_id: profile_routes.get(step_id, default_profile) for step_id in executed_steps},
+        "step_profiles": {
+            str(record.get("step_id", "")): str(record.get("profile", ""))
+            for record in records
+            if str(record.get("status", "")) != "skipped" and str(record.get("step_id", "")).strip()
+        },
         "executed_steps": executed_steps,
         "skipped_steps": skipped_steps,
         "failed_step": failed_step,
