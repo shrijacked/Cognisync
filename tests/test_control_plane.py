@@ -6,7 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from http.client import HTTPConnection
 from pathlib import Path
 from unittest import mock
@@ -17,12 +17,164 @@ import cognisync.remote_worker as remote_worker_module
 from cognisync.cli import main
 from cognisync.config import LLMProfile, load_config, save_config
 from cognisync.control_plane import create_control_plane_server
+from cognisync.hosted_hardening import build_hosted_hardening_report
 from cognisync.remote_worker import run_remote_worker
 from cognisync.sync import encode_sync_bundle_archive, export_sync_bundle, import_sync_bundle_archive
 from cognisync.workspace import Workspace
 
 
 class ControlPlaneTests(unittest.TestCase):
+    def test_control_plane_status_surfaces_hosted_hardening_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            self.assertEqual(main(["init", str(root), "--name", "Hosted Hardening Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                    ]
+                ),
+                0,
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(main(["control-plane", "status", "--workspace", str(root)]), 0)
+
+            output = stdout.getvalue()
+            self.assertIn("## Hosted Hardening", output)
+            self.assertIn("- Status: `attention`", output)
+            self.assertIn("token-no-expiry:local-operator", output)
+            self.assertIn("token-operator-no-expiry:local-operator", output)
+            self.assertIn("trust-policy-peer-capabilities-any", output)
+            self.assertIn("Re-issue the token with `--expires-in-hours`", output)
+
+    def test_control_plane_status_api_includes_hosted_hardening_without_token_leaks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            workspace.initialize(name="Hosted Hardening API Workspace")
+
+            token_path = Path(tmp) / "operator-token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--output-file",
+                        str(token_path),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_path.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request("GET", "/api/status", headers={"Authorization": f"Bearer {token_value}"})
+                response = connection.getresponse()
+                raw_body = response.read().decode("utf-8")
+                payload = json.loads(raw_body)
+                self.assertEqual(response.status, 200)
+                connection.close()
+
+                hardening = payload["hardening"]
+                self.assertEqual(hardening["status"], "attention")
+                self.assertGreaterEqual(hardening["summary"]["finding_count"], 3)
+                finding_ids = {item["finding_id"] for item in hardening["findings"]}
+                self.assertIn("token-no-expiry:local-operator", finding_ids)
+                self.assertIn("token-operator-no-expiry:local-operator", finding_ids)
+                self.assertIn("trust-policy-peer-capabilities-any", finding_ids)
+                self.assertNotIn(token_value, raw_body)
+                self.assertNotIn("token_hash", raw_body)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_hosted_hardening_report_detects_operational_risk_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            workspace = Workspace(root)
+            self.assertEqual(main(["init", str(root), "--name", "Hosted Hardening Risk Workspace"]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(root),
+                        "--expires-in-hours",
+                        "1",
+                    ]
+                ),
+                0,
+            )
+
+            control_payload = json.loads(workspace.control_plane_manifest_path.read_text(encoding="utf-8"))
+            control_payload["tokens"][0]["expires_at"] = "2000-01-01T00:00:00Z"
+            workspace.control_plane_manifest_path.write_text(
+                json.dumps(control_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            workspace.worker_registry_path.parent.mkdir(parents=True, exist_ok=True)
+            workspace.worker_registry_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "workers": [
+                            {
+                                "worker_id": "stale-worker",
+                                "status": "running",
+                                "last_seen_at": "2000-01-01T00:00:00Z",
+                                "current_job_id": "running-job",
+                            }
+                        ],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            workspace.job_queue_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "queued_count": 1,
+                        "jobs": [
+                            {"job_id": "queued-job", "status": "queued"},
+                            {"job_id": "failed-job", "status": "failed", "title": "Broken mirror"},
+                        ],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            report = build_hosted_hardening_report(workspace)
+
+            finding_ids = {str(item["finding_id"]) for item in report["findings"]}
+            self.assertIn("token-expired-active:local-operator", finding_ids)
+            self.assertIn("worker-stale-active:stale-worker", finding_ids)
+            self.assertIn("job-queue-backlog", finding_ids)
+            self.assertIn("notification-high:job_failed", finding_ids)
+            self.assertGreaterEqual(report["summary"]["high_count"], 3)
+            self.assertNotIn("token_hash", json.dumps(report))
+
     def test_control_plane_exposes_shared_workspace_access_and_notifications(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

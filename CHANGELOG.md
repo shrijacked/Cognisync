@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- added hosted-alpha hardening posture reporting to `control-plane status` and `GET /api/status`, so operators can see long-lived token, broad operator-token, permissive trust-policy, stale-worker, backlog, and high-notification risks without diffing manifests by hand
 - aligned package version metadata with the documented `v0.1.4` release and added regression coverage so `pyproject.toml`, `cognisync.__version__`, and release docs cannot drift silently
 - added `cognisync research-step dispatch`, so routed research sub-steps can now be executed in order across different adapter profiles with a durable dispatch manifest
 - added `cognisync research-step list|run|review`, so per-step research execution packets can now be listed, executed through any configured adapter profile, and reviewed without rerunning the full research job

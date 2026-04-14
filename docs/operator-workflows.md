@@ -269,11 +269,13 @@ The command family:
 10. carries worker capability routing through `/api/jobs/run-next`, `/api/jobs/claim-next`, `/api/jobs/heartbeat`, and `/api/workers`, so remote workers can advertise what they handle, stay visible while polling, and expose their current job while the hosted queue respects that routing
 11. lets operators release a stale worker and immediately requeue its active lease, so hosted recovery can happen on demand instead of waiting for a lease timeout to expire
 12. exposes hosted research-step queueing through the same surface, so remote-eligible research assignments can be enqueued either by `research-step dispatch --hosted` or directly through `/api/jobs/enqueue/research-step` without inventing a second orchestration path
+13. renders a hosted hardening posture in `control-plane status`, covering long-lived tokens, broad operator tokens, permissive trust policy, stale active workers, queued hosted work, and high-severity notifications without changing runtime behavior
 
 This is intentionally a hosted-alpha surface, not a full SaaS backend. The filesystem remains canonical and the server is just another way to drive the same manifests.
 
 The served API now covers a real remote review surface too:
 
+- `GET /api/status` includes the same hosted hardening report that `control-plane status` renders, and the report only includes token metadata such as ids and principals, never raw token values or token hashes
 - `GET /api/share`, `GET /api/access`, `GET /api/collab`, `GET /api/notifications`, `GET /api/audit`, and `GET /api/usage` expose the same file-native state the local CLI renders
 - `GET /api/scheduler` now exposes due recurring job ids alongside due connectors, peer syncs, and attached-remote pulls, and `GET /api/scheduler/jobs` exposes the persisted recurring-job manifest itself
 - `GET /api/review` exposes the live open queue, dismissal ledger, and persisted review-action state over the same token-backed surface

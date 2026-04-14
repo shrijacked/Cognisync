@@ -43,6 +43,7 @@ from cognisync.connectors import (
     sync_connector,
     unsubscribe_connector,
 )
+from cognisync.hosted_hardening import build_hosted_hardening_report, render_hosted_hardening_report
 from cognisync.jobs import (
     JobError,
     claim_next_job,
@@ -168,6 +169,7 @@ def render_control_plane_status(workspace: "Workspace") -> str:
     sharing = sharing_summary(workspace)
     summary = dict(payload.get("summary", {}))
     scheduler = dict(payload.get("scheduler", {}))
+    hardening = build_hosted_hardening_report(workspace, control_plane_payload=payload)
     lines = [
         "# Control Plane",
         "",
@@ -183,6 +185,7 @@ def render_control_plane_status(workspace: "Workspace") -> str:
         f"- Due remote pulls: `{sharing.get('due_remote_pull_count', 0)}`",
         f"- Last scheduler action: `{scheduler.get('last_action', 'never')}`",
     ]
+    lines.extend(["", render_hosted_hardening_report(hardening)])
     return "\n".join(lines)
 
 
@@ -1214,6 +1217,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/status":
             payload = ensure_control_plane_manifest(self._workspace)
+            hardening = build_hosted_hardening_report(self._workspace, control_plane_payload=payload)
             self._send_json(
                 200,
                 {
@@ -1223,6 +1227,7 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                     },
                     "actor": _serialize_actor(actor),
                     "summary": dict(payload.get("summary", {})),
+                    "hardening": hardening,
                 },
             )
             return
