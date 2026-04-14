@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- aligned package version metadata with the documented `v0.1.4` release and added regression coverage so `pyproject.toml`, `cognisync.__version__`, and release docs cannot drift silently
 - added `cognisync research-step dispatch`, so routed research sub-steps can now be executed in order across different adapter profiles with a durable dispatch manifest
 - added `cognisync research-step list|run|review`, so per-step research execution packets can now be listed, executed through any configured adapter profile, and reviewed without rerunning the full research job
 - taught research-job checkpoints to persist step execution and review state, and to preserve that state across later checkpoint rewrites

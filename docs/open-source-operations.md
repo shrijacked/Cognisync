@@ -28,6 +28,8 @@ flowchart TD
 
 Through `v0.1.4`, Cognisync ships as a repository-first release on GitHub.
 
+Package-facing version metadata must stay aligned with the latest documented release before any visible release or package publish. The release gate treats `pyproject.toml`, `src/cognisync/__init__.py`, `CHANGELOG.md`, this operations note, and the README release strategy section as one public contract.
+
 ### Why GitHub first
 
 - The framework is already installable from source with `pip install -e .`.
@@ -56,5 +58,6 @@ Through `v0.1.4`, Cognisync ships as a repository-first release on GitHub.
 1. Run `python3 -m unittest discover -s tests -v`.
 2. Run `/usr/bin/env PYTHONPYCACHEPREFIX=/tmp/cognisync-pyc python3 -m compileall src tests`.
 3. Ensure docs reflect any new CLI commands or adapter presets.
-4. Update `CHANGELOG.md` before tagging a release.
-5. Tag and publish from `main`.
+4. Confirm package version metadata matches the latest documented release in `CHANGELOG.md`.
+5. Update `CHANGELOG.md` before tagging a release.
+6. Tag and publish from `main`.
