@@ -90,9 +90,12 @@ Patterns include planning and execution.
 
             task_kinds = [task.kind for task in plan.tasks]
             issue_kinds = [issue.kind for issue in issues]
+            stale_task = next(task for task in plan.tasks if task.kind == "refresh_source_summary")
 
             self.assertIn("stale_summary", issue_kinds)
             self.assertIn("refresh_source_summary", task_kinds)
+            self.assertIn("Refresh `wiki/sources/memory.md` from changed source `raw/memory.md`", stale_task.rationale)
+            self.assertIn("Preserve backlinks in `wiki/sources/memory.md`", stale_task.prompt_hint)
 
 
 if __name__ == "__main__":

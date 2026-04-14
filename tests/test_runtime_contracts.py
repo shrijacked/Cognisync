@@ -1,6 +1,7 @@
 import io
 import base64
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -196,6 +197,56 @@ class RuntimeContractsTests(unittest.TestCase):
                     for text in summary_texts
                 )
             )
+            self.assertIn("Wrote change summary", stdout.getvalue())
+
+    def test_scan_change_summary_names_affected_graph_nodes_and_recompile_suggestions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root / "workspace")
+            workspace.initialize(name="Graph Change Intelligence Test")
+
+            raw_path = workspace.raw_dir / "memory.md"
+            summary_path = workspace.wiki_dir / "sources" / "memory.md"
+            raw_path.write_text(
+                "# Memory\n\n## Vector Databases\n\nAgent memory uses vector databases.\n",
+                encoding="utf-8",
+            )
+            summary_path.write_text("# Memory\n\nInitial compiled summary.\n", encoding="utf-8")
+            os.utime(raw_path, (1000, 1000))
+            os.utime(summary_path, (2000, 2000))
+
+            self.assertEqual(main(["scan", "--workspace", str(workspace.root)]), 0)
+
+            raw_path.write_text(
+                "# Memory\n\n"
+                "## Vector Databases\n\n"
+                "Agent memory uses vector databases.\n"
+                "Vector Databases supports semantic recall.\n",
+                encoding="utf-8",
+            )
+            os.utime(raw_path, (3000, 3000))
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(["scan", "--workspace", str(workspace.root)])
+
+            self.assertEqual(exit_code, 0)
+            summary_files = sorted((workspace.outputs_dir / "reports" / "change-summaries").glob("scan-*.md"))
+            self.assertGreaterEqual(len(summary_files), 2)
+            summary_texts = [path.read_text(encoding="utf-8") for path in summary_files]
+            summary_text = next(
+                (text for text in summary_texts if "`raw/memory.md` modified source content" in text),
+                "",
+            )
+
+            self.assertIn("## Changed Artifacts", summary_text)
+            self.assertIn("`raw/memory.md` modified source content", summary_text)
+            self.assertIn("summary target `wiki/sources/memory.md`", summary_text)
+            self.assertIn("## Affected Graph Nodes", summary_text)
+            self.assertIn("`assertion:agent-memory-uses-vector-databases` assertion support changed", summary_text)
+            self.assertIn("`entity:vector-databases` entity support changed", summary_text)
+            self.assertIn("## Recompilation Suggestions", summary_text)
+            self.assertIn("`refresh_source_summary` `wiki/sources/memory.md` from `raw/memory.md`", summary_text)
             self.assertIn("Wrote change summary", stdout.getvalue())
 
     def test_scan_writes_source_and_graph_manifests(self) -> None:

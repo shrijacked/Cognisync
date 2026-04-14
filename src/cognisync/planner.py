@@ -68,8 +68,14 @@ def build_compile_plan(snapshot: IndexSnapshot) -> CompilePlan:
                     title=f"Refresh summary {issue.path}",
                     inputs=[source_path, issue.path],
                     output_path=issue.path,
-                    rationale=issue.message,
-                    prompt_hint="Refresh the compiled summary so it reflects the latest source content and preserves backlinks.",
+                    rationale=(
+                        f"Refresh `{issue.path}` from changed source `{source_path}` because the source is newer "
+                        "than the compiled summary."
+                    ),
+                    prompt_hint=(
+                        f"Refresh the compiled summary from `{source_path}`. Preserve backlinks in `{issue.path}` "
+                        "while updating claims, citations, and follow-up questions."
+                    ),
                 )
             )
         elif issue.kind == "orphan_page":

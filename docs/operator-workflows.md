@@ -640,6 +640,9 @@ Use the change summaries when you want a compact diff of the corpus after an ope
 - source count delta
 - orphan-page delta
 - graph node and edge deltas
+- changed artifact and source-group details
+- affected graph nodes for entities, assertions, concept candidates, and conflicts
+- recompilation suggestions such as `refresh_source_summary` with exact source and summary paths
 - new concept pages
 - newly resolved merge decisions
 - newly dismissed review items
@@ -745,6 +748,7 @@ The scan and compile loop also uses a richer graph substrate now:
 - filed conflict notes suppress resolved conflict reviews while preserving the disagreement as a first-class artifact
 - `cognisync maintain` turns the deterministic parts of that queue into a one-command maintenance pass
 - lint now flags stale source summaries, and compile planning turns them into `refresh_source_summary` tasks
+- change summaries now name affected graph nodes and rank recompilation suggestions so source edits point directly at the summaries or concept pages most likely to need refresh
 
 ## Traceability
 

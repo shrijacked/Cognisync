@@ -142,6 +142,9 @@ Each scan, ingest, maintenance, and research pass now also writes a small change
 - artifact and source count deltas
 - orphan-page delta
 - graph node and edge deltas
+- changed artifact and source-group details
+- affected graph nodes for entities, assertions, concept candidates, and conflicts
+- recompilation suggestions such as `refresh_source_summary` with exact source and summary paths
 - new concept pages
 - newly resolved merges
 - newly dismissed review items
@@ -318,7 +321,7 @@ The operator loop now has a review layer too:
 - `cognisync maintain` only auto-accepts stronger concept candidates by default, so generic one-word concepts stay in the queue for human review
 - dismissed review items stay out of future queues and maintenance runs until the review-actions state is changed
 - `scan`, `ingest`, and `maintain` each write a change-summary artifact under `outputs/reports/change-summaries/` so operators can review corpus deltas without diffing manifests by hand
-- those change summaries now include graph deltas and follow-up questions so a run leaves behind next-step guidance, not just counters
+- those change summaries now include changed artifacts, affected graph nodes, graph deltas, recompilation suggestions, and follow-up questions so a run leaves behind next-step guidance, not just counters
 - research job workspaces land under `outputs/reports/research-jobs/`, include deterministic note artifacts, a source packet, checkpoints, and a validation report, and are ignored by the scanner so orchestration scratchpads do not leak back into retrieval
 - review exports land under `outputs/reports/review-exports/` and are ignored by the scanner so operator telemetry does not leak back into retrieval
 - general export bundles land under `outputs/reports/exports/` and are also ignored by the scanner so bridge artifacts do not leak back into retrieval

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from cognisync.linter import lint_snapshot
 from cognisync.manifests import build_graph_manifest, build_source_manifest
@@ -11,6 +12,52 @@ from cognisync.scanner import scan_workspace
 from cognisync.types import IndexSnapshot
 from cognisync.utils import slugify, utc_timestamp
 from cognisync.workspace import Workspace
+
+
+MAX_CHANGE_SECTION_ITEMS = 12
+MAX_RECOMPILATION_SUGGESTIONS = 8
+GRAPH_NODE_KINDS_FOR_SUMMARY = {"assertion", "concept_candidate", "entity"}
+
+
+@dataclass(frozen=True)
+class ArtifactFingerprint:
+    path: str
+    collection: str
+    kind: str
+    title: str
+    content_hash: str
+    summary_target: Optional[str]
+    source_key: Optional[str]
+
+
+@dataclass(frozen=True)
+class SourceGroupFingerprint:
+    source_key: str
+    source_kind: str
+    primary_artifact: Optional[str]
+    artifacts: Tuple[str, ...]
+    captured_assets: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GraphNodeFingerprint:
+    node_id: str
+    kind: str
+    title: str
+    support_paths: Tuple[str, ...]
+    incident_artifact_paths: Tuple[str, ...]
+    signature: str
+
+
+@dataclass(frozen=True)
+class CompileTaskFingerprint:
+    task_id: str
+    kind: str
+    title: str
+    inputs: Tuple[str, ...]
+    output_path: str
+    rationale: str
+    prompt_hint: str
 
 
 @dataclass(frozen=True)
@@ -28,6 +75,10 @@ class ChangeState:
     resolved_merges: Dict[str, str]
     dismissed_reviews: Dict[str, str]
     conflicts: Dict[str, str]
+    artifact_fingerprints: Dict[str, ArtifactFingerprint]
+    source_groups: Dict[str, SourceGroupFingerprint]
+    graph_nodes: Dict[str, GraphNodeFingerprint]
+    compile_tasks: List[CompileTaskFingerprint]
 
 
 @dataclass(frozen=True)
@@ -79,10 +130,18 @@ def _build_change_state(
     tag_count = 0
     concept_candidate_count = 0
     conflicts: Dict[str, str] = {}
+    artifact_fingerprints: Dict[str, ArtifactFingerprint] = {}
+    source_groups: Dict[str, SourceGroupFingerprint] = {}
+    graph_nodes: Dict[str, GraphNodeFingerprint] = {}
+    compile_tasks: List[CompileTaskFingerprint] = []
 
     if snapshot is not None:
+        from cognisync.planner import build_compile_plan
+
         artifact_count = len(snapshot.artifacts)
-        source_count = len(build_source_manifest(snapshot)["sources"])
+        source_manifest = build_source_manifest(snapshot)
+        source_count = len(source_manifest["sources"])
+        source_groups, source_key_by_artifact = _source_group_fingerprints(source_manifest)
         orphan_count = sum(1 for issue in lint_snapshot(snapshot) if issue.kind == "orphan_page")
         graph_manifest = build_graph_manifest(workspace, snapshot)
         graph_node_count = len(graph_manifest["nodes"])
@@ -97,6 +156,20 @@ def _build_change_state(
             if artifact.collection == "wiki" and artifact.path.startswith("wiki/concepts/") and artifact.kind == "markdown"
         }
         conflicts = _conflict_descriptions(graph_manifest)
+        artifact_fingerprints = _artifact_fingerprints(snapshot, source_key_by_artifact)
+        graph_nodes = _graph_node_fingerprints(graph_manifest, set(snapshot.artifact_paths()))
+        compile_tasks = [
+            CompileTaskFingerprint(
+                task_id=task.task_id,
+                kind=task.kind,
+                title=task.title,
+                inputs=tuple(task.inputs),
+                output_path=task.output_path,
+                rationale=task.rationale,
+                prompt_hint=task.prompt_hint,
+            )
+            for task in build_compile_plan(snapshot).tasks
+        ]
 
     resolved_merges = {
         str(key): str(dict(value).get("preferred_label", ""))
@@ -120,7 +193,97 @@ def _build_change_state(
         resolved_merges=resolved_merges,
         dismissed_reviews=dismissed_reviews,
         conflicts=conflicts,
+        artifact_fingerprints=artifact_fingerprints,
+        source_groups=source_groups,
+        graph_nodes=graph_nodes,
+        compile_tasks=compile_tasks,
     )
+
+
+def _source_group_fingerprints(
+    source_manifest: Dict[str, object],
+) -> Tuple[Dict[str, SourceGroupFingerprint], Dict[str, str]]:
+    groups: Dict[str, SourceGroupFingerprint] = {}
+    source_key_by_artifact: Dict[str, str] = {}
+    for raw_source in list(source_manifest.get("sources", [])):
+        source = dict(raw_source)
+        source_key = str(source.get("source_key", ""))
+        if not source_key:
+            continue
+        artifacts = tuple(str(path) for path in list(source.get("artifacts", [])))
+        captured_assets = tuple(str(path) for path in list(source.get("captured_assets", [])))
+        groups[source_key] = SourceGroupFingerprint(
+            source_key=source_key,
+            source_kind=str(source.get("source_kind", "artifact")),
+            primary_artifact=str(source.get("primary_artifact") or "") or None,
+            artifacts=artifacts,
+            captured_assets=captured_assets,
+        )
+        for artifact_path in artifacts:
+            source_key_by_artifact[artifact_path] = source_key
+    return groups, source_key_by_artifact
+
+
+def _artifact_fingerprints(
+    snapshot: IndexSnapshot,
+    source_key_by_artifact: Dict[str, str],
+) -> Dict[str, ArtifactFingerprint]:
+    return {
+        artifact.path: ArtifactFingerprint(
+            path=artifact.path,
+            collection=artifact.collection,
+            kind=artifact.kind,
+            title=artifact.title,
+            content_hash=artifact.content_hash,
+            summary_target=artifact.summary_target,
+            source_key=source_key_by_artifact.get(artifact.path),
+        )
+        for artifact in snapshot.artifacts
+    }
+
+
+def _graph_node_fingerprints(
+    graph_manifest: Dict[str, object],
+    artifact_paths: Set[str],
+) -> Dict[str, GraphNodeFingerprint]:
+    incident_artifact_paths: Dict[str, Set[str]] = {}
+    for raw_edge in list(graph_manifest.get("edges", [])):
+        edge = dict(raw_edge)
+        source = str(edge.get("source", ""))
+        target = str(edge.get("target", ""))
+        if source in artifact_paths and target:
+            incident_artifact_paths.setdefault(target, set()).add(source)
+        if target in artifact_paths and source:
+            incident_artifact_paths.setdefault(source, set()).add(target)
+
+    nodes: Dict[str, GraphNodeFingerprint] = {}
+    for raw_node in list(graph_manifest.get("nodes", [])):
+        node = dict(raw_node)
+        node_id = str(node.get("id", ""))
+        if not node_id:
+            continue
+        support_paths = tuple(sorted(str(path) for path in list(node.get("support_paths", []))))
+        incident_paths = tuple(sorted(incident_artifact_paths.get(node_id, set())))
+        signature_payload = {
+            "kind": str(node.get("kind", "")),
+            "title": str(node.get("title", "")),
+            "support_paths": support_paths,
+            "incident_artifact_paths": incident_paths,
+            "subject": str(node.get("subject", "")),
+            "verb": str(node.get("verb", "")),
+            "object": str(node.get("object", "")),
+            "output_path": str(node.get("output_path", "")),
+            "resolved": bool(node.get("resolved", False)),
+        }
+        nodes[node_id] = GraphNodeFingerprint(
+            node_id=node_id,
+            kind=str(node.get("kind", "")),
+            title=str(node.get("title", "")),
+            support_paths=support_paths,
+            incident_artifact_paths=incident_paths,
+            signature=json.dumps(signature_payload, sort_keys=True),
+        )
+    return nodes
 
 
 def _conflict_descriptions(graph_manifest: Dict[str, object]) -> Dict[str, str]:
@@ -161,6 +324,7 @@ def _render_change_summary(
         for key, value in current_state.conflicts.items()
         if key not in previous_state.conflicts
     }
+    changed_artifacts = _changed_artifacts(previous_state, current_state)
 
     lines = [
         f"# {trigger.title()} Change Summary",
@@ -192,12 +356,188 @@ def _render_change_summary(
             "",
         ]
     )
+    lines.extend(_render_changed_artifacts_section(previous_state, current_state, changed_artifacts))
+    lines.extend(_render_affected_graph_nodes_section(previous_state, current_state, changed_artifacts, new_conflicts))
+    lines.extend(_render_recompilation_suggestions_section(current_state, changed_artifacts))
     lines.extend(_render_list_section("New concept pages", new_concepts))
     lines.extend(_render_mapping_section("Resolved merge decisions", resolved_merges, arrow=True))
     lines.extend(_render_mapping_section("Dismissed review items", dismissed_reviews))
     lines.extend(_render_mapping_section("New conflicts", new_conflicts))
     lines.extend(_render_follow_up_section(new_concepts, resolved_merges, new_conflicts, previous_state, current_state))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _changed_artifacts(previous_state: ChangeState, current_state: ChangeState) -> Dict[str, str]:
+    previous_paths = set(previous_state.artifact_fingerprints)
+    current_paths = set(current_state.artifact_fingerprints)
+    changes: Dict[str, str] = {}
+    for path in sorted(current_paths - previous_paths):
+        changes[path] = "added"
+    for path in sorted(previous_paths - current_paths):
+        changes[path] = "removed"
+    for path in sorted(previous_paths & current_paths):
+        previous = previous_state.artifact_fingerprints[path]
+        current = current_state.artifact_fingerprints[path]
+        if previous.content_hash != current.content_hash:
+            changes[path] = "modified"
+    return changes
+
+
+def _render_changed_artifacts_section(
+    previous_state: ChangeState,
+    current_state: ChangeState,
+    changed_artifacts: Dict[str, str],
+) -> list[str]:
+    lines = ["## Changed Artifacts", ""]
+    if not changed_artifacts:
+        lines.extend(["- None", ""])
+        return lines
+
+    sorted_changes = sorted(changed_artifacts.items(), key=lambda item: (item[1], item[0]))
+    for path, status in sorted_changes[:MAX_CHANGE_SECTION_ITEMS]:
+        fingerprint = current_state.artifact_fingerprints.get(path) or previous_state.artifact_fingerprints[path]
+        phrase = _artifact_change_phrase(fingerprint, status)
+        details = [f"`{path}` {phrase}"]
+        if fingerprint.source_key:
+            details.append(f"source group `{fingerprint.source_key}`")
+        if fingerprint.summary_target:
+            details.append(f"summary target `{fingerprint.summary_target}`")
+        lines.append("- " + "; ".join(details))
+    omitted = len(sorted_changes) - MAX_CHANGE_SECTION_ITEMS
+    if omitted > 0:
+        lines.append(f"- ... {omitted} more changed artifact(s) omitted")
+    lines.append("")
+    return lines
+
+
+def _artifact_change_phrase(fingerprint: ArtifactFingerprint, status: str) -> str:
+    if fingerprint.collection == "raw":
+        if status == "added":
+            return "added source content"
+        if status == "removed":
+            return "removed source content"
+        return "modified source content"
+    if status == "added":
+        return "added artifact"
+    if status == "removed":
+        return "removed artifact"
+    return "modified artifact"
+
+
+def _render_affected_graph_nodes_section(
+    previous_state: ChangeState,
+    current_state: ChangeState,
+    changed_artifacts: Dict[str, str],
+    new_conflicts: Dict[str, str],
+) -> list[str]:
+    changed_paths = set(changed_artifacts)
+    affected_nodes: List[Tuple[str, GraphNodeFingerprint, Tuple[str, ...]]] = []
+    for node_id, node in current_state.graph_nodes.items():
+        if node.kind not in GRAPH_NODE_KINDS_FOR_SUMMARY:
+            continue
+        support_paths = tuple(sorted(set(node.support_paths) | set(node.incident_artifact_paths)))
+        affected_paths = tuple(path for path in support_paths if path in changed_paths)
+        previous_node = previous_state.graph_nodes.get(node_id)
+        signature_changed = previous_node is None or previous_node.signature != node.signature
+        if not affected_paths and not signature_changed:
+            continue
+        if not affected_paths and previous_node is not None:
+            previous_paths = set(previous_node.support_paths) | set(previous_node.incident_artifact_paths)
+            affected_paths = tuple(sorted(previous_paths & changed_paths))
+        if not affected_paths and not changed_paths:
+            continue
+        affected_nodes.append((node_id, node, affected_paths))
+
+    lines = ["## Affected Graph Nodes", ""]
+    conflict_lines = _affected_conflict_lines(new_conflicts)
+    if not affected_nodes and not conflict_lines:
+        lines.extend(["- None", ""])
+        return lines
+
+    affected_nodes.sort(key=lambda item: (item[1].kind, item[1].title.lower(), item[0]))
+    for node_id, node, affected_paths in affected_nodes[:MAX_CHANGE_SECTION_ITEMS]:
+        support_detail = _format_path_list(affected_paths) if affected_paths else "graph signature"
+        lines.append(
+            f"- `{node_id}` {_graph_kind_label(node.kind)} support changed via {support_detail}: {node.title}"
+        )
+    remaining_budget = max(MAX_CHANGE_SECTION_ITEMS - min(len(affected_nodes), MAX_CHANGE_SECTION_ITEMS), 0)
+    lines.extend(conflict_lines[:remaining_budget])
+    omitted = len(affected_nodes) + len(conflict_lines) - MAX_CHANGE_SECTION_ITEMS
+    if omitted > 0:
+        lines.append(f"- ... {omitted} more affected graph item(s) omitted")
+    lines.append("")
+    return lines
+
+
+def _affected_conflict_lines(new_conflicts: Dict[str, str]) -> list[str]:
+    lines: list[str] = []
+    for key in sorted(new_conflicts):
+        subject = key.split("|", 1)[0]
+        lines.append(f"- `conflict:{slugify(subject)}` conflict changed: {new_conflicts[key]}")
+    return lines
+
+
+def _graph_kind_label(kind: str) -> str:
+    if kind == "concept_candidate":
+        return "concept candidate"
+    return kind
+
+
+def _render_recompilation_suggestions_section(
+    current_state: ChangeState,
+    changed_artifacts: Dict[str, str],
+) -> list[str]:
+    changed_paths = set(changed_artifacts)
+    changed_summary_targets = {
+        fingerprint.summary_target
+        for path, fingerprint in current_state.artifact_fingerprints.items()
+        if path in changed_paths and fingerprint.summary_target
+    }
+    suggestions = [
+        task
+        for task in current_state.compile_tasks
+        if _task_matches_changed_artifacts(task, changed_paths, changed_summary_targets)
+    ]
+    suggestions.sort(key=lambda task: (task.kind, task.output_path, task.task_id))
+
+    lines = ["## Recompilation Suggestions", ""]
+    if not suggestions:
+        lines.extend(["- None", ""])
+        return lines
+
+    for task in suggestions[:MAX_RECOMPILATION_SUGGESTIONS]:
+        source_inputs = tuple(input_path for input_path in task.inputs if input_path in changed_paths)
+        if not source_inputs:
+            source_inputs = task.inputs[:2]
+        lines.append(
+            f"- `{task.kind}` `{task.output_path}` from {_format_path_list(source_inputs)}: {task.rationale}"
+        )
+    omitted = len(suggestions) - MAX_RECOMPILATION_SUGGESTIONS
+    if omitted > 0:
+        lines.append(f"- ... {omitted} more recompilation suggestion(s) omitted")
+    lines.append("")
+    return lines
+
+
+def _task_matches_changed_artifacts(
+    task: CompileTaskFingerprint,
+    changed_paths: Set[str],
+    changed_summary_targets: Set[Optional[str]],
+) -> bool:
+    task_inputs = set(task.inputs)
+    if task_inputs & changed_paths:
+        return True
+    if task.output_path in changed_paths:
+        return True
+    if task.output_path in changed_summary_targets:
+        return True
+    return False
+
+
+def _format_path_list(paths: Tuple[str, ...]) -> str:
+    if not paths:
+        return "`unknown`"
+    return ", ".join(f"`{path}`" for path in paths)
 
 
 def _render_list_section(title: str, values: list[str]) -> list[str]:
