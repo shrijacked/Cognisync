@@ -498,21 +498,16 @@ def _resume_research_cycle(
     output_file: Optional[Path],
     job_profile: str,
 ) -> ResearchRunResult:
-    run_manifest_path = _resolve_research_manifest_path(workspace, resume)
-    manifest = read_json_manifest(run_manifest_path)
-    if manifest.get("run_kind") != "research":
-        raise ResearchError(f"Run manifest is not a research run: {run_manifest_path}")
-
+    run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan = _load_research_checkpoint_context(
+        workspace, resume
+    )
     question = str(manifest.get("question", "")).strip()
     mode = str(manifest.get("mode", "wiki")).strip() or "wiki"
-    effective_profile = profile_name or _optional_text(manifest.get("profile"))
     effective_job_profile = _optional_text(manifest.get("job_profile")) or job_profile or DEFAULT_RESEARCH_JOB_PROFILE
     if effective_job_profile not in RESEARCH_JOB_PROFILES:
         raise ResearchError(
             f"Unsupported research job profile '{effective_job_profile}'. Expected one of: {', '.join(sorted(RESEARCH_JOB_PROFILES))}."
         )
-    if not effective_profile:
-        raise ResearchError("Resuming a research run requires a profile, either from the manifest or --profile.")
 
     report_path = _workspace_path(workspace, manifest.get("report_path"))
     packet_path = _workspace_path(workspace, manifest.get("packet_path"))
@@ -534,7 +529,6 @@ def _resume_research_cycle(
     notes_dir = _workspace_path(workspace, manifest.get("notes_dir")) or (workspace.research_jobs_dir / run_manifest_path.stem)
     agent_plan_path = _workspace_path(workspace, manifest.get("agent_plan_path")) or (notes_dir / "agent-plan.json")
     source_packet_path = _workspace_path(workspace, manifest.get("source_packet_path")) or (notes_dir / "source-packet.md")
-    checkpoints_path = _workspace_path(workspace, manifest.get("checkpoints_path")) or (notes_dir / "checkpoints.json")
     note_paths = [
         _workspace_path(workspace, value)
         for value in list(manifest.get("note_paths", []))
@@ -559,6 +553,41 @@ def _resume_research_cycle(
     resume_count = int(manifest.get("resume_count", 0)) + 1
     attempt_count = int(manifest.get("attempt_count", 0)) + 1
     previous_state = capture_change_state(workspace, fallback_to_live_scan=True)
+
+    if profile_name is None:
+        if _checkpoint_finalize_candidate_present(checkpoint_payload, plan):
+            return _finalize_research_resume_from_checkpoint(
+                workspace=workspace,
+                question=question,
+                mode=mode,
+                job_profile=effective_job_profile,
+                output_file=answer_path,
+                report_path=report_path,
+                packet_path=packet_path,
+                plan_path=plan_path,
+                plan_json_path=plan_json_path,
+                slide_path=slide_path,
+                notes_dir=job_artifacts.notes_dir,
+                note_paths=job_artifacts.note_paths,
+                agent_plan_path=agent_plan_path,
+                source_packet_path=job_artifacts.source_packet_path,
+                checkpoints_path=job_artifacts.checkpoints_path,
+                validation_report_path=job_artifacts.validation_report_path,
+                run_manifest_path=run_manifest_path,
+                run_id=run_manifest_path.stem,
+                sources=sources,
+                previous_state=previous_state,
+                resume_count=resume_count,
+                attempt_count=attempt_count,
+                manifest=manifest,
+                checkpoint_payload=checkpoint_payload,
+                plan=plan,
+            )
+        effective_profile = _optional_text(manifest.get("profile"))
+    else:
+        effective_profile = profile_name
+    if not effective_profile:
+        raise ResearchError("Resuming a research run requires a profile, either from the manifest or --profile.")
 
     return _execute_research_run(
         workspace=workspace,
@@ -588,6 +617,249 @@ def _resume_research_cycle(
     )
 
 
+def _checkpoint_finalize_candidate_present(
+    checkpoint_payload: Dict[str, object],
+    plan: ResearchPlan,
+) -> bool:
+    assignments_by_step = {assignment.step_id: assignment for assignment in plan.assignments}
+    for step in list(checkpoint_payload.get("steps", [])):
+        if not isinstance(step, dict):
+            continue
+        step_id = str(step.get("step_id", "")).strip()
+        if not step_id:
+            continue
+        assignment = assignments_by_step.get(step_id)
+        execution_status = _research_step_execution_status(step)
+        review_status = _research_step_review_status(step)
+        if step_id == "execute-profile" and (
+            execution_status != DEFAULT_RESEARCH_STEP_EXECUTION_STATUS
+            or review_status != DEFAULT_RESEARCH_STEP_REVIEW_STATUS
+        ):
+            return True
+        if assignment is None or not assignment.review_roles:
+            continue
+        if execution_status != DEFAULT_RESEARCH_STEP_EXECUTION_STATUS:
+            return True
+    return False
+
+
+def _review_status_label(review_status: str) -> str:
+    if review_status == "pending_review":
+        return "pending review"
+    if review_status == "changes_requested":
+        return "changes requested"
+    if review_status == "needs_follow_up":
+        return "needs follow up"
+    if review_status == DEFAULT_RESEARCH_STEP_REVIEW_STATUS:
+        return "unreviewed"
+    return review_status.replace("_", " ")
+
+
+def _checkpoint_finalize_context(
+    workspace: Workspace,
+    checkpoint_payload: Dict[str, object],
+    plan: ResearchPlan,
+) -> tuple[Dict[str, object], ResearchStepAssignment, Path, List[str]]:
+    assignments_by_step = {assignment.step_id: assignment for assignment in plan.assignments}
+    execute_step = _resolve_research_step_payload(checkpoint_payload, "execute-profile")
+    execute_assignment = assignments_by_step.get("execute-profile")
+    if execute_assignment is None:
+        raise ResearchError("Research run is missing the execute-profile assignment.")
+
+    blockers: List[str] = []
+    for step in list(checkpoint_payload.get("steps", [])):
+        if not isinstance(step, dict):
+            continue
+        step_id = str(step.get("step_id", "")).strip()
+        assignment = assignments_by_step.get(step_id)
+        if assignment is None or not assignment.review_roles or step_id == "execute-profile":
+            continue
+        execution_status = _research_step_execution_status(step)
+        if execution_status == DEFAULT_RESEARCH_STEP_EXECUTION_STATUS:
+            continue
+        review_status = _research_step_review_status(step)
+        if review_status != "approved":
+            blockers.append(f"{step_id} is executed but still {_review_status_label(review_status)}.")
+
+    execute_status = _research_step_execution_status(execute_step)
+    if execute_status != "completed":
+        blockers.append(f"execute-profile is not completed yet, current execution status is `{execute_status}`.")
+    execute_review_status = _research_step_review_status(execute_step)
+    if execute_review_status != "approved":
+        blockers.append(f"execute-profile is not approved yet, current review status is `{execute_review_status}`.")
+
+    execute_output_path = _workspace_path(
+        workspace,
+        execute_step.get("execution_output_path") or execute_step.get("output_path") or plan.answer_path,
+    )
+    if execute_output_path is None or not execute_output_path.exists():
+        blockers.append("execute-profile does not have a durable output artifact yet.")
+        execute_output_path = workspace.root / (plan.answer_path or "outputs/reports/research-missing-output.md")
+
+    return execute_step, execute_assignment, execute_output_path, blockers
+
+
+def _finalize_research_resume_from_checkpoint(
+    workspace: Workspace,
+    question: str,
+    mode: str,
+    job_profile: str,
+    output_file: Path,
+    report_path: Path,
+    packet_path: Path,
+    plan_path: Path,
+    plan_json_path: Path,
+    slide_path: Optional[Path],
+    notes_dir: Path,
+    note_paths: List[Path],
+    agent_plan_path: Path,
+    source_packet_path: Path,
+    checkpoints_path: Path,
+    validation_report_path: Path,
+    run_manifest_path: Path,
+    run_id: str,
+    sources: List[Dict[str, object]],
+    previous_state: ChangeState,
+    resume_count: int,
+    attempt_count: int,
+    manifest: Dict[str, object],
+    checkpoint_payload: Dict[str, object],
+    plan: ResearchPlan,
+) -> ResearchRunResult:
+    execute_step, execute_assignment, execute_output_path, blockers = _checkpoint_finalize_context(
+        workspace,
+        checkpoint_payload,
+        plan,
+    )
+    if blockers:
+        raise ResearchError("Cannot finalize research run yet:\n- " + "\n- ".join(blockers))
+
+    answer_text = execute_output_path.read_text(encoding="utf-8", errors="ignore")
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    if output_file != execute_output_path:
+        output_file.write_text(answer_text, encoding="utf-8")
+    validation = _verify_research_answer(workspace, answer_text, sources)
+    _write_validation_report(workspace, validation_report_path, question, job_profile, sources, validation)
+    change_summary_path = _write_research_change_summary(workspace, previous_state)
+
+    final_status = "completed"
+    validation_step_status = "completed"
+    if validation["errors"]:
+        final_status = "failed_validation"
+        validation_step_status = "failed"
+    elif validation["warnings"]:
+        final_status = "completed_with_warnings"
+        validation_step_status = "warning"
+
+    final_plan = _build_research_plan(
+        question=question,
+        mode=mode,
+        job_profile=job_profile,
+        notes_dir=workspace.relative_path(notes_dir),
+        note_paths=[workspace.relative_path(path) for path in note_paths],
+        source_packet_path=workspace.relative_path(source_packet_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        validation_report_path=workspace.relative_path(validation_report_path),
+        sources=sources,
+        report_path=workspace.relative_path(report_path),
+        packet_path=workspace.relative_path(packet_path),
+        answer_path=workspace.relative_path(output_file),
+        slide_path=workspace.relative_path(slide_path) if slide_path else None,
+        execution_status="completed",
+        validation_status=validation_step_status,
+        filing_status="completed" if output_file.exists() else "pending",
+        agent_plan_path=workspace.relative_path(agent_plan_path),
+    )
+    _build_research_agent_plan(
+        final_plan,
+        run_manifest_path=workspace.relative_path(run_manifest_path),
+        checkpoints_path=workspace.relative_path(checkpoints_path),
+        default_profile=_optional_text(manifest.get("profile")),
+    )
+    _persist_existing_research_plan(workspace, plan_path, plan_json_path, final_plan)
+    execution_packet_paths = _write_research_execution_packets(workspace, final_plan, notes_dir)
+    _write_research_checkpoints(workspace, checkpoints_path, final_plan, execution_packet_paths)
+    updated_checkpoint_payload = read_json_manifest(checkpoints_path)
+    _write_research_agent_plan(
+        notes_dir,
+        _build_research_agent_plan(
+            final_plan,
+            run_manifest_path=workspace.relative_path(run_manifest_path),
+            checkpoints_path=workspace.relative_path(checkpoints_path),
+            default_profile=_optional_text(manifest.get("profile")),
+            checkpoint_payload=updated_checkpoint_payload,
+        ),
+    )
+    _write_research_run_state(
+        workspace=workspace,
+        run_id=run_id,
+        question=question,
+        mode=mode,
+        profile_name=_optional_text(manifest.get("profile")),
+        job_profile=job_profile,
+        plan_path=plan_path,
+        plan_json_path=plan_json_path,
+        report_path=report_path,
+        packet_path=packet_path,
+        answer_path=output_file,
+        slide_path=slide_path,
+        notes_dir=notes_dir,
+        note_paths=note_paths,
+        execution_packet_paths=list(execution_packet_paths.values()),
+        agent_plan_path=agent_plan_path,
+        source_packet_path=source_packet_path,
+        checkpoints_path=checkpoints_path,
+        validation_report_path=validation_report_path,
+        change_summary_path=change_summary_path,
+        status=final_status,
+        sources=sources,
+        validation=validation,
+        resume_count=resume_count,
+        attempt_count=attempt_count,
+        resume_strategy="checkpoint_finalize",
+        reconciled_from_step_id="execute-profile",
+        reconciled_from_assignment_id=execute_assignment.assignment_id,
+        reconciled_from_output_path=workspace.relative_path(output_file),
+    )
+    if not validation["passed"]:
+        raise ResearchError("Research verification failed: " + "; ".join(validation["errors"]))
+
+    append_workspace_log(
+        workspace,
+        operation="query",
+        title=question,
+        details=[
+            "Finalized research from approved checkpoint state.",
+            f"Status: `{final_status}`.",
+            f"Answer source: `{workspace.relative_path(execute_output_path)}`.",
+        ],
+        related_paths=[
+            workspace.relative_path(report_path),
+            workspace.relative_path(output_file),
+            workspace.relative_path(change_summary_path),
+            workspace.relative_path(run_manifest_path),
+        ],
+    )
+    return ResearchRunResult(
+        plan_path=plan_path,
+        report_path=report_path,
+        packet_path=packet_path,
+        answer_path=output_file,
+        slide_path=slide_path,
+        notes_dir=notes_dir,
+        source_packet_path=source_packet_path,
+        checkpoints_path=checkpoints_path,
+        validation_report_path=validation_report_path,
+        change_summary_path=change_summary_path,
+        run_manifest_path=run_manifest_path,
+        hit_count=len(sources),
+        ran_profile=False,
+        resumed=True,
+        status=final_status,
+        warning_count=len(validation["warnings"]),
+    )
+
+
 def _execute_research_run(
     workspace: Workspace,
     question: str,
@@ -614,6 +886,7 @@ def _execute_research_run(
     attempt_count: int,
     resumed: bool,
 ) -> ResearchRunResult:
+    resume_strategy = "adapter_rerun" if resumed else None
     config = workspace.load_config()
     try:
         adapter = adapter_from_config(config, profile_name)
@@ -682,6 +955,7 @@ def _execute_research_run(
             validation=_failed_validation_payload(_available_citations(sources), [str(error)]),
             resume_count=resume_count,
             attempt_count=attempt_count,
+            resume_strategy=resume_strategy,
         )
         raise ResearchError(str(error)) from error
 
@@ -750,6 +1024,7 @@ def _execute_research_run(
         validation=_pending_validation_payload(_available_citations(sources)),
         resume_count=resume_count,
         attempt_count=attempt_count,
+        resume_strategy=resume_strategy,
     )
 
     result = adapter.run(prompt_file=packet_path, workspace_root=workspace.root, output_file=output_file)
@@ -821,6 +1096,7 @@ def _execute_research_run(
             ),
             resume_count=resume_count,
             attempt_count=attempt_count,
+            resume_strategy=resume_strategy,
         )
         raise ResearchError(f"Adapter '{profile_name}' exited with code {result.returncode}.")
 
@@ -905,6 +1181,7 @@ def _execute_research_run(
         validation=validation,
         resume_count=resume_count,
         attempt_count=attempt_count,
+        resume_strategy=resume_strategy,
     )
     if not validation["passed"]:
         raise ResearchError("Research verification failed: " + "; ".join(validation["errors"]))
@@ -967,43 +1244,51 @@ def _write_research_run_state(
     validation: Dict[str, object],
     resume_count: int,
     attempt_count: int,
+    resume_strategy: Optional[str] = None,
+    reconciled_from_step_id: Optional[str] = None,
+    reconciled_from_assignment_id: Optional[str] = None,
+    reconciled_from_output_path: Optional[str] = None,
 ) -> Path:
-    return write_run_manifest(
-        workspace,
-        "research",
-        {
-            "run_label": question,
-            "question": question,
-            "mode": mode,
-            "profile": profile_name,
-            "job_profile": job_profile,
-            "plan_path": workspace.relative_path(plan_path),
-            "plan_json_path": workspace.relative_path(plan_json_path),
-            "report_path": workspace.relative_path(report_path),
-            "packet_path": workspace.relative_path(packet_path),
-            "answer_path": workspace.relative_path(answer_path),
-            "slide_path": workspace.relative_path(slide_path) if slide_path else None,
-            "notes_dir": workspace.relative_path(notes_dir),
-            "note_paths": [workspace.relative_path(path) for path in note_paths],
-            "execution_packet_paths": [workspace.relative_path(path) for path in execution_packet_paths],
-            "agent_plan_path": workspace.relative_path(agent_plan_path),
-            "source_packet_path": workspace.relative_path(source_packet_path),
-            "checkpoints_path": workspace.relative_path(checkpoints_path),
-            "validation_report_path": workspace.relative_path(validation_report_path),
-            "change_summary_path": workspace.relative_path(change_summary_path) if change_summary_path else None,
-            "status": status,
-            "resume_supported": True,
-            "attempt_count": attempt_count,
-            "resume_count": resume_count,
-            "sources": sources,
-            "citations": {
-                "available": _available_citations(sources),
-                "used": list(validation.get("used", [])),
-            },
-            "validation": validation,
+    payload = {
+        "run_label": question,
+        "question": question,
+        "mode": mode,
+        "profile": profile_name,
+        "job_profile": job_profile,
+        "plan_path": workspace.relative_path(plan_path),
+        "plan_json_path": workspace.relative_path(plan_json_path),
+        "report_path": workspace.relative_path(report_path),
+        "packet_path": workspace.relative_path(packet_path),
+        "answer_path": workspace.relative_path(answer_path),
+        "slide_path": workspace.relative_path(slide_path) if slide_path else None,
+        "notes_dir": workspace.relative_path(notes_dir),
+        "note_paths": [workspace.relative_path(path) for path in note_paths],
+        "execution_packet_paths": [workspace.relative_path(path) for path in execution_packet_paths],
+        "agent_plan_path": workspace.relative_path(agent_plan_path),
+        "source_packet_path": workspace.relative_path(source_packet_path),
+        "checkpoints_path": workspace.relative_path(checkpoints_path),
+        "validation_report_path": workspace.relative_path(validation_report_path),
+        "change_summary_path": workspace.relative_path(change_summary_path) if change_summary_path else None,
+        "status": status,
+        "resume_supported": True,
+        "attempt_count": attempt_count,
+        "resume_count": resume_count,
+        "sources": sources,
+        "citations": {
+            "available": _available_citations(sources),
+            "used": list(validation.get("used", [])),
         },
-        run_id=run_id,
-    )
+        "validation": validation,
+    }
+    if resume_strategy is not None:
+        payload["resume_strategy"] = resume_strategy
+    if reconciled_from_step_id is not None:
+        payload["reconciled_from_step_id"] = reconciled_from_step_id
+    if reconciled_from_assignment_id is not None:
+        payload["reconciled_from_assignment_id"] = reconciled_from_assignment_id
+    if reconciled_from_output_path is not None:
+        payload["reconciled_from_output_path"] = reconciled_from_output_path
+    return write_run_manifest(workspace, "research", payload, run_id=run_id)
 
 
 def _write_research_change_summary(workspace: Workspace, previous_state: ChangeState) -> Path:

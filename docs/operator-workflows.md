@@ -705,6 +705,7 @@ Supported paths in this release:
 - `cognisync research-step dispatch --run latest --default-profile codex --profile-route build-paper-matrix=gemini`
 - `cognisync research-step dispatch --run latest --default-profile codex --hosted`
 - `cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1`
+- `cognisync research --resume latest`
 
 The command family:
 
@@ -715,6 +716,7 @@ The command family:
 5. leaves the filesystem canonical, so remote workers, humans, and later automation all see the same operator history
 6. can also queue remote-eligible note-building and synthesis assignments as first-class hosted `research_step` jobs through `dispatch --hosted`, with the same assignment metadata and adapter defaults carried into the queue manifests
 7. intentionally keeps deterministic validation and filing steps local-only in this milestone, so the hosted layer handles research generation first while the workspace remains the canonical validator and filer
+8. lets `research --resume latest` finalize from approved checkpoint state without rerunning a model, while `research --resume latest --profile codex` remains the explicit rerun path
 
 ```mermaid
 flowchart LR
@@ -728,7 +730,8 @@ flowchart LR
     D --> E["research-step review records approved or changes_requested"]
     D2 --> E
     D3 --> E
-    E --> F["resume, export, and future orchestrators reuse the same checkpoint state"]
+    E --> F["research --resume finalizes from approved checkpoint state"]
+    F --> G["export and future orchestrators reuse the same checkpoint state"]
 ```
 
 Before a research run is considered complete, Cognisync now checks:

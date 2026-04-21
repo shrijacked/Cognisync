@@ -232,6 +232,7 @@ cognisync research-step run --run latest --step build-paper-matrix --profile cod
 cognisync research-step dispatch --run latest --default-profile codex --profile-route build-paper-matrix=gemini
 cognisync research-step dispatch --run latest --default-profile codex --hosted
 cognisync research-step review --run latest --step build-paper-matrix --status approved --reviewer reviewer-1
+cognisync research --resume latest
 ```
 
 `research-step` turns the packet scaffold into a file-native operator loop:
@@ -240,6 +241,7 @@ cognisync research-step review --run latest --step build-paper-matrix --status a
 - `run` executes one step packet through any configured adapter profile and writes the step artifact back into the research-job workspace
 - `dispatch` either executes eligible note-building steps locally in dependency order or queues the remote-eligible research steps as hosted jobs with `--hosted`, always honoring assignment-level adapter defaults unless you override specific step ids with `--profile-route`
 - `review` records approval or change-request state on the same checkpoint manifest so later resumes or exports can see which intermediate artifacts were trusted
+- `research --resume latest` now closes the loop too: without `--profile`, it finalizes from an approved `execute-profile` artifact and runs local validation plus filing; with explicit `--profile`, it still reruns synthesis through that adapter on purpose
 
 The agent-plan artifact now makes the multi-agent intent explicit and drives the first hosted research-step runtime:
 

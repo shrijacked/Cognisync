@@ -5,7 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from urllib.parse import quote
 
@@ -1215,6 +1215,233 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(updated_results["execute-profile"]["status"], "completed")
             self.assertEqual(updated_results["execute-profile"]["profile"], "alpha")
 
+    def test_research_resume_without_profile_finalizes_from_approved_checkpoint_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Resume Reconciliation Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                ),
+                0,
+            )
+
+            for _ in range(4):
+                self.assertEqual(
+                    main(
+                        [
+                            "jobs",
+                            "run-next",
+                            "--workspace",
+                            str(root),
+                            "--worker-id",
+                            "research-worker",
+                            "--capability",
+                            "research",
+                        ]
+                    ),
+                    0,
+                )
+
+            for step_id in [
+                "build-working-set",
+                "build-paper-matrix",
+                "capture-open-questions",
+                "execute-profile",
+            ]:
+                self.assertEqual(
+                    main(
+                        [
+                            "research-step",
+                            "review",
+                            "--workspace",
+                            str(root),
+                            "--run",
+                            "latest",
+                            "--step",
+                            step_id,
+                            "--status",
+                            "approved",
+                            "--reviewer",
+                            "operator-1",
+                        ]
+                    ),
+                    0,
+                )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--resume",
+                        "latest",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Resumed research run", stdout.getvalue())
+
+            manifest_path = sorted((workspace.state_dir / "runs").glob("research-*.json"))[-1]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(manifest["resume_strategy"], "checkpoint_finalize")
+            self.assertEqual(manifest["reconciled_from_step_id"], "execute-profile")
+            self.assertEqual(manifest["reconciled_from_assignment_id"], "assignment-execute-profile")
+            self.assertEqual(manifest["reconciled_from_output_path"], manifest["answer_path"])
+            self.assertTrue(manifest["validation"]["passed"])
+
+            checkpoints_path = workspace.root / manifest["checkpoints_path"]
+            checkpoint_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+            steps = {item["step_id"]: item for item in checkpoint_payload["steps"]}
+            self.assertEqual(steps["validate-citations"]["status"], "completed")
+            self.assertEqual(steps["file-answer"]["status"], "completed")
+            self.assertEqual(
+                checkpoint_payload["assignment_statuses"]["assignment-validate-citations"]["status"],
+                "completed",
+            )
+            self.assertEqual(
+                checkpoint_payload["assignment_statuses"]["assignment-file-answer"]["status"],
+                "completed",
+            )
+
+    def test_research_resume_without_profile_reports_review_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Resume Blocker Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                ),
+                0,
+            )
+
+            for _ in range(4):
+                self.assertEqual(
+                    main(
+                        [
+                            "jobs",
+                            "run-next",
+                            "--workspace",
+                            str(root),
+                            "--worker-id",
+                            "research-worker",
+                            "--capability",
+                            "research",
+                        ]
+                    ),
+                    0,
+                )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--resume",
+                        "latest",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("build-working-set", stderr.getvalue())
+            self.assertIn("pending review", stderr.getvalue().lower())
+            self.assertIn("execute-profile", stderr.getvalue())
+
     def test_research_resume_backfills_missing_agent_plan_and_assignment_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1435,6 +1662,7 @@ class RuntimeContractsTests(unittest.TestCase):
             self.assertEqual(manifest["status"], "completed")
             self.assertEqual(manifest["attempt_count"], 1)
             self.assertEqual(manifest["resume_count"], 1)
+            self.assertEqual(manifest["resume_strategy"], "adapter_rerun")
             self.assertTrue(manifest["validation"]["passed"])
             answer_path = workspace.root / manifest["answer_path"]
             self.assertTrue(answer_path.exists())

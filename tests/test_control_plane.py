@@ -3358,6 +3358,169 @@ class ControlPlaneTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_remote_worker_hosted_research_steps_can_be_reconciled_without_rerunning_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server_root = Path(tmp) / "server-workspace"
+            mirror_root = Path(tmp) / "mirror-workspace"
+            workspace = Workspace(server_root)
+            workspace.initialize(name="Hosted Research Reconciliation Workspace")
+            (server_root / "raw" / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and reflection.\n",
+                encoding="utf-8",
+            )
+            (server_root / "raw" / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(server_root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(server_root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                ),
+                0,
+            )
+
+            initial_bundle = export_sync_bundle(workspace)
+            mirror_workspace = Workspace(mirror_root)
+            mirror_workspace.initialize(name="Hosted Research Reconciliation Mirror")
+            import_sync_bundle_archive(
+                mirror_workspace,
+                encode_sync_bundle_archive(initial_bundle.directory),
+            )
+
+            token_stdout = Path(tmp) / "token.json"
+            self.assertEqual(
+                main(
+                    [
+                        "control-plane",
+                        "issue-token",
+                        "local-operator",
+                        "--workspace",
+                        str(server_root),
+                        "--scope",
+                        "control.read",
+                        "--scope",
+                        "jobs.claim",
+                        "--scope",
+                        "jobs.heartbeat",
+                        "--scope",
+                        "jobs.run",
+                        "--output-file",
+                        str(token_stdout),
+                    ]
+                ),
+                0,
+            )
+            token_value = json.loads(token_stdout.read_text(encoding="utf-8"))["token"]
+
+            server = create_control_plane_server(workspace=workspace, host="127.0.0.1", port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                worker_result = run_remote_worker(
+                    server_url=f"http://{host}:{port}",
+                    token=token_value,
+                    worker_id="remote-research",
+                    max_jobs=4,
+                    worker_capabilities=["research"],
+                    workspace_root=mirror_root,
+                )
+
+                self.assertEqual(worker_result.processed_count, 4)
+                self.assertEqual(worker_result.completed_count, 4)
+
+                for step_id in [
+                    "build-working-set",
+                    "build-paper-matrix",
+                    "capture-open-questions",
+                    "execute-profile",
+                ]:
+                    self.assertEqual(
+                        main(
+                            [
+                                "research-step",
+                                "review",
+                                "--workspace",
+                                str(server_root),
+                                "--run",
+                                "latest",
+                                "--step",
+                                step_id,
+                                "--status",
+                                "approved",
+                                "--reviewer",
+                                "operator-1",
+                            ]
+                        ),
+                        0,
+                    )
+
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "research",
+                            "--workspace",
+                            str(server_root),
+                            "--resume",
+                            "latest",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 0)
+                self.assertIn("Resumed research run", stdout.getvalue())
+
+                manifest = json.loads(sorted((workspace.state_dir / "runs").glob("research-*.json"))[-1].read_text(encoding="utf-8"))
+                self.assertEqual(manifest["status"], "completed")
+                self.assertEqual(manifest["resume_strategy"], "checkpoint_finalize")
+                self.assertEqual(manifest["reconciled_from_step_id"], "execute-profile")
+                self.assertEqual(manifest["reconciled_from_assignment_id"], "assignment-execute-profile")
+
+                checkpoints_path = workspace.root / manifest["checkpoints_path"]
+                checkpoints_payload = json.loads(checkpoints_path.read_text(encoding="utf-8"))
+                steps = {item["step_id"]: item for item in checkpoints_payload["steps"]}
+                self.assertEqual(steps["validate-citations"]["status"], "completed")
+                self.assertEqual(steps["file-answer"]["status"], "completed")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_remote_worker_session_tracks_running_mirrored_jobs_over_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server_root = Path(tmp) / "server-workspace"
