@@ -2611,6 +2611,74 @@ def update_research_step_dispatch_record(
 
 
 def render_research_step_status(workspace: Workspace, resume: str = "latest") -> str:
+    payload = build_research_run_status_payload(workspace, resume=resume)
+    lines = [
+        "# Research Step Queue",
+        "",
+        f"Run manifest: `{payload['run_manifest_path']}`",
+        f"Question: {payload['question']}",
+        f"Job profile: `{payload['job_profile']}`",
+        f"Checkpoints: `{payload['checkpoints_path']}`",
+        f"Status: `{payload['status']}`",
+        f"Ready for reconcile: `{payload['ready_for_reconcile']}`",
+        f"Recommended action: `{payload['recommended_action']}`",
+        "",
+        "## Steps",
+        "",
+    ]
+    if payload["reconcile_blockers"]:
+        lines.extend(["## Reconcile Blockers", ""])
+        for blocker in list(payload["reconcile_blockers"]):
+            lines.append(f"- {blocker}")
+        lines.extend(["", "## Steps", ""])
+    for step in list(payload["steps"]):
+        lines.append(
+            f"- {step['step_id']} | {step['title']} | owner={step['owner']} | assignment={step['assignment_id']} "
+            f"| agent={step['agent_role']} | profile={step['profile_name']} | capability={step['worker_capability']} "
+            f"| review-roles={step['review_roles']} | planned={step['planned_status']} "
+            f"| execution={step['execution_status']} | review={step['review_status']} "
+            f"| job-status={step['job_status']} | job-id={step['job_id']} | job-profile={step['job_profile']} "
+            f"| output=`{step['output_path']}` | packet=`{step['packet_path']}`"
+        )
+    return "\n".join(lines)
+
+
+def _research_run_recommended_action(
+    manifest: Dict[str, object],
+    checkpoint_payload: Dict[str, object],
+    ready_for_reconcile: bool,
+    reconcile_blockers: List[str],
+) -> str:
+    status = str(manifest.get("status", "")).strip()
+    if status in {"completed", "completed_with_warnings", "failed_validation"}:
+        return "run_completed"
+    if ready_for_reconcile:
+        return "resume_research"
+    if any(
+        marker in blocker
+        for blocker in reconcile_blockers
+        for marker in ["pending review", "changes requested", "needs follow up", "not approved yet"]
+    ):
+        return "review_step_outputs"
+    if any(_research_step_execution_status(step) == "failed" for step in list(checkpoint_payload.get("steps", [])) if isinstance(step, dict)):
+        return "retry_failed_steps"
+    if any(
+        isinstance(step, dict)
+        and _is_research_step_dispatchable(step)
+        and _research_step_execution_status(step) == DEFAULT_RESEARCH_STEP_EXECUTION_STATUS
+        for step in list(checkpoint_payload.get("steps", []))
+    ):
+        return "dispatch_or_run_research_steps"
+    if any(
+        marker in blocker
+        for blocker in reconcile_blockers
+        for marker in ["not completed yet", "durable output artifact"]
+    ):
+        return "dispatch_or_run_research_steps"
+    return "inspect_run_state"
+
+
+def build_research_run_status_payload(workspace: Workspace, resume: str = "latest") -> Dict[str, object]:
     run_manifest_path, manifest, checkpoints_path, checkpoint_payload, plan = _load_research_checkpoint_context(workspace, resume)
     agent_plan = _build_research_agent_plan(
         plan,
@@ -2621,18 +2689,23 @@ def render_research_step_status(workspace: Workspace, resume: str = "latest") ->
     )
     assignments_by_step = {assignment.step_id: assignment for assignment in agent_plan.assignments}
     jobs_by_step = _research_step_job_lookup(workspace, run_manifest_path)
-    lines = [
-        "# Research Step Queue",
-        "",
-        f"Run manifest: `{workspace.relative_path(run_manifest_path)}`",
-        f"Question: {manifest.get('question', '')}",
-        f"Job profile: `{manifest.get('job_profile', DEFAULT_RESEARCH_JOB_PROFILE)}`",
-        f"Checkpoints: `{workspace.relative_path(checkpoints_path)}`",
-        "",
-        "## Steps",
-        "",
-    ]
+
+    ready_for_reconcile = False
+    reconcile_blockers: List[str] = []
+    if _checkpoint_finalize_candidate_present(checkpoint_payload, plan):
+        try:
+            _, _, _, reconcile_blockers = _checkpoint_finalize_context(workspace, checkpoint_payload, plan)
+        except ResearchError as error:
+            reconcile_blockers = [str(error)]
+        ready_for_reconcile = not reconcile_blockers
+    if str(manifest.get("status", "")).strip() in {"completed", "completed_with_warnings", "failed_validation"}:
+        ready_for_reconcile = False
+        reconcile_blockers = []
+
+    steps: List[Dict[str, object]] = []
     for step in list(checkpoint_payload.get("steps", [])):
+        if not isinstance(step, dict):
+            continue
         assignment = assignments_by_step.get(str(step.get("step_id", "")))
         output_path = _optional_text(step.get("execution_output_path")) or _optional_text(step.get("output_path")) or "-"
         packet_path = _optional_text(step.get("execution_packet_path")) or "-"
@@ -2656,15 +2729,51 @@ def render_research_step_status(workspace: Workspace, resume: str = "latest") ->
             job_status = str(job.get("status", "")) or "-"
             job_id = str(job.get("job_id", "")) or "-"
             job_profile = str(parameters.get("profile_name", "")) or "-"
-        lines.append(
-            f"- {step['step_id']} | {step['title']} | owner={step['owner']} | assignment={assignment_id} "
-            f"| agent={agent_role} | profile={profile_name} | capability={worker_capability} | review-roles={review_roles} "
-            f"| planned={step['status']} "
-            f"| execution={_research_step_execution_status(step)} | review={_research_step_review_status(step)} "
-            f"| job-status={job_status} | job-id={job_id} | job-profile={job_profile} "
-            f"| output=`{output_path}` | packet=`{packet_path}`"
+        steps.append(
+            {
+                "step_id": str(step.get("step_id", "")),
+                "title": str(step.get("title", "")),
+                "owner": str(step.get("owner", "")),
+                "assignment_id": assignment_id,
+                "agent_role": agent_role,
+                "profile_name": profile_name,
+                "worker_capability": worker_capability,
+                "review_roles": review_roles,
+                "planned_status": str(step.get("status", "")),
+                "execution_status": _research_step_execution_status(step),
+                "review_status": _research_step_review_status(step),
+                "job_status": job_status,
+                "job_id": job_id,
+                "job_profile": job_profile,
+                "output_path": output_path,
+                "packet_path": packet_path,
+            }
         )
-    return "\n".join(lines)
+
+    recommended_action = _research_run_recommended_action(
+        manifest,
+        checkpoint_payload,
+        ready_for_reconcile,
+        reconcile_blockers,
+    )
+    return {
+        "run_id": run_manifest_path.stem,
+        "question": str(manifest.get("question", "")),
+        "status": str(manifest.get("status", "")),
+        "mode": str(manifest.get("mode", "")),
+        "job_profile": str(manifest.get("job_profile", DEFAULT_RESEARCH_JOB_PROFILE)),
+        "resume_strategy": _optional_text(manifest.get("resume_strategy")),
+        "run_manifest_path": workspace.relative_path(run_manifest_path),
+        "plan_path": str(manifest.get("plan_path", "")),
+        "agent_plan_path": str(manifest.get("agent_plan_path", "")),
+        "checkpoints_path": workspace.relative_path(checkpoints_path),
+        "answer_path": str(manifest.get("answer_path", "")),
+        "ready_for_reconcile": ready_for_reconcile,
+        "reconcile_blockers": reconcile_blockers,
+        "recommended_action": recommended_action,
+        "assignment_summary": dict(agent_plan.summary_counts),
+        "steps": steps,
+    }
 
 
 def run_research_step(

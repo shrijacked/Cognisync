@@ -82,7 +82,15 @@ from cognisync.maintenance import (
 from cognisync.notifications import write_notifications_manifest
 from cognisync.review_queue import build_review_queue
 from cognisync.review_state import read_review_actions
-from cognisync.research import DEFAULT_RESEARCH_JOB_PROFILE, enqueue_research_step_job_for_run
+from cognisync.research import (
+    DEFAULT_RESEARCH_JOB_PROFILE,
+    ResearchStepReviewResult,
+    ResearchRunResult,
+    build_research_run_status_payload,
+    enqueue_research_step_job_for_run,
+    review_research_step,
+    run_research_cycle,
+)
 from cognisync.scanner import scan_workspace
 from cognisync.sharing import (
     accept_shared_peer,
@@ -1012,6 +1020,31 @@ def _run_history_payload(workspace: "Workspace") -> Dict[str, object]:
     }
 
 
+def _count_strings(values: List[str]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _research_runs_payload(workspace: "Workspace", run: Optional[str] = None) -> Dict[str, object]:
+    if run:
+        item = build_research_run_status_payload(workspace, resume=run)
+        return {"run": item, "summary": {"total_count": 1}}
+
+    items: List[Dict[str, object]] = []
+    for path in sorted(workspace.runs_dir.glob("research-*.json"), reverse=True):
+        items.append(build_research_run_status_payload(workspace, resume=workspace.relative_path(path)))
+    return {
+        "items": items,
+        "summary": {
+            "total_count": len(items),
+            "ready_for_reconcile_count": sum(1 for item in items if bool(item.get("ready_for_reconcile", False))),
+            "counts_by_status": _count_strings([str(item.get("status", "unknown")) for item in items]),
+        },
+    }
+
+
 def _sync_history_payload(workspace: "Workspace") -> Dict[str, object]:
     events = list_sync_events(workspace)
     counts_by_operation: Dict[str, int] = {}
@@ -1078,6 +1111,39 @@ def _serialize_connector_sync_result(workspace: "Workspace", result: ConnectorSy
         "change_summary_path": workspace.relative_path(result.change_summary_path),
         "run_manifest_path": workspace.relative_path(result.run_manifest_path),
         "result_paths": [workspace.relative_path(path) for path in result.result_paths],
+    }
+
+
+def _serialize_research_step_review_result(
+    workspace: "Workspace", result: ResearchStepReviewResult
+) -> Dict[str, object]:
+    return {
+        "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+        "checkpoints_path": workspace.relative_path(result.checkpoints_path),
+        "step_id": result.step_id,
+        "review_status": result.review_status,
+        "reviewer": result.reviewer,
+    }
+
+
+def _serialize_research_run_result(workspace: "Workspace", result: ResearchRunResult) -> Dict[str, object]:
+    return {
+        "plan_path": workspace.relative_path(result.plan_path),
+        "report_path": workspace.relative_path(result.report_path),
+        "packet_path": workspace.relative_path(result.packet_path),
+        "answer_path": workspace.relative_path(result.answer_path) if result.answer_path is not None else None,
+        "slide_path": workspace.relative_path(result.slide_path) if result.slide_path is not None else None,
+        "notes_dir": workspace.relative_path(result.notes_dir),
+        "source_packet_path": workspace.relative_path(result.source_packet_path),
+        "checkpoints_path": workspace.relative_path(result.checkpoints_path),
+        "validation_report_path": workspace.relative_path(result.validation_report_path),
+        "change_summary_path": workspace.relative_path(result.change_summary_path),
+        "run_manifest_path": workspace.relative_path(result.run_manifest_path),
+        "hit_count": result.hit_count,
+        "ran_profile": result.ran_profile,
+        "resumed": result.resumed,
+        "status": result.status,
+        "warning_count": result.warning_count,
     }
 
 
@@ -1392,6 +1458,11 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/runs":
             self._send_json(200, {"actor": _serialize_actor(actor), **_run_history_payload(self._workspace)})
+            return
+
+        if parsed.path == "/api/research-runs":
+            requested_run = str(query.get("run", [""])[0] or "").strip() or None
+            self._send_json(200, {"actor": _serialize_actor(actor), **_research_runs_payload(self._workspace, run=requested_run)})
             return
 
         if parsed.path == "/api/sync":
@@ -1717,6 +1788,53 @@ class _ControlPlaneHandler(BaseHTTPRequestHandler):
                         "bundle_manifest": json.loads(result.manifest_path.read_text(encoding="utf-8")),
                         "sync_event": json.loads(result.event_manifest_path.read_text(encoding="utf-8")),
                         "history_path": self._workspace.relative_path(result.history_manifest_path),
+                    },
+                )
+                return
+            if parsed.path == "/api/research-steps/review":
+                actor = self._authenticate(["review.run"])
+                actor = _require_review_actor(self._workspace, actor, "review hosted research steps")
+                requested_reviewer = str(payload.get("reviewer", "")).strip()
+                actor_id = str(actor.get("principal_id", ""))
+                if requested_reviewer and requested_reviewer != actor_id:
+                    raise ControlPlaneError("Hosted research-step review must use the authenticated reviewer identity.")
+                result = review_research_step(
+                    self._workspace,
+                    resume=str(payload.get("run", "latest") or "latest"),
+                    step_id=str(payload.get("step_id", "")),
+                    review_status=str(payload.get("status", "")),
+                    reviewer=actor_id,
+                    note=str(payload.get("note", "")) or None,
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "review": _serialize_research_step_review_result(self._workspace, result),
+                        "run": build_research_run_status_payload(
+                            self._workspace,
+                            resume=self._workspace.relative_path(result.run_manifest_path),
+                        ),
+                    },
+                )
+                return
+            if parsed.path == "/api/research/resume":
+                actor = self._authenticate(["jobs.run"])
+                actor = _require_control_admin_actor(self._workspace, actor, "resume hosted research runs")
+                result = run_research_cycle(
+                    self._workspace,
+                    resume=str(payload.get("run", "latest") or "latest"),
+                    profile_name=str(payload.get("profile_name", "")) or None,
+                )
+                self._send_json(
+                    200,
+                    {
+                        "actor": _serialize_actor(actor),
+                        "result": _serialize_research_run_result(self._workspace, result),
+                        "run": build_research_run_status_payload(
+                            self._workspace,
+                            resume=self._workspace.relative_path(result.run_manifest_path),
+                        ),
                     },
                 )
                 return
