@@ -592,6 +592,143 @@ class ReviewUiTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
+    def test_review_ui_server_reviews_and_finalizes_research_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Operator Action Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                ),
+                0,
+            )
+            for _ in range(4):
+                self.assertEqual(
+                    main(
+                        [
+                            "jobs",
+                            "run-next",
+                            "--workspace",
+                            str(root),
+                            "--worker-id",
+                            "research-worker",
+                            "--capability",
+                            "research",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(main(["ui", "review", "--workspace", str(root)]), 0)
+
+            server = create_review_ui_server(
+                workspace.review_ui_dir,
+                host="127.0.0.1",
+                port=0,
+                index_name="index.html",
+                workspace=workspace,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                for step_id in [
+                    "build-working-set",
+                    "build-paper-matrix",
+                    "capture-open-questions",
+                    "execute-profile",
+                ]:
+                    connection = HTTPConnection(host, port, timeout=5)
+                    body = urlencode(
+                        {
+                            "run": "latest",
+                            "step_id": step_id,
+                            "status": "approved",
+                            "note": "approved in dashboard",
+                        }
+                    )
+                    connection.request(
+                        "POST",
+                        "/api/research-steps/review",
+                        body=body,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    )
+                    response = connection.getresponse()
+                    response.read()
+                    self.assertEqual(response.status, 303)
+                    connection.close()
+
+                state = json.loads((workspace.review_ui_dir / "dashboard-state.json").read_text(encoding="utf-8"))
+                self.assertEqual(state["research"]["ready_for_reconcile_count"], 1)
+                self.assertEqual(state["research"]["items"][0]["recommended_action"], "resume_research")
+                self.assertIn("action=\"/api/research/resume\"", (workspace.review_ui_dir / "index.html").read_text(encoding="utf-8"))
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/research/resume",
+                    body=urlencode({"run": "latest"}),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                manifest = json.loads(sorted((workspace.state_dir / "runs").glob("research-*.json"))[-1].read_text(encoding="utf-8"))
+                self.assertEqual(manifest["status"], "completed")
+                self.assertEqual(manifest["resume_strategy"], "checkpoint_finalize")
+                self.assertEqual(manifest["reconciled_from_step_id"], "execute-profile")
+                state = json.loads((workspace.review_ui_dir / "dashboard-state.json").read_text(encoding="utf-8"))
+                self.assertEqual(state["research"]["items"][0]["recommended_action"], "run_completed")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_review_ui_server_enforces_access_roles_for_live_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -668,6 +805,133 @@ class ReviewUiTests(unittest.TestCase):
 
                 queue_payload = json.loads((workspace.jobs_dir / "queue.json").read_text(encoding="utf-8"))
                 self.assertEqual(queue_payload["queued_count"], 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_review_ui_server_blocks_reviewers_from_research_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Operator Access Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+            self.assertEqual(main(["access", "grant", "reviewer-1", "reviewer", "--workspace", str(root)]), 0)
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                ),
+                0,
+            )
+            for _ in range(4):
+                self.assertEqual(
+                    main(
+                        [
+                            "jobs",
+                            "run-next",
+                            "--workspace",
+                            str(root),
+                            "--worker-id",
+                            "research-worker",
+                            "--capability",
+                            "research",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(main(["ui", "review", "--workspace", str(root), "--actor-id", "reviewer-1"]), 0)
+
+            server = create_review_ui_server(
+                workspace.review_ui_dir,
+                host="127.0.0.1",
+                port=0,
+                index_name="index.html",
+                workspace=workspace,
+                actor_id="reviewer-1",
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+                connection = HTTPConnection(host, port, timeout=5)
+                body = urlencode(
+                    {
+                        "run": "latest",
+                        "step_id": "build-working-set",
+                        "status": "approved",
+                        "note": "reviewed in dashboard",
+                    }
+                )
+                connection.request(
+                    "POST",
+                    "/api/research-steps/review",
+                    body=body,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 303)
+                connection.close()
+
+                manifest = json.loads(sorted((workspace.state_dir / "runs").glob("research-*.json"))[-1].read_text(encoding="utf-8"))
+                checkpoints = json.loads((workspace.root / manifest["checkpoints_path"]).read_text(encoding="utf-8"))
+                steps = {item["step_id"]: item for item in checkpoints["steps"]}
+                self.assertEqual(steps["build-working-set"]["review_status"], "approved")
+                self.assertEqual(steps["build-working-set"]["reviewed_by"], "reviewer-1")
+
+                connection = HTTPConnection(host, port, timeout=5)
+                connection.request(
+                    "POST",
+                    "/api/research/resume",
+                    body=urlencode({"run": "latest"}),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response = connection.getresponse()
+                error_body = response.read().decode("utf-8")
+                self.assertEqual(response.status, 403)
+                self.assertIn("does not have permission", error_body)
+                connection.close()
             finally:
                 server.shutdown()
                 server.server_close()

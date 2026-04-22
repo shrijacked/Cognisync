@@ -49,7 +49,12 @@ from cognisync.linter import lint_snapshot
 from cognisync.notifications import write_notifications_manifest
 from cognisync.observability import build_audit_manifest, build_usage_manifest, write_audit_manifest, write_usage_manifest
 from cognisync.planner import build_compile_plan
-from cognisync.research import ResearchError, build_research_run_status_payload
+from cognisync.research import (
+    ResearchError,
+    build_research_run_status_payload,
+    review_research_step,
+    run_research_cycle,
+)
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
 from cognisync.sharing import ensure_shared_workspace_manifest, load_shared_workspace_manifest
@@ -895,7 +900,7 @@ def _render_research_operator_summary(research: Dict[str, object]) -> str:
         [
             "          <h3>Research Runs</h3>",
             "          <table>",
-            "            <thead><tr><th>Run</th><th>Action</th><th>Ready</th><th>Blockers</th></tr></thead>",
+            "            <thead><tr><th>Run</th><th>Action</th><th>Ready</th><th>Blockers</th><th>Actions</th></tr></thead>",
             "            <tbody>",
         ]
     )
@@ -926,6 +931,7 @@ def _render_research_operator_summary(research: Dict[str, object]) -> str:
                 f"                <td><code>{action}</code></td>",
                 f"                <td>{ready}</td>",
                 f"                <td>{blocker_text}</td>",
+                f"                <td>{_render_research_resume_actions(item)}</td>",
                 "              </tr>",
             ]
         )
@@ -944,9 +950,10 @@ def _render_research_run_steps(item: Dict[str, object]) -> str:
         "          <details>",
         f"            <summary>{label} assignments</summary>",
         "            <table>",
-        "              <thead><tr><th>Step</th><th>Agent</th><th>Execution</th><th>Review</th><th>Output</th></tr></thead>",
+        "              <thead><tr><th>Step</th><th>Agent</th><th>Execution</th><th>Review</th><th>Output</th><th>Actions</th></tr></thead>",
         "              <tbody>",
     ]
+    run_ref = str(item.get("run_manifest_path", item.get("path", "latest"))).strip() or "latest"
     for step in steps:
         output_path = str(step.get("output_path", ""))
         lines.extend(
@@ -973,11 +980,56 @@ def _render_research_run_steps(item: Dict[str, object]) -> str:
                 f"                  <td>{escape(str(step.get('execution_status', '')))}</td>",
                 f"                  <td>{escape(str(step.get('review_status', '')))}</td>",
                 f"                  <td>{_render_index_preview_path(output_path, label='output')}</td>",
+                f"                  <td>{_render_research_step_actions(run_ref, step)}</td>",
                 "                </tr>",
             ]
         )
     lines.extend(["              </tbody>", "            </table>", "          </details>"])
     return "\n".join(lines)
+
+
+def _render_research_step_actions(run_ref: str, step: Dict[str, object]) -> str:
+    review_roles = str(step.get("review_roles", "")).strip()
+    execution_status = str(step.get("execution_status", "")).strip()
+    if not review_roles or review_roles == "-" or execution_status == "not_run":
+        return "<span class=\"muted\">No actions</span>"
+    step_id = str(step.get("step_id", "")).strip()
+    if not step_id:
+        return "<span class=\"muted\">No actions</span>"
+    forms = [
+        _render_inline_form(
+            "/api/research-steps/review",
+            [("run", run_ref), ("step_id", step_id), ("status", "approved")],
+            "Approve step",
+            text_input=("note", "note", "approved in dashboard"),
+        ),
+        _render_inline_form(
+            "/api/research-steps/review",
+            [("run", run_ref), ("step_id", step_id), ("status", "changes_requested")],
+            "Request changes",
+            text_input=("note", "note", "needs changes"),
+        ),
+    ]
+    return "<div class=\"stack\">" + "".join(forms) + "</div>"
+
+
+def _render_research_resume_actions(item: Dict[str, object]) -> str:
+    run_ref = str(item.get("run_manifest_path", item.get("path", "latest"))).strip() or "latest"
+    forms: List[str] = []
+    if bool(item.get("ready_for_reconcile", False)):
+        forms.append(_render_inline_form("/api/research/resume", [("run", run_ref)], "Finalize run"))
+    if str(item.get("recommended_action", "")) != "run_completed":
+        forms.append(
+            _render_inline_form(
+                "/api/research/resume",
+                [("run", run_ref)],
+                "Rerun profile",
+                text_input=("profile_name", "profile name", "codex"),
+            )
+        )
+    if not forms:
+        return "<span class=\"muted\">No actions</span>"
+    return "<div class=\"stack\">" + "".join(forms) + "</div>"
 
 
 def _render_index_preview_path(relative_path: str, label: str = "preview") -> str:
@@ -2322,9 +2374,9 @@ def _build_active_actor_summary(workspace: Workspace, actor_id: str) -> Dict[str
     role = str(member.get("role", "viewer"))
     permissions = ["read"]
     if role in REVIEW_ACTION_ROLES:
-        permissions.append("review")
+        permissions.extend(["review", "research-review"])
     if role in OPERATOR_ACTION_ROLES:
-        permissions.extend(["jobs", "connectors"])
+        permissions.extend(["jobs", "connectors", "research-resume"])
     return {
         "principal_id": str(member.get("principal_id", actor_id)),
         "display_name": str(member.get("display_name", actor_id)),
@@ -3579,7 +3631,7 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(str(error).encode("utf-8"))
             return
-        except (MaintenanceError, JobError, ConnectorError, CollaborationError) as error:
+        except (MaintenanceError, JobError, ConnectorError, CollaborationError, ResearchError) as error:
             self.send_response(400)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -3630,6 +3682,26 @@ class _ReviewUiHandler(SimpleHTTPRequestHandler):
         if path == "/api/review/reopen":
             require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "reopen review items")
             reopen_review_item(workspace, payload.get("review_id", ""))
+            return
+        if path == "/api/research-steps/review":
+            require_access_role(workspace, self._actor_id, REVIEW_ACTION_ROLES, "review research steps from the review ui")
+            review_research_step(
+                workspace,
+                resume=payload.get("run", "latest") or "latest",
+                step_id=payload.get("step_id", ""),
+                review_status=payload.get("status", ""),
+                reviewer=self._actor_id,
+                note=payload.get("note", ""),
+            )
+            return
+        if path == "/api/research/resume":
+            require_access_role(workspace, self._actor_id, OPERATOR_ACTION_ROLES, "resume research runs from the review ui")
+            profile_name = payload.get("profile_name", "").strip() or None
+            run_research_cycle(
+                workspace,
+                resume=payload.get("run", "latest") or "latest",
+                profile_name=profile_name,
+            )
             return
         if path == "/api/collab/request-review":
             require_access_role(workspace, self._actor_id, COLLABORATION_ACTION_ROLES, "request collaboration reviews")
