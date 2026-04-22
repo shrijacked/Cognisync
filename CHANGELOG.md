@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- added a Research Operator panel to `cognisync ui review`, so dashboard users can inspect research-run readiness, approve or request changes on research-step outputs, and finalize or rerun research from the served UI with the same reviewer/operator role gates as the CLI runtime
 - added hosted research-run status, hosted research-step review, and hosted research resume endpoints, so remote operators can inspect readiness, approve step artifacts, and finalize reviewed research runs over HTTP without falling back to a local shell
 - taught `cognisync research --resume` to finalize from approved checkpoint state without rerunning a model, so reviewed hosted or local `research-step` synthesis can flow through local validation and filing while explicit `--profile` resumes still act as deliberate adapter reruns
 - added hosted-alpha hardening posture reporting to `control-plane status` and `GET /api/status`, so operators can see long-lived token, broad operator-token, permissive trust-policy, stale-worker, backlog, and high-notification risks without diffing manifests by hand
