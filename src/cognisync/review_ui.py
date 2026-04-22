@@ -49,6 +49,7 @@ from cognisync.linter import lint_snapshot
 from cognisync.notifications import write_notifications_manifest
 from cognisync.observability import build_audit_manifest, build_usage_manifest, write_audit_manifest, write_usage_manifest
 from cognisync.planner import build_compile_plan
+from cognisync.research import ResearchError, build_research_run_status_payload
 from cognisync.review_exports import build_review_export_payload
 from cognisync.scanner import scan_workspace
 from cognisync.sharing import ensure_shared_workspace_manifest, load_shared_workspace_manifest
@@ -136,6 +137,7 @@ def render_review_ui_html(
     graph_nodes = list(graph.get("nodes", []))
     runs = dict(payload.get("runs", {}))
     run_items = list(runs.get("items", []))
+    research = dict(payload.get("research", {}))
     jobs = dict(payload.get("jobs", {}))
     job_items = list(jobs.get("items", []))
     workers = dict(payload.get("workers", {}))
@@ -161,6 +163,7 @@ def render_review_ui_html(
         ("Graph Nodes", str(graph.get("node_count", 0))),
         ("Graph Edges", str(graph.get("edge_count", 0))),
         ("Recorded Runs", str(runs.get("total_count", 0))),
+        ("Research Runs", str(research.get("total_count", 0))),
         ("Queued Jobs", str(jobs.get("queued_count", 0))),
         ("Workers", str(workers.get("total_count", 0))),
         ("Sync Events", str(sync.get("total_count", 0))),
@@ -268,12 +271,16 @@ def render_review_ui_html(
             "          <h2>Graph Overview</h2>",
             _render_graph_overview(graph),
             "        </article>",
-            "        <article class=\"panel\">",
-            "          <h2>Run History</h2>",
-            _render_run_history_summary(runs),
-            "        </article>",
-            "        <article class=\"panel\">",
-            "          <h2>Job Queue</h2>",
+        "        <article class=\"panel\">",
+        "          <h2>Run History</h2>",
+        _render_run_history_summary(runs),
+        "        </article>",
+        "        <article class=\"panel\">",
+        "          <h2>Research Operator</h2>",
+        _render_research_operator_summary(research),
+        "        </article>",
+        "        <article class=\"panel\">",
+        "          <h2>Job Queue</h2>",
             _render_job_history_summary(jobs),
             "        </article>",
             "        <article class=\"panel\">",
@@ -444,6 +451,7 @@ def build_review_ui_state(
 ) -> Dict[str, object]:
     review_payload = review_payload or build_review_export_payload(workspace, snapshot)
     runs = _build_run_history(workspace)
+    research = _build_research_operator_state(workspace)
     jobs = _build_job_history(workspace)
     sync = _build_sync_history(workspace)
     connectors = _build_connector_registry(workspace)
@@ -481,6 +489,7 @@ def build_review_ui_state(
         "compile_health": _build_compile_health(workspace, snapshot),
         "graph": _build_graph_summary(workspace),
         "runs": runs,
+        "research": research,
         "jobs": jobs,
         "workers": workers,
         "sync": sync,
@@ -856,6 +865,134 @@ def _render_run_history_summary(runs: Dict[str, object]) -> str:
         )
     lines.extend(["            </tbody>", "          </table>"])
     return "\n".join(lines)
+
+
+def _render_research_operator_summary(research: Dict[str, object]) -> str:
+    items = list(research.get("items", []))
+    if not items:
+        return "          <p class=\"empty\">No research runs found.</p>"
+    lines = [
+        "          <div class=\"toolbar\">",
+        f"            <span class=\"pill\">runs <strong>{escape(str(research.get('total_count', 0)))}</strong></span>",
+        f"            <span class=\"pill warn\">ready <strong>{escape(str(research.get('ready_for_reconcile_count', 0)))}</strong></span>",
+        f"            <span class=\"pill danger\">review blocked <strong>{escape(str(research.get('blocked_review_count', 0)))}</strong></span>",
+        "          </div>",
+        _render_kind_table("Recommended Actions", dict(research.get("counts_by_recommended_action", {}))),
+    ]
+    errors = list(research.get("errors", []))
+    if errors:
+        lines.extend(["          <h3>Run Read Errors</h3>", "          <ul>"])
+        for error in errors[:4]:
+            lines.append(
+                "            <li><code>"
+                + escape(str(error.get("path", "")))
+                + "</code><br><span class=\"muted\">"
+                + escape(str(error.get("error", "")))
+                + "</span></li>"
+            )
+        lines.append("          </ul>")
+    lines.extend(
+        [
+            "          <h3>Research Runs</h3>",
+            "          <table>",
+            "            <thead><tr><th>Run</th><th>Action</th><th>Ready</th><th>Blockers</th></tr></thead>",
+            "            <tbody>",
+        ]
+    )
+    for item in items[:6]:
+        detail_href = escape(str(item.get("detail_href", "")))
+        label = escape(str(item.get("label", item.get("run_id", ""))))
+        question = escape(str(item.get("question", "")))
+        action = escape(str(item.get("recommended_action", "")))
+        ready = escape(str(item.get("ready_for_reconcile", False)))
+        blockers = list(item.get("reconcile_blockers", []))
+        blocker_text = "<br>".join(escape(str(blocker)) for blocker in blockers[:3]) or "-"
+        if len(blockers) > 3:
+            blocker_text += f"<br><span class=\"muted\">... {escape(str(len(blockers) - 3))} more</span>"
+        lines.extend(
+            [
+                "              <tr>",
+                (
+                    "                <td><strong><a href=\""
+                    + detail_href
+                    + "\">"
+                    + label
+                    + "</a></strong><br><span class=\"muted\">"
+                    + question
+                    + "</span><br>"
+                    + _render_index_preview_path(str(item.get("agent_plan_path", "")), label="agent plan")
+                    + "</td>"
+                ),
+                f"                <td><code>{action}</code></td>",
+                f"                <td>{ready}</td>",
+                f"                <td>{blocker_text}</td>",
+                "              </tr>",
+            ]
+        )
+    lines.extend(["            </tbody>", "          </table>"])
+    for item in items[:4]:
+        lines.append(_render_research_run_steps(item))
+    return "\n".join(lines)
+
+
+def _render_research_run_steps(item: Dict[str, object]) -> str:
+    steps = list(item.get("steps", []))
+    if not steps:
+        return ""
+    label = escape(str(item.get("label", item.get("run_id", "Research Run"))))
+    lines = [
+        "          <details>",
+        f"            <summary>{label} assignments</summary>",
+        "            <table>",
+        "              <thead><tr><th>Step</th><th>Agent</th><th>Execution</th><th>Review</th><th>Output</th></tr></thead>",
+        "              <tbody>",
+    ]
+    for step in steps:
+        output_path = str(step.get("output_path", ""))
+        lines.extend(
+            [
+                "                <tr>",
+                (
+                    "                  <td><strong>"
+                    + escape(str(step.get("step_id", "")))
+                    + "</strong><br><span class=\"muted\"><code>"
+                    + escape(str(step.get("assignment_id", "")))
+                    + "</code></span><br><span class=\"muted\">"
+                    + escape(str(step.get("title", "")))
+                    + "</span></td>"
+                ),
+                (
+                    "                  <td>"
+                    + escape(str(step.get("agent_role", "")))
+                    + "<br><span class=\"muted\">"
+                    + escape(str(step.get("worker_capability", "")))
+                    + "</span><br><span class=\"muted\">"
+                    + escape(str(step.get("review_roles", "")))
+                    + "</span></td>"
+                ),
+                f"                  <td>{escape(str(step.get('execution_status', '')))}</td>",
+                f"                  <td>{escape(str(step.get('review_status', '')))}</td>",
+                f"                  <td>{_render_index_preview_path(output_path, label='output')}</td>",
+                "                </tr>",
+            ]
+        )
+    lines.extend(["              </tbody>", "            </table>", "          </details>"])
+    return "\n".join(lines)
+
+
+def _render_index_preview_path(relative_path: str, label: str = "preview") -> str:
+    normalized = str(relative_path).strip()
+    if not normalized or normalized == "-":
+        return "<span class=\"muted\">-</span>"
+    return (
+        "<a class=\"mono-link\" href=\""
+        + escape(_artifact_preview_href(normalized))
+        + "\">"
+        + escape(label)
+        + ": <code>"
+        + escape(normalized)
+        + "</code></a>"
+    )
 
 
 def _render_job_history_summary(jobs: Dict[str, object]) -> str:
@@ -1849,6 +1986,63 @@ def _build_run_history(workspace: Workspace, limit: int = 24) -> Dict[str, objec
     }
 
 
+def _build_research_operator_state(workspace: Workspace, limit: int = 12) -> Dict[str, object]:
+    items: List[Dict[str, object]] = []
+    errors: List[Dict[str, str]] = []
+    counts_by_status: Counter[str] = Counter()
+    counts_by_recommended_action: Counter[str] = Counter()
+    manifests = sorted(workspace.runs_dir.glob("research-*.json"), reverse=True)
+    for path in manifests:
+        relative = workspace.relative_path(path)
+        try:
+            payload = build_research_run_status_payload(workspace, resume=relative)
+        except ResearchError as error:
+            errors.append({"path": relative, "error": str(error)})
+            continue
+        item = dict(payload)
+        item["label"] = str(payload.get("run_id", path.stem))
+        item["path"] = relative
+        item["detail_href"] = _run_detail_href(relative)
+        item["search_text"] = _normalize_search_text(
+            [
+                payload.get("run_id"),
+                payload.get("question"),
+                payload.get("status"),
+                payload.get("recommended_action"),
+                payload.get("job_profile"),
+                relative,
+            ]
+        )
+        counts_by_status[str(payload.get("status", "unknown"))] += 1
+        counts_by_recommended_action[str(payload.get("recommended_action", "inspect_run_state"))] += 1
+        items.append(item)
+
+    items.sort(key=_research_operator_sort_key)
+    return {
+        "total_count": len(items),
+        "error_count": len(errors),
+        "ready_for_reconcile_count": sum(1 for item in items if bool(item.get("ready_for_reconcile", False))),
+        "blocked_review_count": sum(1 for item in items if item.get("recommended_action") == "review_step_outputs"),
+        "counts_by_status": dict(counts_by_status),
+        "counts_by_recommended_action": dict(counts_by_recommended_action),
+        "items": items[:limit],
+        "errors": errors[:limit],
+    }
+
+
+def _research_operator_sort_key(item: Dict[str, object]) -> tuple[int, str, str]:
+    action = str(item.get("recommended_action", ""))
+    priority = {
+        "resume_research": 0,
+        "review_step_outputs": 1,
+        "retry_failed_steps": 2,
+        "dispatch_or_run_research_steps": 3,
+        "inspect_run_state": 4,
+        "run_completed": 5,
+    }.get(action, 6)
+    return (priority, str(item.get("run_id", "")).lower(), str(item.get("path", "")).lower())
+
+
 def _build_job_history(workspace: Workspace, limit: int = 24) -> Dict[str, object]:
     items: List[Dict[str, str]] = []
     counts_by_kind: Counter[str] = Counter()
@@ -2459,13 +2653,31 @@ def _collect_preview_targets(workspace: Workspace, state_payload: Dict[str, obje
         for key in (
             "plan_path",
             "plan_json_path",
+            "agent_plan_path",
+            "source_packet_path",
+            "checkpoints_path",
             "report_path",
             "packet_path",
             "answer_path",
             "slide_path",
+            "validation_report_path",
             "change_summary_path",
         ):
             add_target(str(manifest.get(key, "") or ""))
+        for relative_path in list(manifest.get("execution_packet_paths", [])):
+            add_target(str(relative_path or ""))
+        for relative_path in list(manifest.get("note_paths", [])):
+            add_target(str(relative_path or ""))
+
+    research = dict(state_payload.get("research", {}))
+    for item in list(research.get("items", [])):
+        for key in ("run_manifest_path", "plan_path", "agent_plan_path", "checkpoints_path", "answer_path"):
+            add_target(str(item.get(key, "") or ""))
+        for step in list(item.get("steps", [])):
+            if not isinstance(step, dict):
+                continue
+            add_target(str(step.get("output_path", "") or ""))
+            add_target(str(step.get("packet_path", "") or ""))
 
     jobs = dict(state_payload.get("jobs", {}))
     for item in list(jobs.get("items", [])):
@@ -2696,10 +2908,14 @@ def _render_run_detail_html(
                 ("Question", _render_code_value(str(manifest.get("question", "")) or "-")),
                 ("Plan", _render_preview_value(current_href, str(manifest.get("plan_path", "")))),
                 ("Plan JSON", _render_preview_value(current_href, str(manifest.get("plan_json_path", "")))),
+                ("Agent Plan", _render_preview_value(current_href, str(manifest.get("agent_plan_path", "")))),
+                ("Checkpoints", _render_preview_value(current_href, str(manifest.get("checkpoints_path", "")))),
+                ("Source Packet", _render_preview_value(current_href, str(manifest.get("source_packet_path", "")))),
                 ("Report", _render_preview_value(current_href, str(manifest.get("report_path", "")))),
                 ("Packet", _render_preview_value(current_href, str(manifest.get("packet_path", "")))),
                 ("Answer", _render_preview_value(current_href, str(manifest.get("answer_path", "")))),
                 ("Slides", _render_preview_value(current_href, str(manifest.get("slide_path", "")))),
+                ("Validation Report", _render_preview_value(current_href, str(manifest.get("validation_report_path", "")))),
                 ("Change Summary", _render_preview_value(current_href, str(manifest.get("change_summary_path", "")))),
             ]
         ),
@@ -2742,6 +2958,7 @@ def _render_job_detail_html(
 ) -> str:
     result = dict(manifest.get("result", {}))
     audit_entries = list(manifest.get("audit", []))
+    requested_by = _optional_mapping(manifest.get("requested_by"))
     body_lines = [
         "<article class=\"panel\">",
         "  <h2>Job Metadata</h2>",
@@ -2753,7 +2970,7 @@ def _render_job_detail_html(
                 ("Title", _render_code_value(str(manifest.get("title", "")))),
                 ("Created", _render_code_value(str(manifest.get("created_at", "")))),
                 ("Updated", _render_code_value(str(manifest.get("updated_at", "")))),
-                ("Requested By", _render_actor_code_value(dict(manifest.get("requested_by", {})))),
+                ("Requested By", _render_actor_code_value(requested_by)),
                 ("Attempts", _render_code_value(str(manifest.get("attempts", 0)))),
                 ("Retry Of", _render_code_value(str(manifest.get("retry_of_job_id", "")) or "-")),
                 ("Error", _render_code_value(str(manifest.get("error", "")) or "-")),
@@ -3028,6 +3245,12 @@ def _render_actor_code_value(actor: Dict[str, object]) -> str:
         return _render_code_value("-")
     label = principal_id if not role else f"{principal_id} ({role})"
     return _render_code_value(label)
+
+
+def _optional_mapping(value: object) -> Dict[str, object]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
 
 
 def _render_link_value(current_href: str, label: str, target_href: str) -> str:

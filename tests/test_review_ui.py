@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 import tempfile
 import threading
 import unittest
@@ -11,6 +12,7 @@ from urllib.parse import urlencode
 from tests import support  # noqa: F401
 
 from cognisync.cli import main
+from cognisync.config import LLMProfile, load_config, save_config
 from cognisync.review_ui import create_review_ui_server
 from cognisync.workspace import Workspace
 
@@ -283,6 +285,105 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("action=\"/api/review/reopen\"", html)
             self.assertIn("Wrote review UI to", stdout.getvalue())
             self.assertIn("Wrote review UI state to", stdout.getvalue())
+
+    def test_ui_review_surfaces_research_operator_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = Workspace(root)
+            workspace.initialize(name="Research Operator UI Test")
+
+            (workspace.raw_dir / "agent-loops.md").write_text(
+                "# Agent Loops\n\nAgent loops coordinate planning and memory.\n",
+                encoding="utf-8",
+            )
+            (workspace.raw_dir / "memory.md").write_text(
+                "# Memory\n\nMemory keeps intermediate findings durable.\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace.config_path)
+            config.llm_profiles["alpha"] = LLMProfile(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdin.read(); print('# Research Memo\\n\\nAgent loops use memory to retain findings. [S1]')",
+                ],
+                stdin_source="prompt_file",
+            )
+            save_config(workspace.config_path, config)
+
+            self.assertEqual(
+                main(
+                    [
+                        "research",
+                        "--workspace",
+                        str(root),
+                        "--job-profile",
+                        "literature-review",
+                        "how do agent loops use memory",
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(
+                main(
+                    [
+                        "research-step",
+                        "dispatch",
+                        "--workspace",
+                        str(root),
+                        "--run",
+                        "latest",
+                        "--default-profile",
+                        "alpha",
+                        "--hosted",
+                    ]
+                ),
+                0,
+            )
+            for _ in range(4):
+                self.assertEqual(
+                    main(
+                        [
+                            "jobs",
+                            "run-next",
+                            "--workspace",
+                            str(root),
+                            "--worker-id",
+                            "research-worker",
+                            "--capability",
+                            "research",
+                        ]
+                    ),
+                    0,
+                )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(main(["ui", "review", "--workspace", str(root)]), 0)
+
+            html = (workspace.review_ui_dir / "index.html").read_text(encoding="utf-8")
+            state = json.loads((workspace.review_ui_dir / "dashboard-state.json").read_text(encoding="utf-8"))
+            self.assertIn("Research Operator", html)
+            self.assertIn("review_step_outputs", html)
+            self.assertIn("build-working-set", html)
+            self.assertIn("agent-plan.json", html)
+            self.assertIn("research", state)
+            self.assertEqual(state["research"]["total_count"], 1)
+            self.assertEqual(state["research"]["ready_for_reconcile_count"], 0)
+            self.assertEqual(state["research"]["counts_by_recommended_action"]["review_step_outputs"], 1)
+            run = state["research"]["items"][0]
+            self.assertEqual(run["question"], "how do agent loops use memory")
+            self.assertEqual(run["recommended_action"], "review_step_outputs")
+            self.assertFalse(run["ready_for_reconcile"])
+            self.assertTrue(run["reconcile_blockers"])
+            self.assertTrue(run["agent_plan_path"].endswith("agent-plan.json"))
+            steps = {step["step_id"]: step for step in run["steps"]}
+            self.assertEqual(steps["build-working-set"]["assignment_id"], "assignment-build-working-set")
+            self.assertEqual(steps["build-working-set"]["worker_capability"], "research")
+            self.assertEqual(steps["build-working-set"]["review_status"], "pending_review")
+            self.assertEqual(steps["execute-profile"]["agent_role"], "synthesizer")
+            self.assertEqual(steps["execute-profile"]["review_roles"], "reviewer, operator")
 
     def test_review_ui_server_serves_dashboard_and_export_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
